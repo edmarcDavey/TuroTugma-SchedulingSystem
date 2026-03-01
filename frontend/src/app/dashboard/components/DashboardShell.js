@@ -27,10 +27,10 @@ export default function DashboardShell({ activeTab, children }) {
 
         <nav style={{ display: "grid", gap: 8 }}>
           <a href="/dashboard" style={navLinkItemStyle(activeTab === "dashboard")}>Dashboard</a>
-          <a href="/dashboard/sections" style={navLinkItemStyle(activeTab === "sections")}>Sections</a>
-          <a href="/dashboard/subjects" style={navLinkItemStyle(activeTab === "subjects")}>Subjects</a>
-          <a href="/dashboard/faculty" style={navLinkItemStyle(activeTab === "faculty")}>Faculty</a>
-          <a href="/dashboard/schedule-maker" style={navLinkItemStyle(activeTab === "schedule-maker")}>Schedule Maker</a>
+          <a href="/dashboard?tab=sections" style={navLinkItemStyle(activeTab === "sections")}>Sections</a>
+          <a href="/dashboard?tab=subjects" style={navLinkItemStyle(activeTab === "subjects")}>Subjects</a>
+          <a href="/dashboard?tab=faculty" style={navLinkItemStyle(activeTab === "faculty")}>Faculty</a>
+          <a href="/dashboard?tab=schedule-maker" style={navLinkItemStyle(activeTab === "schedule-maker")}>Schedule Maker</a>
         </nav>
 
         <div style={{ marginTop: "auto" }}>
