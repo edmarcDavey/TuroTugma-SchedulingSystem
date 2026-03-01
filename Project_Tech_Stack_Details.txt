@@ -1,0 +1,104 @@
+Project Tech Stack & Rationale
+=============================
+
+Chosen Technologies:
+--------------------
+1. **Laravel**
+   - PHP web framework for backend development.
+   - Handles routing, authentication, database migrations, and API endpoints.
+   - Provides robust MVC architecture and built-in tools for rapid development.
+
+2. **React**
+   - JavaScript library for building dynamic, interactive user interfaces.
+   - Enables real-time updates and responsive design for the frontend.
+   - Integrates seamlessly with RESTful APIs provided by Laravel.
+
+3. **MySQL**
+   - Relational database management system.
+   - Stores structured data for users, schedules, analytics, and more.
+   - Works natively with Laravel's Eloquent ORM for easy data manipulation.
+
+4. **Python + OR-Tools**
+   - Python used for advanced backend logic and integration with optimization algorithms.
+   - OR-Tools (Google Optimization Tools) solves complex scheduling and resource allocation problems.
+   - Communicates with Laravel via API endpoints for real-time optimization.
+
+5. **Chart.js**
+   - JavaScript library for data visualization.
+   - Renders interactive charts and graphs in the React frontend.
+   - Displays analytics, trends, and real-time data from the backend.
+
+Demonstrated Skills & Concepts:
+------------------------------
+- **Web Development**: Full-stack approach using Laravel (backend) and React (frontend).
+- **API Integration**: RESTful APIs connect frontend (React) and backend (Laravel), and Python services for optimization.
+- **Optimization Algorithms**: Python + OR-Tools solve scheduling, assignment, and resource allocation problems.
+- **Real-Time Systems**: React enables live updates; backend APIs support real-time data exchange.
+- **Data Analytics**: Chart.js visualizes data; backend aggregates and processes analytics for reporting.
+
+Detailed Workflow:
+------------------
+1. **User Interaction**
+   - Users interact with the React frontend to input data, view schedules, and analyze results.
+
+2. **Backend Processing**
+   - Laravel receives requests, validates data, and manages authentication.
+   - Laravel exposes API endpoints for frontend and Python integration.
+
+3. **Database Operations**
+   - MySQL stores all persistent data: users, schedules, constraints, analytics, etc.
+   - Laravel migrations manage schema changes and ensure consistency.
+
+4. **Optimization**
+   - When complex scheduling or resource allocation is needed, Laravel calls Python services.
+   - Python + OR-Tools process the data, solve the optimization problem, and return results via API.
+
+5. **Visualization & Analytics**
+   - React fetches analytics data from Laravel APIs.
+   - Chart.js renders interactive charts for users to explore trends and insights.
+
+Integration Points:
+-------------------
+- **Laravel ↔ React**: RESTful API endpoints for data exchange.
+- **Laravel ↔ Python**: HTTP requests or message queues for optimization tasks.
+- **React ↔ Chart.js**: Direct integration for rendering analytics.
+- **Laravel ↔ MySQL**: Eloquent ORM for database operations.
+
+Benefits:
+---------
+- **Scalability**: Modular architecture allows independent scaling of frontend, backend, and optimization services.
+- **Maintainability**: Clear separation of concerns; each technology handles its domain.
+- **Performance**: Real-time updates and efficient algorithms ensure responsive user experience.
+- **Extensibility**: Easy to add new features, analytics, or optimization models.
+
+Summary:
+This stack demonstrates expertise in modern web development, API design, database management, advanced optimization, and data visualization. It is suitable for building robust, scalable, and intelligent scheduling or analytics systems.
+
+System Narrative: How TuroTugma Works
+=====================================
+
+When a user opens the system, they see a clean landing page with the title "TuroTugma" and the message: "Smart Scheduling for Every Section. TuroTugma auto-generates conflict-free timetables for Junior High and Senior High — respecting teacher loads, period restrictions, and campus travel." Two buttons are shown: "See Final Timetables" and "Staff Login." Public users who click "See Final Timetables" are taken to a read-only dashboard to view finalized schedules. The administrator clicks "Staff Login" and enters their Employee ID and password to access the main workspace.
+
+After logging in, the administrator sees the main interface with a vertical navigation bar on the left. At the top is the school logo and system title. In the middle are menus: Dashboard, Sections, Subjects, Faculty, and Schedule Maker. At the bottom is the logout button. This layout allows easy movement between data management and scheduling functions.
+
+In the Dashboard tab, the administrator sees analytics: active teachers, total sections, conflicts detected, and schedule status. This helps quickly understand the system's current state.
+
+In the Sections tab, sections are organized by grade level. Junior High (Grades 7-10) and Senior High (Grades 11-12) are separated. Each grade level has a naming theme selector and a field for the number of sections. Generated section names appear, with options to classify Junior High sections as Regular or Special, and Senior High sections by track (HUMSS, STEM, ABM, TVL, GAS). Sections can be edited after creation.
+
+In the Subjects tab, subjects are grouped by school level. Junior High shares similar subjects across grades, while Senior High subjects vary by semester and year level. Adding a subject requires the Subject Name, Code, Grade Level, and for Senior High, the strand. The administrator also sets the Subject Type (core or specialized) and Hours per Week.
+
+In the Faculty tab, teachers are listed with their name, ID, and a teaching load progress bar. Clicking a teacher shows a detailed form: Name, Sex, Employee ID, Position, Employment Status, Email, Contact, Degree, Major, Minor, Ancillary Assignments, Unavailable Periods, Subject Expertise, and Grade Level Assignments. Teachers can be added, edited, marked active/retired, or deleted. Unavailable Periods, Subject Expertise, and Grade Level Assignments are used in scheduling.
+
+In the Schedule Maker tab, the administrator chooses which schedule to create: Junior High, First Semester Senior High, or Last Semester Senior High. Key metrics update based on the selected schedule. The schedule grid displays section names as rows and time slots as columns. Buttons allow generating, saving, viewing drafts, and publishing schedules.
+
+When "Generate" is clicked, the system creates a conflict-free schedule: no teacher is double-booked, subjects are not duplicated, teaching hours are respected, and period restrictions are followed. Teacher Unavailable Periods are also respected. "Save" stores the schedule, "Drafts" shows saved drafts, and "Publish" finalizes the timetable for the public dashboard.
+
+Manual scheduling is also possible. The administrator selects a subject and assigns a teacher to a section and time slot. Only eligible subjects and teachers (matching both Subject Expertise and Grade Level Assignment) can be assigned, and Unavailable Periods are enforced. Schedules can be viewed per section or teacher and exported as PDF.
+
+Within Schedule Maker, Scheduling Configurations define all rules. Junior High and Senior High have separate configurations, including Session Type Selector, School Days Picker, Period Structure, and Breaks Settings. Constraints and rules are also defined here.
+
+Junior High scheduling is session-based. The administrator selects Regular or Shortened session types, picks school days, and defines period structures and breaks. Senior High period numbers can vary by track. Breaks (Morning, Lunch, Afternoon) can be configured.
+
+Default settings: Junior High Regular Sessions are Monday-Thursday, Shortened Session is Friday. Senior High Regular Days are Tuesday-Friday, Shortened Day is Monday. Periods are 45 minutes for Shortened, 50 for Regular. Special Sections have 9 periods, Regular have 8. Morning Break is 20 minutes, Lunch Break is 60, Afternoon Break is off by default.
+
+Overall, the system manages sections, subjects, and teachers, applies scheduling configurations and constraints, generates conflict-free timetables automatically or allows manual adjustments, saves drafts, and publishes the official schedule to a public dashboard.
