@@ -102,3 +102,156 @@ Junior High scheduling is session-based. The administrator selects Regular or Sh
 Default settings: Junior High Regular Sessions are Monday-Thursday, Shortened Session is Friday. Senior High Regular Days are Tuesday-Friday, Shortened Day is Monday. Periods are 45 minutes for Shortened, 50 for Regular. Special Sections have 9 periods, Regular have 8. Morning Break is 20 minutes, Lunch Break is 60, Afternoon Break is off by default.
 
 Overall, the system manages sections, subjects, and teachers, applies scheduling configurations and constraints, generates conflict-free timetables automatically or allows manual adjustments, saves drafts, and publishes the official schedule to a public dashboard.
+
+
+Structured Product Spec (Implementation Reference)
+=================================================
+
+Purpose
+-------
+This section standardizes terminology, screens, rules, and acceptance criteria so frontend, backend,
+and optimization logic remain aligned as development continues.
+
+Canonical Terms
+---------------
+- User Roles:
+   - Public User (read-only access to published schedules)
+   - Administrator (single admin account)
+- Senior High Semester Naming (canonical):
+   - First Semester
+   - Last Semester
+- Schedule States:
+   - Draft: Generated or manually edited but not publicly visible
+   - Saved: Persisted internal version (still not public)
+   - Published: Official version visible on Public Dashboard
+
+Screen Flow (Canonical)
+-----------------------
+1. Landing Page
+    - Shows system title and value proposition.
+    - Primary actions:
+       - See Final Timetables -> Public Dashboard
+       - Staff Login -> Admin Login Page
+
+2. Admin Login Page
+    - Single-admin login using Employee ID and Password.
+    - Successful login routes to Admin Workspace.
+
+3. Admin Workspace (with left sidebar)
+    - Sidebar top: logo + system title
+    - Sidebar menus: Dashboard, Sections, Subjects, Faculty, Schedule Maker
+    - Sidebar bottom: Logout
+
+4. Public Dashboard
+    - Read-only display of published schedule only.
+
+Sidebar Menu Scope
+------------------
+- Dashboard
+   - High-level analytics: active teachers, total sections, conflicts, schedule status.
+
+- Sections
+   - Grade 7-10 (Junior High) and Grade 11-12 (Senior High) containers.
+   - Naming theme selector + section count per grade.
+   - Junior High section classification: Regular or Special (default Regular).
+   - Senior High track assignment: HUMSS, STEM, ABM, TVL, GAS (default none).
+   - Support post-creation edits.
+
+- Subjects
+   - Group by school level and semester context.
+   - Required fields: Subject Name, Subject Code, Grade Level.
+   - Senior High requires Strand.
+   - Subject Type required: Core or Specialized.
+   - Hours per Week required.
+
+- Faculty
+   - List with teacher name, employee ID, and teaching-load status.
+   - Detailed form fields:
+      Name, Sex, Employee ID, Position, Employment Status, Email, Contact,
+      Degree, Major, Minor, Ancillary Assignments, Unavailable Periods,
+      Subject Expertise, Grade Level Assignments.
+   - Supports add/edit/retire/delete.
+
+- Schedule Maker
+   - Target schedule selector:
+      - Junior High School
+      - First Semester Senior High School
+      - Last Semester Senior High School
+   - Controls: Generate/Re-generate, Save, Drafts, Publish.
+   - Grid rows = sections, columns = time slots/periods.
+   - Metrics update based on selected target schedule.
+
+Rule Matrix (Scheduling)
+------------------------
+Automatic Generation must enforce all:
+1. No teacher double-booking in overlapping times.
+2. No duplicate subject assignment within the same section/time logic.
+3. Teacher load/hours limits respected.
+4. Scheduling restrictions from configurations respected.
+5. Teacher unavailable periods respected.
+
+Manual Assignment must enforce all:
+1. Subject must match section grade level.
+2. For special sections, specialized-subject constraints apply.
+3. Teacher must match BOTH:
+    - Subject Expertise
+    - Grade Level Assignment
+4. Teacher unavailable periods block assignment.
+
+Scheduling Configuration Baseline
+---------------------------------
+Junior High:
+- Session model: Regular + Shortened (session-based)
+- Default days:
+   - Regular: Monday-Thursday
+   - Shortened: Friday
+
+Senior High:
+- Day/session setup supports independent configuration from Junior High
+- Default days:
+   - Regular: Tuesday-Friday
+   - Shortened: Monday
+
+Period/Break Defaults:
+- Period duration:
+   - Regular: 50 minutes
+   - Shortened: 45 minutes
+- Section period counts:
+   - Regular sections: 8 periods
+   - Special sections: 9 periods
+- Break defaults:
+   - Morning Break: 20 minutes
+   - Lunch Break: 60 minutes
+   - Afternoon Break: Off by default
+
+Acceptance Criteria (MVP)
+-------------------------
+AC-01 Landing actions
+- "See Final Timetables" routes to read-only public dashboard.
+- "Staff Login" routes to single-admin login form.
+
+AC-02 Admin authentication entry
+- Admin can submit Employee ID + Password and reach workspace on success.
+
+AC-03 Sidebar structure
+- Workspace sidebar contains exactly:
+   Dashboard, Sections, Subjects, Faculty, Schedule Maker, Logout.
+
+AC-04 Draft/Publish behavior
+- Draft and Saved schedules are not visible publicly.
+- Only Published schedules appear on Public Dashboard.
+
+AC-05 Automatic scheduling constraints
+- System blocks double-booking, invalid load, restricted periods,
+   and unavailable teacher assignments.
+
+AC-06 Manual scheduling eligibility
+- Teacher assignment is allowed only when BOTH subject expertise and grade-level assignment match.
+- Unavailable periods always block assignment.
+
+AC-07 Section and subject data integrity
+- Required fields are enforced for Sections/Subjects/Faculty forms.
+- Senior High-specific fields (track/strand) are enforced where applicable.
+
+AC-08 Configuration-driven grid
+- Changing schedule target/configuration updates grid structure and metrics accordingly.

@@ -38,7 +38,12 @@ export default function HeroSection() {
           <button style={{ background: "#1a3a8c", color: "#fff", fontWeight: 700, fontSize: 16, border: "none", borderRadius: 8, padding: "16px 32px", cursor: "pointer" }}>
             ➔ Let's Get Started
           </button>
-          <button style={{ background: "#fff", color: "#1a3a8c", fontWeight: 700, fontSize: 16, border: "2px solid #1a3a8c", borderRadius: 8, padding: "16px 32px", cursor: "pointer" }}>
+          <button
+            onClick={() => {
+              window.location.href = "/login";
+            }}
+            style={{ background: "#fff", color: "#1a3a8c", fontWeight: 700, fontSize: 16, border: "2px solid #1a3a8c", borderRadius: 8, padding: "16px 32px", cursor: "pointer" }}
+          >
             Staff Login
           </button>
         </div>
