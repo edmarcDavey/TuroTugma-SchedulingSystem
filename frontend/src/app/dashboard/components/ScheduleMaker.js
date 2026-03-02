@@ -314,6 +314,75 @@ export default function ScheduleMaker() {
   }, [draftsForCurrentSchedule.length, publishedSchedules, schedule, scheduleType]);
 
   const conflictCount = schedule?.conflicts?.length || 0;
+  const hasPublishBlockingConflicts = conflictCount > 0;
+
+  const conflictDetailsForDisplay = useMemo(() => {
+    if (!schedule) {
+      return [];
+    }
+
+    const evaluation = evaluateSchedule({
+      assignments: schedule.assignments || {},
+      sections,
+      slots,
+      subjects,
+      teachers: activeTeachers,
+      scheduleType,
+      config,
+    });
+
+    return mergeConflictDetails(schedule.conflictDetails, evaluation.conflictDetails);
+  }, [schedule, sections, slots, subjects, activeTeachers, scheduleType, config]);
+
+  const conflictMessagesByCell = useMemo(() => {
+    const map = new Map();
+
+    conflictDetailsForDisplay.forEach((entry) => {
+      const message = sanitizeText(entry?.message);
+      const cellKeys = Array.isArray(entry?.cellKeys) ? entry.cellKeys : [];
+
+      if (!message || cellKeys.length === 0) {
+        return;
+      }
+
+      cellKeys.forEach((cellKey) => {
+        const normalizedCellKey = sanitizeText(cellKey);
+        if (!normalizedCellKey) {
+          return;
+        }
+
+        const existing = map.get(normalizedCellKey) || [];
+        if (!existing.includes(message)) {
+          map.set(normalizedCellKey, [...existing, message]);
+        }
+      });
+    });
+
+    return map;
+  }, [conflictDetailsForDisplay]);
+
+  const assignmentValidationSummary = useMemo(() => {
+    const assignedKeys = Object.keys(schedule?.assignments || {});
+    const totalAssigned = assignedKeys.length;
+    const invalidAssigned = assignedKeys.filter((cellKey) => (conflictMessagesByCell.get(cellKey) || []).length > 0).length;
+    const validAssigned = Math.max(0, totalAssigned - invalidAssigned);
+    const totalRequired = sections.reduce(
+      (sectionCount, section) =>
+        sectionCount +
+        slots.reduce(
+          (slotCount, slot) => slotCount + (isSlotValidForSection(section, slot, scheduleType, config) ? 1 : 0),
+          0
+        ),
+      0
+    );
+
+    return {
+      totalAssigned,
+      validAssigned,
+      invalidAssigned,
+      totalRequired,
+    };
+  }, [schedule?.assignments, conflictMessagesByCell, sections, slots, scheduleType, config]);
 
   const teacherBusyBySlot = useMemo(
     () => buildTeacherBusyMap(schedule?.assignments || {}, sectionsById, slotsById),
@@ -621,6 +690,32 @@ export default function ScheduleMaker() {
       return;
     }
 
+    const publishEvaluation = evaluateSchedule({
+      assignments: schedule.assignments || {},
+      sections,
+      slots,
+      subjects,
+      teachers: activeTeachers,
+      scheduleType,
+      config,
+    });
+
+    if (publishEvaluation.conflicts.length > 0) {
+      setSchedule((current) =>
+        current
+          ? {
+              ...current,
+              conflicts: publishEvaluation.conflicts,
+              conflictDetails: publishEvaluation.conflictDetails,
+              teacherLoadPercent: publishEvaluation.teacherLoadPercent,
+              updatedAt: new Date().toISOString(),
+            }
+          : current
+      );
+      showNotice(`Cannot publish: resolve ${publishEvaluation.conflicts.length} conflict(s) first.`, "error");
+      return;
+    }
+
     const now = new Date().toISOString();
     const nextPublished = {
       ...publishedSchedules,
@@ -689,6 +784,7 @@ export default function ScheduleMaker() {
       updatedAt: now,
       assignments: {},
       conflicts: [],
+      conflictDetails: [],
       teacherLoadPercent: {},
       status: "draft",
     };
@@ -720,6 +816,7 @@ export default function ScheduleMaker() {
       constraints: config.constraints,
       teacherBusyBySlot: busyMap,
       excludedSectionId: section.id,
+      ignoreDoubleBooking: true,
     });
 
     if (!eligible) {
@@ -752,6 +849,7 @@ export default function ScheduleMaker() {
       ...baseSchedule,
       assignments: nextAssignments,
       conflicts: evaluation.conflicts,
+      conflictDetails: evaluation.conflictDetails,
       teacherLoadPercent: evaluation.teacherLoadPercent,
       updatedAt: now,
     });
@@ -764,7 +862,7 @@ export default function ScheduleMaker() {
     showNotice("Assignment saved.", "success");
   };
 
-  const removeAssignmentFromCell = (section, slot, showMessage = true) => {
+  const removeAssignmentFromCell = (section, slot, showMessage = true, nextDraft = null) => {
     if (!schedule) {
       return;
     }
@@ -794,13 +892,14 @@ export default function ScheduleMaker() {
       ...current,
       assignments: nextAssignments,
       conflicts: evaluation.conflicts,
+      conflictDetails: evaluation.conflictDetails,
       teacherLoadPercent: evaluation.teacherLoadPercent,
       updatedAt: new Date().toISOString(),
     }));
 
     setCellEditorDrafts((prev) => ({
       ...prev,
-      [cellKey]: { subjectId: "", teacherId: "" },
+      [cellKey]: nextDraft || { subjectId: "", teacherId: "" },
     }));
 
     if (showMessage) {
@@ -839,11 +938,7 @@ export default function ScheduleMaker() {
     }
 
     if (!teacherId) {
-      setCellEditorDrafts((prev) => ({
-        ...prev,
-        [cellKey]: { subjectId, teacherId: "" },
-      }));
-      removeAssignmentFromCell(section, slot, false);
+      removeAssignmentFromCell(section, slot, false, { subjectId, teacherId: "" });
       return;
     }
 
@@ -863,6 +958,7 @@ export default function ScheduleMaker() {
       constraints: config.constraints,
       teacherBusyBySlot,
       excludedSectionId: section.id,
+      ignoreDoubleBooking: true,
     });
 
     if (!eligible) {
@@ -924,7 +1020,25 @@ export default function ScheduleMaker() {
               <button type="button" onClick={() => setShowDraftsPanel((prev) => !prev)} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}>
                 <ActionButtonLabel icon={<DraftsIcon />}>Drafts ({draftsForCurrentSchedule.length})</ActionButtonLabel>
               </button>
-              <button type="button" onClick={handlePublish} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}>
+              <button
+                type="button"
+                onClick={handlePublish}
+                disabled={!schedule || hasPublishBlockingConflicts}
+                title={
+                  !schedule
+                    ? "Generate or load a draft before publishing."
+                    : hasPublishBlockingConflicts
+                      ? `Resolve ${conflictCount} conflict(s) before publishing.`
+                      : "Publish schedule"
+                }
+                style={{
+                  ...secondaryActionStyle(),
+                  width: 120,
+                  textAlign: "center",
+                  opacity: !schedule || hasPublishBlockingConflicts ? 0.55 : 1,
+                  cursor: !schedule || hasPublishBlockingConflicts ? "not-allowed" : "pointer",
+                }}
+              >
                 <ActionButtonLabel icon={<PublishIcon />}>Publish</ActionButtonLabel>
               </button>
               <button
@@ -1042,6 +1156,35 @@ export default function ScheduleMaker() {
             )}
           </div>
 
+          {schedule ? (
+            <div
+              style={{
+                marginBottom: 10,
+                border: "1px solid #e3e7ef",
+                borderRadius: 10,
+                background: "#fbfcff",
+                padding: "8px 10px",
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <span style={{ color: "#4f5d86", fontSize: 12, fontWeight: 700 }}>
+                Assignment Validation:
+              </span>
+              <span style={{ color: "#2f5f3a", fontSize: 12, fontWeight: 700 }}>
+                Valid: {assignmentValidationSummary.validAssigned}
+              </span>
+              <span style={{ color: "#a44652", fontSize: 12, fontWeight: 700 }}>
+                Invalid: {assignmentValidationSummary.invalidAssigned}
+              </span>
+              <span style={{ color: "#5f6b90", fontSize: 12 }}>
+                Assigned: {assignmentValidationSummary.totalAssigned} out of {assignmentValidationSummary.totalRequired}
+              </span>
+            </div>
+          ) : null}
+
           {sections.length === 0 ? (
             <p style={{ margin: "10px 0 0", color: "#7a86a7", fontSize: 13 }}>
               No sections available for this schedule type. Configure sections first.
@@ -1101,6 +1244,9 @@ export default function ScheduleMaker() {
                         const allowed = isSlotValidForSection(section, slot, scheduleType, config);
                         const cellKey = createCellKey(section.id, slot.id);
                         const assignment = schedule?.assignments?.[cellKey] || null;
+                        const cellConflictMessages = conflictMessagesByCell.get(cellKey) || [];
+                        const hasCellConflict = cellConflictMessages.length > 0;
+                        const hasValidAssignment = !!assignment && !hasCellConflict;
                         const cellDraft = getCellDraft(section.id, slot.id);
                         const subjectOptions = getSubjectsForSection(section, subjects, scheduleType);
                         const subjectOptionsWithState = subjectOptions.map((item) => ({
@@ -1126,6 +1272,8 @@ export default function ScheduleMaker() {
                               .map((item) => ({
                                 ...item.candidate,
                                 restricted: item.state.restricted,
+                                restrictedReason: item.state.restrictedReason,
+                                statusNote: item.state.statusNote,
                               }))
                           : [];
                         const subject = assignment ? subjectsById.get(assignment.subjectId) : null;
@@ -1137,7 +1285,8 @@ export default function ScheduleMaker() {
                         return (
                           <td
                             key={`${section.id}-${slot.id}`}
-                            style={gridCellStyle(allowed, !!assignment)}
+                            style={gridCellStyle(allowed, !!assignment, hasCellConflict, hasValidAssignment)}
+                            title={hasCellConflict ? `Conflict: ${cellConflictMessages.join(" | ")}` : undefined}
                             onMouseEnter={() => {
                               if (allowed) {
                                 setHoveredCellKey(cellKey);
@@ -1175,10 +1324,15 @@ export default function ScheduleMaker() {
                                   <option value="">Select teacher</option>
                                   {teacherOptions.map((option) => (
                                     <option key={option.id} value={option.id} disabled={option.restricted}>
-                                      {option.restricted ? `${option.name} (Restricted)` : option.name}
+                                        {option.restricted
+                                          ? `${option.name} (${option.restrictedReason || "Restricted"})`
+                                          : option.statusNote
+                                            ? `${option.name} (${option.statusNote})`
+                                            : option.name}
                                     </option>
                                   ))}
                                 </select>
+
                               </div>
                             ) : assignment ? (
                               <div style={{ display: "grid", gap: 2 }}>
@@ -1812,6 +1966,9 @@ export default function ScheduleMaker() {
       {schedule?.conflicts?.length ? (
         <div style={{ background: "#fff7f8", border: "1px solid #f0c9cf", borderRadius: 12, padding: 12 }}>
           <h3 style={{ margin: 0, color: "#a44652", fontSize: 14 }}>Detected Conflicts ({schedule.conflicts.length})</h3>
+          <p style={{ margin: "6px 0 0", color: "#8a4a55", fontSize: 12, fontWeight: 600 }}>
+            Conflicting cells are highlighted in red in the schedule grid.
+          </p>
           <ul style={{ margin: "8px 0 0", paddingLeft: 18, color: "#8a4a55", fontSize: 12, display: "grid", gap: 4 }}>
             {schedule.conflicts.slice(0, 12).map((conflict, index) => (
               <li key={`${conflict}-${index}`}>{conflict}</li>
@@ -2256,6 +2413,26 @@ function normalizeFacultyList(facultyRaw) {
 function generateSchedule({ scheduleType, sections, slots, subjects, activeTeachers, config }) {
   const assignments = {};
   const conflicts = [];
+  const conflictDetailByKey = new Map();
+
+  const pushConflict = (message, cellKeys = []) => {
+    const normalizedMessage = sanitizeText(message);
+    if (!normalizedMessage) {
+      return;
+    }
+
+    const normalizedCellKeys = normalizeStringArray(cellKeys);
+    const detailKey = `${normalizedMessage}::${[...normalizedCellKeys].sort().join("|")}`;
+
+    if (!conflictDetailByKey.has(detailKey)) {
+      conflictDetailByKey.set(detailKey, {
+        message: normalizedMessage,
+        cellKeys: normalizedCellKeys,
+      });
+    }
+
+    conflicts.push(normalizedMessage);
+  };
 
   const teacherBusyBySlot = new Map();
   const teacherLoad = new Map(activeTeachers.map((teacher) => [teacher.id, 0]));
@@ -2264,7 +2441,7 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
     const eligibleSubjects = getSubjectsForSection(section, subjects, scheduleType);
 
     if (eligibleSubjects.length === 0) {
-      conflicts.push(`${section.name}: no eligible subjects found.`);
+      pushConflict(`${section.name}: no eligible subjects found.`);
       return;
     }
 
@@ -2309,7 +2486,7 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       }
 
       if (!selectedPair) {
-        conflicts.push(`${section.name} ${slot.label}: no eligible teacher available.`);
+        pushConflict(`${section.name} ${slot.label}: no eligible teacher available.`, [createCellKey(section.id, slot.id)]);
         return;
       }
 
@@ -2332,7 +2509,7 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
 
     const remainingTotal = remainingHours.reduce((total, subject) => total + subject.remaining, 0);
     if (remainingTotal > 0) {
-      conflicts.push(`${section.name}: ${remainingTotal} subject-hour slot(s) unassigned.`);
+      pushConflict(`${section.name}: ${remainingTotal} subject-hour slot(s) unassigned.`);
     }
   });
 
@@ -2353,6 +2530,7 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
     updatedAt: new Date().toISOString(),
     assignments,
     conflicts: Array.from(new Set([...conflicts, ...evaluation.conflicts])),
+    conflictDetails: mergeConflictDetails(Array.from(conflictDetailByKey.values()), evaluation.conflictDetails),
     teacherLoadPercent: evaluation.teacherLoadPercent,
     status: "draft",
   };
@@ -2366,7 +2544,32 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
 
   const teacherSlotMap = new Map();
   const conflicts = [];
+  const conflictDetails = [];
+  const conflictDetailKeys = new Set();
   const teacherLoadCount = new Map();
+  const sectionSubjectUsage = new Map();
+  const sectionSpecializedSubjectUsage = new Map();
+
+  const pushConflict = (message, cellKeys = []) => {
+    const normalizedMessage = sanitizeText(message);
+    if (!normalizedMessage) {
+      return;
+    }
+
+    const normalizedCellKeys = normalizeStringArray(cellKeys);
+    const detailKey = `${normalizedMessage}::${[...normalizedCellKeys].sort().join("|")}`;
+
+    if (conflictDetailKeys.has(detailKey)) {
+      return;
+    }
+
+    conflictDetailKeys.add(detailKey);
+    conflicts.push(normalizedMessage);
+    conflictDetails.push({
+      message: normalizedMessage,
+      cellKeys: normalizedCellKeys,
+    });
+  };
 
   Object.entries(assignments || {}).forEach(([cellKey, assignment]) => {
     const [sectionId, slotId] = splitCellKey(cellKey);
@@ -2374,40 +2577,41 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
     const slot = slotsById.get(slotId);
     const subject = subjectsById.get(assignment.subjectId);
     const teacher = teachersById.get(assignment.teacherId);
+    const currentCellKey = createCellKey(sectionId, slotId);
 
     if (!section || !slot || !subject || !teacher) {
-      conflicts.push(`Invalid assignment reference in ${cellKey}.`);
+      pushConflict(`Invalid assignment reference in ${cellKey}.`, [cellKey]);
       return;
     }
 
     if (!isSlotValidForSection(section, slot, scheduleType, config)) {
-      conflicts.push(`${section.name} ${slot.label}: period not valid for section settings.`);
+      pushConflict(`${section.name} ${slot.label}: period not valid for section settings.`, [currentCellKey]);
     }
 
     const teacherRestrictedPeriods = getTeacherRestrictedPeriods(teacher.id, config.constraints);
     if (matchesRestrictedPeriod(slot, teacherRestrictedPeriods)) {
-      conflicts.push(`${section.name} ${slot.label}: ${teacher.name} is restricted for this period.`);
+      pushConflict(`${section.name} ${slot.label}: ${teacher.name} is restricted for this period.`, [currentCellKey]);
     }
 
     const subjectRestrictedPeriods = getSubjectRestrictedPeriods(subject.id, config.constraints);
     if (matchesRestrictedPeriod(slot, subjectRestrictedPeriods)) {
-      conflicts.push(`${section.name} ${slot.label}: ${subject.subjectCode || subject.subjectName} is restricted for this period.`);
+      pushConflict(`${section.name} ${slot.label}: ${subject.subjectCode || subject.subjectName} is restricted for this period.`, [currentCellKey]);
     }
 
     if (config.constraints.enforceUnavailablePeriods) {
       const unavailable = matchesUnavailablePeriod(slot, teacher.unavailablePeriods);
       if (unavailable) {
-        conflicts.push(`${section.name} ${slot.label}: ${teacher.name} is unavailable.`);
+        pushConflict(`${section.name} ${slot.label}: ${teacher.name} is unavailable.`, [currentCellKey]);
       }
     }
 
     if (config.constraints.enforceExpertiseAndGradeMatch) {
       if (!doesTeacherMatchGrade(teacher, section.grade)) {
-        conflicts.push(`${section.name} ${slot.label}: ${teacher.name} does not match Grade ${section.grade}.`);
+        pushConflict(`${section.name} ${slot.label}: ${teacher.name} does not match Grade ${section.grade}.`, [currentCellKey]);
       }
 
       if (!doesTeacherMatchSubject(teacher, subject)) {
-        conflicts.push(`${section.name} ${slot.label}: ${teacher.name} lacks subject expertise for ${subject.subjectCode || subject.subjectName}.`);
+        pushConflict(`${section.name} ${slot.label}: ${teacher.name} lacks subject expertise for ${subject.subjectCode || subject.subjectName}.`, [currentCellKey]);
       }
     }
 
@@ -2416,8 +2620,9 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       const existingSectionId = teacherSlots.get(slot.id);
       if (existingSectionId && existingSectionId !== section.id) {
         const existingSection = sectionsById.get(existingSectionId);
-        conflicts.push(
-          `${teacher.name} double-booked at ${slot.label} (${existingSection?.name || existingSectionId} and ${section.name}).`
+        pushConflict(
+          `${teacher.name} double-booked at ${slot.label} (${existingSection?.name || existingSectionId} and ${section.name}).`,
+          [createCellKey(existingSectionId, slot.id), currentCellKey]
         );
       }
 
@@ -2426,6 +2631,62 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
     }
 
     teacherLoadCount.set(teacher.id, (teacherLoadCount.get(teacher.id) || 0) + 1);
+
+    const sectionSubjects = sectionSubjectUsage.get(section.id) || new Map();
+    const subjectCells = sectionSubjects.get(subject.id) || [];
+    sectionSubjects.set(subject.id, [...subjectCells, currentCellKey]);
+    sectionSubjectUsage.set(section.id, sectionSubjects);
+
+    const sectionClassification = sanitizeText(section.classification).toLowerCase();
+    const subjectType = sanitizeText(subject.subjectType).toLowerCase();
+    const isSpecialSection = sectionClassification.includes("special");
+    const isSpecializedSubject = subjectType === "specialized";
+
+    if (isSpecialSection && isSpecializedSubject) {
+      const specializedSubjects = sectionSpecializedSubjectUsage.get(section.id) || new Map();
+      const specializedCells = specializedSubjects.get(subject.id) || [];
+      specializedSubjects.set(subject.id, [...specializedCells, currentCellKey]);
+      sectionSpecializedSubjectUsage.set(section.id, specializedSubjects);
+    }
+  });
+
+  sectionSubjectUsage.forEach((subjectMap, sectionId) => {
+    const section = sectionsById.get(sectionId);
+    if (!section) {
+      return;
+    }
+
+    subjectMap.forEach((cellKeys, subjectId) => {
+      if (!Array.isArray(cellKeys) || cellKeys.length <= 1) {
+        return;
+      }
+
+      const subject = subjectsById.get(subjectId);
+      const subjectLabel = subject?.subjectCode || subject?.subjectName || subjectId;
+      pushConflict(`${section.name}: duplicated subject ${subjectLabel} in multiple periods.`, cellKeys);
+    });
+  });
+
+  sectionSpecializedSubjectUsage.forEach((specializedMap, sectionId) => {
+    if (specializedMap.size <= 1) {
+      return;
+    }
+
+    const section = sectionsById.get(sectionId);
+    if (!section) {
+      return;
+    }
+
+    const specializedSubjectLabels = Array.from(specializedMap.keys()).map((subjectId) => {
+      const subject = subjectsById.get(subjectId);
+      return subject?.subjectCode || subject?.subjectName || subjectId;
+    });
+
+    const allSpecializedCellKeys = Array.from(specializedMap.values()).flat();
+    pushConflict(
+      `${section.name}: special section has more than one specialized subject (${specializedSubjectLabels.join(", ")}).`,
+      allSpecializedCellKeys
+    );
   });
 
   const teacherLoadPercent = {};
@@ -2435,9 +2696,29 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
   });
 
   return {
-    conflicts: Array.from(new Set(conflicts)),
+    conflicts,
+    conflictDetails,
     teacherLoadPercent,
   };
+}
+
+function mergeConflictDetails(baseDetails, evaluationDetails) {
+  const merged = new Map();
+
+  [...(Array.isArray(baseDetails) ? baseDetails : []), ...(Array.isArray(evaluationDetails) ? evaluationDetails : [])].forEach((entry) => {
+    const message = sanitizeText(entry?.message);
+    if (!message) {
+      return;
+    }
+
+    const cellKeys = normalizeStringArray(entry?.cellKeys);
+    const key = `${message}::${[...cellKeys].sort().join("|")}`;
+    if (!merged.has(key)) {
+      merged.set(key, { message, cellKeys });
+    }
+  });
+
+  return Array.from(merged.values());
 }
 
 function getSubjectsForSection(section, subjects, scheduleType) {
@@ -2661,6 +2942,7 @@ function isTeacherEligible({
   constraints,
   teacherBusyBySlot,
   excludedSectionId,
+  ignoreDoubleBooking = false,
 }) {
   if (!teacher || !subject || !section || !slot) {
     return false;
@@ -2697,7 +2979,7 @@ function isTeacherEligible({
     return false;
   }
 
-  if (constraints.enforceNoDoubleBooking) {
+  if (constraints.enforceNoDoubleBooking && !ignoreDoubleBooking) {
     const teacherBusySlots = teacherBusyBySlot.get(teacher.id);
     if (teacherBusySlots && teacherBusySlots.has(slot.id)) {
       const existingSectionId = teacherBusySlots.get(slot.id);
@@ -2797,41 +3079,45 @@ function getTeacherDropdownOptionState({
   excludedSectionId,
 }) {
   if (!teacher || !subject || !section || !slot) {
-    return { include: false, restricted: false };
+    return { include: false, restricted: false, restrictedReason: "", statusNote: "" };
   }
 
   if (teacher.active === false) {
-    return { include: false, restricted: false };
+    return { include: false, restricted: false, restrictedReason: "", statusNote: "" };
   }
 
   if (constraints.enforceExpertiseAndGradeMatch) {
     if (!doesTeacherMatchGrade(teacher, section.grade) || !doesTeacherMatchSubject(teacher, subject)) {
-      return { include: false, restricted: false };
+      return { include: false, restricted: false, restrictedReason: "", statusNote: "" };
     }
   }
+
+  let restricted = false;
+  let restrictedReason = "";
+  let statusNote = "";
 
   if (constraints.enforceNoDoubleBooking) {
     const teacherBusySlots = teacherBusyBySlot.get(teacher.id);
     if (teacherBusySlots && teacherBusySlots.has(slot.id)) {
       const existingSectionId = teacherBusySlots.get(slot.id);
       if (existingSectionId && existingSectionId !== excludedSectionId) {
-        return { include: false, restricted: false };
+        statusNote = "Already assigned";
       }
     }
   }
 
-  let periodRestricted = false;
-
   if (constraints.enforceUnavailablePeriods && matchesUnavailablePeriod(slot, teacher.unavailablePeriods)) {
-    periodRestricted = true;
+    restricted = true;
+    restrictedReason = restrictedReason || "Unavailable";
   }
 
   const teacherRestrictedPeriods = getTeacherRestrictedPeriods(teacher.id, constraints);
   if (matchesRestrictedPeriod(slot, teacherRestrictedPeriods)) {
-    periodRestricted = true;
+    restricted = true;
+    restrictedReason = restrictedReason || "Restricted";
   }
 
-  return { include: true, restricted: periodRestricted };
+  return { include: true, restricted, restrictedReason, statusNote };
 }
 
 function doesTeacherMatchGrade(teacher, grade) {
@@ -3295,15 +3581,20 @@ function stickyRowHeaderCellStyle() {
   };
 }
 
-function gridCellStyle(allowed, hasAssignment) {
+function gridCellStyle(allowed, hasAssignment, hasConflict = false, hasValidAssignment = false) {
   return {
     borderBottom: "1px solid #e7ecf6",
-    borderRight: "1px solid #edf1f9",
-    background: !allowed ? "#f7f8fc" : hasAssignment ? "#eef2ff" : "#ffffff",
+    borderRight: hasConflict ? "1px solid #f0c9cf" : hasValidAssignment ? "1px solid #cde8d4" : "1px solid #edf1f9",
+    background: !allowed ? "#f7f8fc" : hasConflict ? "#fff1f3" : hasValidAssignment ? "#edf8f0" : hasAssignment ? "#eef2ff" : "#ffffff",
     textAlign: "center",
     verticalAlign: "middle",
     padding: 6,
     minHeight: 56,
+    boxShadow: hasConflict
+      ? "inset 0 0 0 2px #e7a7b0"
+      : hasValidAssignment
+        ? "inset 0 0 0 1px #cde8d4"
+        : "none",
   };
 }
 
