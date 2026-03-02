@@ -209,6 +209,13 @@ export default function ScheduleMaker() {
     () => buildEffectiveTeacherRestrictions(config.constraints.teacherRestrictions, faculty),
     [config.constraints.teacherRestrictions, faculty]
   );
+  const subjectRestrictionsForDisplay = useMemo(
+    () =>
+      [...(config.constraints.subjectRestrictions || [])].sort((left, right) =>
+        compareRecentFirst(left?.updatedAt, right?.updatedAt)
+      ),
+    [config.constraints.subjectRestrictions]
+  );
   const ancillaryTaskOptions = useMemo(() => {
     const tasks = teacherRestrictionOptions
       .flatMap((teacher) => teacher.ancillaryAssignments || [])
@@ -390,6 +397,7 @@ export default function ScheduleMaker() {
   };
 
   const addTeacherRestriction = () => {
+    const now = new Date().toISOString();
     const periodLabels = normalizeStringArray(teacherRestrictionForm.periodLabels);
     if (periodLabels.length === 0) {
       showNotice("Select at least one restricted period.", "error");
@@ -442,13 +450,14 @@ export default function ScheduleMaker() {
         teacherId: teacher.id,
         teacherName: teacher.name || "Teacher",
         periodLabels,
+        updatedAt: now,
       }));
 
       return {
         ...prev,
         constraints: {
           ...prev.constraints,
-          teacherRestrictions: [...others, ...nextEntries],
+            teacherRestrictions: [...nextEntries, ...others],
         },
       };
     });
@@ -467,21 +476,30 @@ export default function ScheduleMaker() {
   };
 
   const removeTeacherRestriction = (teacherId) => {
+    const normalizedTeacherId = sanitizeText(teacherId);
+    if (!normalizedTeacherId) {
+      showNotice("Teacher restriction could not be removed.", "error");
+      return;
+    }
+
     setConfig((prev) => ({
       ...prev,
       constraints: {
         ...prev.constraints,
-        teacherRestrictions: (prev.constraints.teacherRestrictions || []).filter((item) => item.teacherId !== teacherId),
+        teacherRestrictions: (prev.constraints.teacherRestrictions || []).filter(
+          (item) => sanitizeText(item.teacherId) !== normalizedTeacherId
+        ),
       },
     }));
 
-    persistFacultyUnavailablePeriods({ [teacherId]: [] });
+    persistFacultyUnavailablePeriods({ [normalizedTeacherId]: [] });
     setDataRefreshToken((current) => current + 1);
 
     showNotice("Teacher restriction removed.", "success");
   };
 
   const addSubjectRestriction = () => {
+    const now = new Date().toISOString();
     const periodLabels = normalizeStringArray(subjectRestrictionForm.periodLabels);
     if (periodLabels.length === 0) {
       showNotice("Select at least one restricted period.", "error");
@@ -510,6 +528,7 @@ export default function ScheduleMaker() {
         subjectCode: selectedSubject.code || "",
         periodLabels,
         reason,
+        updatedAt: now,
       };
 
       const others = existing.filter((item) => item.subjectId !== nextEntry.subjectId);
@@ -518,7 +537,7 @@ export default function ScheduleMaker() {
         ...prev,
         constraints: {
           ...prev.constraints,
-          subjectRestrictions: [...others, nextEntry],
+          subjectRestrictions: [nextEntry, ...others],
         },
       };
     });
@@ -1734,7 +1753,7 @@ export default function ScheduleMaker() {
                       </div>
                     )}
 
-                    {(config.constraints.subjectRestrictions || []).map((entry) => (
+                    {subjectRestrictionsForDisplay.map((entry) => (
                       <div key={entry.subjectId} style={restrictionRowStyle()}>
                         <div>
                           <p style={{ margin: 0, color: "#27356f", fontSize: 13, fontWeight: 700 }}>{entry.subjectCode ? `${entry.subjectCode} — ${entry.subjectName}` : entry.subjectName}</p>
@@ -2881,6 +2900,7 @@ function persistFacultyLoadPercent(teacherLoadPercent) {
   });
 
   saveJson(FACULTY_STORAGE_KEY, updated);
+  dispatchFacultyUpdatedEvent();
 }
 
 function persistFacultyUnavailablePeriods(periodsByTeacherId) {
@@ -2889,21 +2909,40 @@ function persistFacultyUnavailablePeriods(periodsByTeacherId) {
     return;
   }
 
-  const updates = periodsByTeacherId && typeof periodsByTeacherId === "object" ? periodsByTeacherId : {};
+  const rawUpdates = periodsByTeacherId && typeof periodsByTeacherId === "object" ? periodsByTeacherId : {};
+  const updates = Object.entries(rawUpdates).reduce((accumulator, [teacherId, periods]) => {
+    const normalizedTeacherId = sanitizeText(teacherId);
+    if (!normalizedTeacherId) {
+      return accumulator;
+    }
+
+    accumulator[normalizedTeacherId] = normalizeStringArray(periods);
+    return accumulator;
+  }, {});
 
   const updated = facultyList.map((teacher) => {
-    if (!Object.prototype.hasOwnProperty.call(updates, teacher.id)) {
+    const normalizedTeacherId = sanitizeText(teacher?.id);
+    if (!normalizedTeacherId || !Object.prototype.hasOwnProperty.call(updates, normalizedTeacherId)) {
       return teacher;
     }
 
     return {
       ...teacher,
-      unavailablePeriods: normalizeStringArray(updates[teacher.id]),
+      unavailablePeriods: updates[normalizedTeacherId],
       updatedAt: new Date().toISOString(),
     };
   });
 
   saveJson(FACULTY_STORAGE_KEY, updated);
+  dispatchFacultyUpdatedEvent();
+}
+
+function dispatchFacultyUpdatedEvent() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new Event("turotugma:faculty-updated"));
 }
 
 function buildEffectiveTeacherRestrictions(configRestrictions, facultyList) {
@@ -2914,6 +2953,7 @@ function buildEffectiveTeacherRestrictions(configRestrictions, facultyList) {
       teacherId: entry.teacherId,
       teacherName: sanitizeText(entry.teacherName) || entry.teacherId,
       periodLabels: normalizeStringArray(entry.periodLabels),
+      updatedAt: normalizeTimestamp(entry.updatedAt),
     });
   });
 
@@ -2935,12 +2975,18 @@ function buildEffectiveTeacherRestrictions(configRestrictions, facultyList) {
       teacherId,
       teacherName: sanitizeText(teacher?.name) || existing?.teacherName || teacherId,
       periodLabels: mergedLabels,
+      updatedAt: existing?.updatedAt || normalizeTimestamp(teacher?.updatedAt),
     });
   });
 
-  return Array.from(map.values()).sort((left, right) =>
-    sanitizeText(left.teacherName).localeCompare(sanitizeText(right.teacherName))
-  );
+  return Array.from(map.values()).sort((left, right) => {
+    const byRecent = compareRecentFirst(left?.updatedAt, right?.updatedAt);
+    if (byRecent !== 0) {
+      return byRecent;
+    }
+
+    return sanitizeText(left.teacherName).localeCompare(sanitizeText(right.teacherName));
+  });
 }
 
 function normalizeTeacherRestrictions(restrictions) {
@@ -2953,6 +2999,7 @@ function normalizeTeacherRestrictions(restrictions) {
       teacherId: sanitizeText(entry?.teacherId),
       teacherName: sanitizeText(entry?.teacherName),
       periodLabels: normalizeStringArray(entry?.periodLabels),
+      updatedAt: normalizeTimestamp(entry?.updatedAt),
     }))
     .filter((entry) => entry.teacherId);
 }
@@ -3023,6 +3070,7 @@ function loadScheduleConfig() {
               teacherId: sanitizeText(entry?.teacherId),
               teacherName: sanitizeText(entry?.teacherName),
               periodLabels: normalizeStringArray(entry?.periodLabels),
+              updatedAt: normalizeTimestamp(entry?.updatedAt),
             }))
             .filter((entry) => !!entry.teacherId && entry.periodLabels.length > 0)
         : [],
@@ -3034,6 +3082,7 @@ function loadScheduleConfig() {
               subjectCode: sanitizeText(entry?.subjectCode),
               reason: sanitizeText(entry?.reason),
               periodLabels: normalizeStringArray(entry?.periodLabels),
+              updatedAt: normalizeTimestamp(entry?.updatedAt),
             }))
             .filter((entry) => !!entry.subjectId && entry.periodLabels.length > 0)
         : [],
@@ -3076,6 +3125,26 @@ function normalizeStringArray(values) {
   }
 
   return Array.from(new Set(values.map((entry) => sanitizeText(entry)).filter(Boolean)));
+}
+
+function normalizeTimestamp(value) {
+  const raw = sanitizeText(value);
+  if (!raw) {
+    return "";
+  }
+
+  const parsed = new Date(raw).getTime();
+  if (Number.isNaN(parsed)) {
+    return "";
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+function compareRecentFirst(leftTimestamp, rightTimestamp) {
+  const left = new Date(normalizeTimestamp(leftTimestamp) || 0).getTime();
+  const right = new Date(normalizeTimestamp(rightTimestamp) || 0).getTime();
+  return right - left;
 }
 
 function sanitizeText(value) {

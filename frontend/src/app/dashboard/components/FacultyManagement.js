@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 const FACULTY_STORAGE_KEY = "turotugma_faculty";
@@ -105,8 +105,50 @@ export default function FacultyManagement() {
     setFacultyMembers(nextFaculty);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(FACULTY_STORAGE_KEY, JSON.stringify(nextFaculty));
+      window.dispatchEvent(new Event("turotugma:faculty-updated"));
     }
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncFromStorage = () => {
+      const latestFaculty = getInitialFaculty();
+      setFacultyMembers(latestFaculty);
+
+      if (!editingId) {
+        return;
+      }
+
+      const latestEditingMember = latestFaculty.find((member) => member.id === editingId);
+      if (!latestEditingMember) {
+        return;
+      }
+
+      setFormState((prev) => ({
+        ...prev,
+        unavailablePeriods: touched.unavailablePeriods ? prev.unavailablePeriods : latestEditingMember.unavailablePeriods,
+      }));
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncFromStorage();
+      }
+    };
+
+    window.addEventListener("focus", syncFromStorage);
+    window.addEventListener("turotugma:faculty-updated", syncFromStorage);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", syncFromStorage);
+      window.removeEventListener("turotugma:faculty-updated", syncFromStorage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [editingId, touched.unavailablePeriods]);
 
   const markTouched = (field) => {
     setTouched((prev) => ({ ...prev, [field]: true }));
@@ -279,7 +321,9 @@ export default function FacultyManagement() {
   };
 
   const handleSaveFaculty = () => {
-    const hasErrors = Object.keys(validationErrors).length > 0;
+    const latestFaculty = getInitialFaculty();
+    const liveValidationErrors = validateFacultyForm(formState, latestFaculty, editingId);
+    const hasErrors = Object.keys(liveValidationErrors).length > 0;
     if (hasErrors) {
       setTouched({
         name: true,
@@ -299,7 +343,7 @@ export default function FacultyManagement() {
     const normalized = normalizeFacultyRecord(formState, editingId);
 
     if (editingId) {
-      const existing = facultyMembers.find((member) => member.id === editingId);
+      const existing = latestFaculty.find((member) => member.id === editingId);
       if (!existing) {
         showNotice("Selected faculty record was not found.", "error");
         return;
@@ -311,7 +355,7 @@ export default function FacultyManagement() {
         return;
       }
 
-      const nextFaculty = facultyMembers.map((member) =>
+      const nextFaculty = latestFaculty.map((member) =>
         member.id === editingId
           ? {
               ...normalized,
@@ -331,7 +375,7 @@ export default function FacultyManagement() {
       return;
     }
 
-    persistFaculty([...facultyMembers, normalized]);
+    persistFaculty([...latestFaculty, normalized]);
     setFormState(EMPTY_FORM);
     setTouched({});
     showNotice("Faculty record added.", "success");
