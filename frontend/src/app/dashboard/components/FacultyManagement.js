@@ -24,23 +24,7 @@ const DEPED_DESIGNATION_OPTIONS = [
   "Head Teacher VI",
 ];
 const GRADE_LEVEL_OPTIONS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
-const FALLBACK_PERIOD_OPTIONS = [
-  "Monday P1",
-  "Monday P2",
-  "Monday P3",
-  "Tuesday P1",
-  "Tuesday P2",
-  "Tuesday P3",
-  "Wednesday P1",
-  "Wednesday P2",
-  "Wednesday P3",
-  "Thursday P1",
-  "Thursday P2",
-  "Thursday P3",
-  "Friday P1",
-  "Friday P2",
-  "Friday P3",
-];
+const FALLBACK_PERIOD_OPTIONS = Array.from({ length: 12 }, (_, index) => `P${index + 1}`);
 const DEGREE_SUGGESTIONS = ["BSEd", "BEEd", "BS Math", "BS English", "BS Biology", "BS Physics", "MAEd", "MEd", "PhD"];
 const MAJOR_SUGGESTIONS = ["Mathematics", "English", "Filipino", "Science", "Araling Panlipunan", "TLE", "ICT", "HUMSS", "ABM", "STEM"];
 const MINOR_SUGGESTIONS = ["Mathematics", "English", "Filipino", "Science", "Values Education", "MAPEH", "Computer", "None"];
@@ -761,8 +745,8 @@ export default function FacultyManagement() {
             </button>
           </div>
 
-          <div className="faculty-filter-row-secondary" style={{ marginTop: 8, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
-            <Field label="Position">
+          <Field label="Filter By (Position, Subjects, Grade Level)">
+            <div className="faculty-filter-row-secondary" style={{ marginTop: 2, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
               <SearchableMultiSelectChips
                 options={positionFilterOptions}
                 selected={positionFilters}
@@ -776,9 +760,7 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
-            </Field>
 
-            <Field label="Subjects">
               <SearchableMultiSelectChips
                 options={subjectFilterOptions}
                 selected={subjectFilters}
@@ -792,9 +774,7 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
-            </Field>
 
-            <Field label="Grade Level">
               <SearchableMultiSelectChips
                 options={GRADE_LEVEL_OPTIONS}
                 selected={gradeFilters}
@@ -806,8 +786,8 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
-            </Field>
-          </div>
+            </div>
+          </Field>
 
           {selectedMultiFilterChips.length ? (
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1577,7 +1557,7 @@ function normalizeFacultyRecord(formState, editingId) {
     major: sanitizeText(formState.major),
     minor: sanitizeText(formState.minor),
     ancillaryAssignments: normalizeArray(formState.ancillaryAssignments),
-    unavailablePeriods: normalizeArray(formState.unavailablePeriods),
+    unavailablePeriods: normalizeUnavailablePeriods(formState.unavailablePeriods),
     subjectExpertise: normalizeArray(formState.subjectExpertise),
     gradeLevelAssignments: normalizeArray(formState.gradeLevelAssignments),
     assignedLoadPercent: 0,
@@ -1687,7 +1667,7 @@ function getUnavailablePeriodOptions() {
       return FALLBACK_PERIOD_OPTIONS;
     }
 
-    const normalized = parsed.map((item) => sanitizeText(item)).filter(Boolean);
+    const normalized = normalizeUnavailablePeriods(parsed);
     return normalized.length ? normalized : FALLBACK_PERIOD_OPTIONS;
   } catch {
     return FALLBACK_PERIOD_OPTIONS;
@@ -1713,7 +1693,7 @@ function getInitialFaculty() {
     return parsed.map((member) => ({
       ...member,
       ancillaryAssignments: normalizeArray(member.ancillaryAssignments),
-      unavailablePeriods: normalizeArray(member.unavailablePeriods),
+      unavailablePeriods: normalizeUnavailablePeriods(member.unavailablePeriods),
       subjectExpertise: normalizeArray(member.subjectExpertise),
       gradeLevelAssignments: resolveListToGradeLevels(normalizeArray(member.gradeLevelAssignments)),
       assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0,
@@ -1779,10 +1759,49 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
     minor,
     ancillaryAssignments,
     ancillaryInput: "",
-    unavailablePeriods,
+    unavailablePeriods: normalizeUnavailablePeriods(unavailablePeriods),
     subjectExpertise,
     gradeLevelAssignments,
   };
+}
+
+function normalizeUnavailablePeriods(values) {
+  const normalized = normalizeArray(values)
+    .map((value) => toPeriodToken(value))
+    .filter(Boolean)
+    .map((token) => token.toUpperCase());
+
+  const deduped = Array.from(new Set(normalized));
+  return deduped.sort((left, right) => getPeriodNumber(left) - getPeriodNumber(right));
+}
+
+function toPeriodToken(value) {
+  const text = sanitizeText(value);
+  if (!text) {
+    return "";
+  }
+
+  const match = text.match(/p\s*(\d+)/iu);
+  if (!match) {
+    return "";
+  }
+
+  const periodNumber = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(periodNumber) || periodNumber <= 0) {
+    return "";
+  }
+
+  return `P${periodNumber}`;
+}
+
+function getPeriodNumber(periodLabel) {
+  const match = String(periodLabel || "").toUpperCase().match(/^P(\d+)$/u);
+  if (!match) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 function normalizeHeaderKey(value) {
