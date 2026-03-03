@@ -95,6 +95,7 @@ export default function ScheduleMaker() {
   const [gridTrackFilter, setGridTrackFilter] = useState("all");
   const [cellEditorDrafts, setCellEditorDrafts] = useState({});
   const [hoveredCellKey, setHoveredCellKey] = useState("");
+  const [cellConflictTooltip, setCellConflictTooltip] = useState({ visible: false, messages: [], x: 0, y: 0 });
   const [teacherRestrictionForm, setTeacherRestrictionForm] = useState(EMPTY_TEACHER_RESTRICTION_FORM);
   const [showTeacherRestrictionEditor, setShowTeacherRestrictionEditor] = useState(false);
   const [subjectRestrictionForm, setSubjectRestrictionForm] = useState(EMPTY_SUBJECT_RESTRICTION_FORM);
@@ -363,8 +364,28 @@ export default function ScheduleMaker() {
 
   const assignmentValidationSummary = useMemo(() => {
     const assignedKeys = Object.keys(schedule?.assignments || {});
-    const totalAssigned = assignedKeys.length;
-    const invalidAssigned = assignedKeys.filter((cellKey) => (conflictMessagesByCell.get(cellKey) || []).length > 0).length;
+    const invalidAssignedSaved = assignedKeys.filter((cellKey) => (conflictMessagesByCell.get(cellKey) || []).length > 0).length;
+    const pendingInvalidCellKeys = Object.entries(cellEditorDrafts || {}).reduce((accumulator, [cellKey, draft]) => {
+      const assignment = schedule?.assignments?.[cellKey];
+      if (assignment) {
+        return accumulator;
+      }
+
+      if (!!sanitizeText(draft?.subjectId) && !sanitizeText(draft?.teacherId)) {
+        accumulator.add(cellKey);
+      }
+
+      return accumulator;
+    }, new Set());
+
+    const unassignedConflictCellKeys = Array.from(conflictMessagesByCell.keys()).filter((cellKey) => {
+      const assignment = schedule?.assignments?.[cellKey];
+      return !assignment && !pendingInvalidCellKeys.has(cellKey);
+    });
+
+    const pendingInvalid = pendingInvalidCellKeys.size;
+    const invalidAssigned = invalidAssignedSaved + pendingInvalid + unassignedConflictCellKeys.length;
+    const totalAssigned = assignedKeys.length + pendingInvalid + unassignedConflictCellKeys.length;
     const validAssigned = Math.max(0, totalAssigned - invalidAssigned);
     const totalRequired = sections.reduce(
       (sectionCount, section) =>
@@ -382,7 +403,7 @@ export default function ScheduleMaker() {
       invalidAssigned,
       totalRequired,
     };
-  }, [schedule?.assignments, conflictMessagesByCell, sections, slots, scheduleType, config]);
+  }, [schedule?.assignments, conflictMessagesByCell, cellEditorDrafts, sections, slots, scheduleType, config]);
 
   const teacherBusyBySlot = useMemo(
     () => buildTeacherBusyMap(schedule?.assignments || {}, sectionsById, slotsById),
@@ -919,10 +940,16 @@ export default function ScheduleMaker() {
     }
 
     const { cellKey } = getCellDraft(section.id, slot.id);
+    const hasExistingAssignment = !!schedule?.assignments?.[cellKey];
     setCellEditorDrafts((prev) => ({
       ...prev,
       [cellKey]: { subjectId, teacherId: "" },
     }));
+
+    if (hasExistingAssignment) {
+      removeAssignmentFromCell(section, slot, false, { subjectId, teacherId: "" });
+      return;
+    }
 
     if (!subjectId) {
       removeAssignmentFromCell(section, slot, false);
@@ -1244,10 +1271,15 @@ export default function ScheduleMaker() {
                         const allowed = isSlotValidForSection(section, slot, scheduleType, config);
                         const cellKey = createCellKey(section.id, slot.id);
                         const assignment = schedule?.assignments?.[cellKey] || null;
-                        const cellConflictMessages = conflictMessagesByCell.get(cellKey) || [];
-                        const hasCellConflict = cellConflictMessages.length > 0;
-                        const hasValidAssignment = !!assignment && !hasCellConflict;
                         const cellDraft = getCellDraft(section.id, slot.id);
+                        const cellConflictMessages = conflictMessagesByCell.get(cellKey) || [];
+                        const hasPendingTeacher = !assignment && !!cellDraft.subjectId && !cellDraft.teacherId;
+                        const pendingTeacherMessage = "Teacher is required for the selected subject.";
+                        const cellDisplayConflictMessages = hasPendingTeacher
+                          ? [...cellConflictMessages, pendingTeacherMessage]
+                          : cellConflictMessages;
+                        const hasCellConflict = cellDisplayConflictMessages.length > 0;
+                        const hasValidAssignment = !!assignment && !hasCellConflict;
                         const subjectOptions = getSubjectsForSection(section, subjects, scheduleType);
                         const subjectOptionsWithState = subjectOptions.map((item) => ({
                           ...item,
@@ -1286,15 +1318,28 @@ export default function ScheduleMaker() {
                           <td
                             key={`${section.id}-${slot.id}`}
                             style={gridCellStyle(allowed, !!assignment, hasCellConflict, hasValidAssignment)}
-                            title={hasCellConflict ? `Conflict: ${cellConflictMessages.join(" | ")}` : undefined}
-                            onMouseEnter={() => {
+                            onMouseEnter={(event) => {
                               if (allowed) {
                                 setHoveredCellKey(cellKey);
+
+                                if (hasCellConflict) {
+                                  const rect = event.currentTarget.getBoundingClientRect();
+                                  setCellConflictTooltip({
+                                    visible: true,
+                                    messages: cellDisplayConflictMessages,
+                                    x: rect.left + rect.width / 2,
+                                    y: rect.top - 8,
+                                  });
+                                }
                               }
                             }}
                             onMouseLeave={() => {
                               if (hoveredCellKey === cellKey) {
                                 setHoveredCellKey("");
+                              }
+
+                              if (hasCellConflict) {
+                                setCellConflictTooltip((current) => ({ ...current, visible: false }));
                               }
                             }}
                           >
@@ -1411,6 +1456,35 @@ export default function ScheduleMaker() {
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
                   <div>
                     <Field label="Class Duration (minutes)">
+
+                {cellConflictTooltip.visible && cellConflictTooltip.messages.length ? (
+                  <div
+                    style={{
+                      position: "fixed",
+                      left: cellConflictTooltip.x,
+                      top: cellConflictTooltip.y,
+                      transform: "translate(-50%, -100%)",
+                      maxWidth: 320,
+                      background: "#1f2948",
+                      color: "#ffffff",
+                      borderRadius: 10,
+                      padding: "8px 10px",
+                      boxShadow: "0 10px 28px rgba(15, 27, 45, 0.28)",
+                      border: "1px solid rgba(255, 255, 255, 0.12)",
+                      zIndex: 1200,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: "#ffd8de" }}>Conflict Details</p>
+                    <div style={{ marginTop: 4, display: "grid", gap: 4 }}>
+                      {cellConflictTooltip.messages.map((message, index) => (
+                        <p key={`${message}-${index}`} style={{ margin: 0, fontSize: 11, lineHeight: 1.35 }}>
+                          — {message}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                       <input
                         type="number"
                         min={30}
@@ -2367,10 +2441,11 @@ function normalizeSubjectsList(subjectsRaw) {
       const name = sanitizeText(subject?.subjectName);
       const schoolLevel = String(subject?.schoolLevel || "").toLowerCase() === "shs" ? "shs" : "jhs";
       const subjectType = sanitizeText(subject?.subjectType) || "Core";
-      const gradeLevel = schoolLevel === "jhs" ? "7-10" : sanitizeText(subject?.gradeLevel);
+      const rawGradeLevel = sanitizeText(subject?.gradeLevel);
+      const gradeLevel = schoolLevel === "jhs" ? rawGradeLevel || "7-10" : rawGradeLevel;
       const strand = sanitizeText(subject?.strand).toUpperCase();
       const semester = sanitizeText(subject?.semester);
-      const hoursPerWeek = parseBoundedNumber(subject?.hoursPerWeek, 1, 12, 1);
+      const hoursPerWeek = parseBoundedDecimal(subject?.hoursPerWeek, 1, 12, 1);
       const id = sanitizeText(subject?.id) || `${schoolLevel}-${code || name || "subject"}-${gradeLevel}-${semester}-${strand}-${index}`;
 
       return {
@@ -2439,14 +2514,27 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
 
   sections.forEach((section) => {
     const eligibleSubjects = getSubjectsForSection(section, subjects, scheduleType);
+    const sectionLabel = formatConflictSectionName(section);
 
     if (eligibleSubjects.length === 0) {
-      pushConflict(`${section.name}: no eligible subjects found.`);
+      pushConflict(`No eligible subjects were found for ${sectionLabel}.`);
       return;
     }
 
-    const remainingHours = eligibleSubjects.map((subject) => ({ ...subject, remaining: subject.hoursPerWeek }));
+    const remainingHours = eligibleSubjects.map((subject) => ({
+      ...subject,
+      required: getSubjectDailySlotRequirement(subject, scheduleType, config),
+      remaining: getSubjectDailySlotRequirement(subject, scheduleType, config),
+    }));
     const validSlots = slots.filter((slot) => isSlotValidForSection(section, slot, scheduleType, config));
+
+    remainingHours.forEach((subject) => {
+      if (subject.required > validSlots.length) {
+        pushConflict(
+          `${sectionLabel}: ${subject.subjectName} requires ${subject.required} recurring daily period(s), but only ${validSlots.length} period(s) are available in this section template.`
+        );
+      }
+    });
 
     validSlots.forEach((slot) => {
 
@@ -2486,7 +2574,7 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       }
 
       if (!selectedPair) {
-        pushConflict(`${section.name} ${slot.label}: no eligible teacher available.`, [createCellKey(section.id, slot.id)]);
+        pushConflict(`No eligible teacher is available for ${sectionLabel} at ${formatPeriodOrdinalLabel(slot)}.`, [createCellKey(section.id, slot.id)]);
         return;
       }
 
@@ -2499,7 +2587,6 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       };
 
       selectedPair.subject.remaining -= 1;
-
       const busyForTeacher = teacherBusyBySlot.get(selectedPair.teacher.id) || new Map();
       busyForTeacher.set(slot.id, section.id);
       teacherBusyBySlot.set(selectedPair.teacher.id, busyForTeacher);
@@ -2507,9 +2594,43 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       teacherLoad.set(selectedPair.teacher.id, (teacherLoad.get(selectedPair.teacher.id) || 0) + 1);
     });
 
-    const remainingTotal = remainingHours.reduce((total, subject) => total + subject.remaining, 0);
-    if (remainingTotal > 0) {
-      pushConflict(`${section.name}: ${remainingTotal} subject-hour slot(s) unassigned.`);
+    // For special sections, only require one specialized subject to be assigned, not all
+    const classification = String(section.classification || "").toLowerCase();
+    const isSpecialSection = classification.includes("special");
+    if (isSpecialSection) {
+      // Separate unmet subjects into core and specialized
+      const unmetCore = remainingHours.filter(
+        (subject) => subject.remaining > 0 && String(subject.subjectType || "").toLowerCase() === "core"
+      );
+      unmetCore.forEach((subject) => {
+        const assignedCount = subject.required - subject.remaining;
+        pushConflict(
+          `${sectionLabel}: ${subject.subjectName} has ${assignedCount} of ${subject.required} required recurring daily period(s) assigned.`
+        );
+      });
+      // For specialized, suppress all unmet conflicts if any specialized subject is assigned
+      const specializedSubjects = remainingHours.filter(
+        (subject) => String(subject.subjectType || "").toLowerCase() === "specialized"
+      );
+      const anySpecializedAssigned = specializedSubjects.some(
+        (subject) => (subject.required - subject.remaining) > 0
+      );
+      if (!anySpecializedAssigned && specializedSubjects.length > 0) {
+        // Only if none are assigned, show a single conflict
+        pushConflict(
+          `${sectionLabel}: No specialized subject has any assigned period. At least one is required.`
+        );
+      }
+      // Otherwise, do not push any unmet conflict for specialized subjects
+    } else {
+      // Default: all unmet subjects are required
+      const unmetSubjects = remainingHours.filter((subject) => subject.remaining > 0);
+      unmetSubjects.forEach((subject) => {
+        const assignedCount = subject.required - subject.remaining;
+        pushConflict(
+          `${sectionLabel}: ${subject.subjectName} has ${assignedCount} of ${subject.required} required recurring daily period(s) assigned.`
+        );
+      });
     }
   });
 
@@ -2620,8 +2741,10 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       const existingSectionId = teacherSlots.get(slot.id);
       if (existingSectionId && existingSectionId !== section.id) {
         const existingSection = sectionsById.get(existingSectionId);
+        const currentSectionLabel = formatConflictSectionName(section);
+        const existingSectionLabel = existingSection ? formatConflictSectionName(existingSection) : existingSectionId;
         pushConflict(
-          `${teacher.name} double-booked at ${slot.label} (${existingSection?.name || existingSectionId} and ${section.name}).`,
+          `${teacher.name} is double-booked at ${formatPeriodOrdinalLabel(slot)} for ${existingSectionLabel} and ${currentSectionLabel}.`,
           [createCellKey(existingSectionId, slot.id), currentCellKey]
         );
       }
@@ -2656,14 +2779,16 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       return;
     }
 
+    const sectionLabel = formatConflictSectionName(section);
+
     subjectMap.forEach((cellKeys, subjectId) => {
       if (!Array.isArray(cellKeys) || cellKeys.length <= 1) {
         return;
       }
 
       const subject = subjectsById.get(subjectId);
-      const subjectLabel = subject?.subjectCode || subject?.subjectName || subjectId;
-      pushConflict(`${section.name}: duplicated subject ${subjectLabel} in multiple periods.`, cellKeys);
+      const subjectLabel = subject?.subjectName || subject?.subjectCode || subjectId;
+      pushConflict(`${subjectLabel} is duplicated in multiple periods for ${sectionLabel}.`, cellKeys);
     });
   });
 
@@ -2677,14 +2802,16 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       return;
     }
 
+    const sectionLabel = formatConflictSectionName(section);
+
     const specializedSubjectLabels = Array.from(specializedMap.keys()).map((subjectId) => {
       const subject = subjectsById.get(subjectId);
-      return subject?.subjectCode || subject?.subjectName || subjectId;
+      return subject?.subjectName || subject?.subjectCode || subjectId;
     });
 
     const allSpecializedCellKeys = Array.from(specializedMap.values()).flat();
     pushConflict(
-      `${section.name}: special section has more than one specialized subject (${specializedSubjectLabels.join(", ")}).`,
+      `${sectionLabel} has more than one specialized subject assigned (${specializedSubjectLabels.join(", ")}).`,
       allSpecializedCellKeys
     );
   });
@@ -2732,6 +2859,10 @@ function getSubjectsForSection(section, subjects, scheduleType) {
     const classification = String(section.classification || "").toLowerCase();
     const isSpecialSection = classification.includes("special");
     const filtered = scoped.filter((subject) => {
+      if (!doesJhsSubjectMatchGrade(subject, section.grade)) {
+        return false;
+      }
+
       const type = String(subject.subjectType || "").toLowerCase();
 
       if (isSpecialSection) {
@@ -3385,6 +3516,40 @@ function parseBoundedNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+function parseBoundedDecimal(value, min, max, fallback) {
+  const parsed = Number.parseFloat(String(value ?? ""));
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function getSubjectDailySlotRequirement(subject, scheduleType, config) {
+  const weeklyHours = parseBoundedDecimal(subject?.hoursPerWeek, 1, 12, 1);
+
+  if (scheduleType !== "jhs") {
+    return Math.max(1, Math.round(weeklyHours));
+  }
+
+  const weeklyMinutesPerDailySlot = getJhsWeeklyMinutesPerDailySlot(config?.jhs);
+  if (!Number.isFinite(weeklyMinutesPerDailySlot) || weeklyMinutesPerDailySlot <= 0) {
+    return Math.max(1, Math.round(weeklyHours));
+  }
+
+  const required = Math.ceil((weeklyHours * 60) / weeklyMinutesPerDailySlot);
+  return Math.max(1, required);
+}
+
+function getJhsWeeklyMinutesPerDailySlot(jhsConfig) {
+  const regularDays = normalizeDays(jhsConfig?.regularDays).length;
+  const shortenedDays = normalizeDays(jhsConfig?.shortenedDays).length;
+  const regularMinutes = parseBoundedNumber(jhsConfig?.periodMinutes?.regular, 30, 90, 50);
+  const shortenedMinutes = parseBoundedNumber(jhsConfig?.periodMinutes?.shortened, 30, 90, 45);
+
+  return regularDays * regularMinutes + shortenedDays * shortenedMinutes;
+}
+
 function parseGrade(value) {
   const text = String(value || "");
   const matched = text.match(/\d{1,2}/u);
@@ -3394,6 +3559,39 @@ function parseGrade(value) {
 
   const parsed = Number.parseInt(matched[0], 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function doesJhsSubjectMatchGrade(subject, grade) {
+  const targetGrade = Number.parseInt(grade, 10);
+  if (!Number.isFinite(targetGrade)) {
+    return true;
+  }
+
+  const gradeText = sanitizeText(subject?.gradeLevel).toLowerCase();
+  if (!gradeText || gradeText === "7-10" || gradeText === "jhs" || gradeText.includes("shared")) {
+    return true;
+  }
+
+  const exactGradeMatch = gradeText.match(/^(?:grade\s*)?(\d{1,2})$/u);
+  if (exactGradeMatch) {
+    return Number.parseInt(exactGradeMatch[1], 10) === targetGrade;
+  }
+
+  const rangeMatch = gradeText.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})/u);
+  if (rangeMatch) {
+    const rangeStart = Number.parseInt(rangeMatch[1], 10);
+    const rangeEnd = Number.parseInt(rangeMatch[2], 10);
+    if (Number.isFinite(rangeStart) && Number.isFinite(rangeEnd)) {
+      return targetGrade >= Math.min(rangeStart, rangeEnd) && targetGrade <= Math.max(rangeStart, rangeEnd);
+    }
+  }
+
+  const mentionedGrades = Array.from(gradeText.matchAll(/\d{1,2}/gu)).map((match) => Number.parseInt(match[0], 10));
+  if (mentionedGrades.length > 0) {
+    return mentionedGrades.includes(targetGrade);
+  }
+
+  return true;
 }
 
 function normalizeDays(values) {
@@ -3468,6 +3666,37 @@ function formatSectionDisplayName(section) {
   }
 
   return `${gradeText}-${baseName}`;
+}
+
+function formatConflictSectionName(section) {
+  const label = formatSectionDisplayName(section);
+  if (section?.level !== "jhs") {
+    return label;
+  }
+
+  const compactFormat = label.match(/^(\d+)\s*-\s*(.+)$/u);
+  if (compactFormat) {
+    return `${compactFormat[1]} - ${compactFormat[2]}`;
+  }
+
+  const noSpaceFormat = label.match(/^(\d+)-(.+)$/u);
+  if (noSpaceFormat) {
+    return `${noSpaceFormat[1]} - ${noSpaceFormat[2]}`;
+  }
+
+  return label;
+}
+
+function formatPeriodOrdinalLabel(slot) {
+  const periodNumber = Number.parseInt(slot?.period, 10);
+  if (!Number.isFinite(periodNumber) || periodNumber <= 0) {
+    return sanitizeText(slot?.label) || "this period";
+  }
+
+  const mod100 = periodNumber % 100;
+  const mod10 = periodNumber % 10;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : mod10 === 1 ? "st" : mod10 === 2 ? "nd" : mod10 === 3 ? "rd" : "th";
+  return `${periodNumber}${suffix} Period`;
 }
 
 function loadJson(key, fallback) {

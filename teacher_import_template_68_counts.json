@@ -1,0 +1,302 @@
+[
+    {
+        "Grade": "Grade 7",
+        "Subject": "Araling Panlipunan",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "Special Program in the Arts",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "English",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "ESP",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "Filipino",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "MAPEH",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "Mathematics",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "Science",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "TLE",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 7",
+        "Subject": "Special Program in the Journalism",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Araling Panlipunan",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Special Program in the Arts",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "English",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "ESP",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Filipino",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "MAPEH",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Mathematics",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Science",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "TLE",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 8",
+        "Subject": "Special Program in the Journalism",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Araling Panlipunan",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Special Program in the Arts",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "English",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "ESP",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Filipino",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "MAPEH",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Mathematics",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Science",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "TLE",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 9",
+        "Subject": "Special Program in the Journalism",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Araling Panlipunan",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Special Program in the Arts",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "English",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "ESP",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Filipino",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "MAPEH",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Mathematics",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Science",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "TLE",
+        "EligibleTeachers": 9
+    },
+    {
+        "Grade": "Grade 10",
+        "Subject": "Special Program in the Journalism",
+        "EligibleTeachers": 8
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Contemporary Philippine Arts",
+        "EligibleTeachers": 4
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Earth and Life Science",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Entrepreneurship",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "General Mathematics",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Oral Communication",
+        "EligibleTeachers": 4
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Personal Development",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Physical Science",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Practical Research 1",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Reading and Writing",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 11",
+        "Subject": "Statistics and Probability",
+        "EligibleTeachers": 4
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Contemporary Philippine Arts",
+        "EligibleTeachers": 4
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Earth and Life Science",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Entrepreneurship",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "General Mathematics",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Oral Communication",
+        "EligibleTeachers": 4
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Personal Development",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Physical Science",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Practical Research 1",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Reading and Writing",
+        "EligibleTeachers": 3
+    },
+    {
+        "Grade": "Grade 12",
+        "Subject": "Statistics and Probability",
+        "EligibleTeachers": 4
+    }
+]

@@ -708,7 +708,7 @@ export default function FacultyManagement() {
                       background: "#fff",
                       padding: "7px 8px",
                       display: "grid",
-                      gridTemplateColumns: "1.2fr 0.9fr 1fr 1fr",
+                      gridTemplateColumns: "1.1fr 0.9fr 1fr 1.5fr 1.2fr",
                       gap: 8,
                       alignItems: "center",
                     }}
@@ -716,7 +716,8 @@ export default function FacultyManagement() {
                     <span style={{ color: "#27356f", fontSize: 12, fontWeight: 700 }}>{member.name}</span>
                     <span style={chipStyle()}>{member.employeeId}</span>
                     <span style={chipStyle()}>{member.position}</span>
-                    <span style={chipStyle()}>{member.email}</span>
+                    <span style={chipStyle()}>{formatList(member.subjectExpertise)}</span>
+                    <span style={chipStyle()}>{formatList(member.gradeLevelAssignments)}</span>
                   </div>
                 ))}
               </div>
@@ -789,8 +790,8 @@ export default function FacultyManagement() {
             </button>
           </div>
 
-          <Field label="Filter By (Position, Subjects, Grade Level)">
-            <div className="faculty-filter-row-secondary" style={{ marginTop: 2, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
+          <div className="faculty-filter-row-secondary" style={{ marginTop: 8, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
+            <Field label="Position">
               <SearchableMultiSelectChips
                 options={positionFilterOptions}
                 selected={positionFilters}
@@ -804,7 +805,9 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
+            </Field>
 
+            <Field label="Subjects">
               <SearchableMultiSelectChips
                 options={subjectFilterOptions}
                 selected={subjectFilters}
@@ -818,7 +821,9 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
+            </Field>
 
+            <Field label="Grade Level">
               <SearchableMultiSelectChips
                 options={GRADE_LEVEL_OPTIONS}
                 selected={gradeFilters}
@@ -830,8 +835,8 @@ export default function FacultyManagement() {
                 showSelectedChips={false}
                 showEmptySelectionText={false}
               />
-            </div>
-          </Field>
+            </Field>
+          </div>
 
           {selectedMultiFilterChips.length ? (
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>

@@ -1,0 +1,212 @@
+﻿[
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Araling Panlipunan",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Edukasyon sa Pagpapakatao",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "English",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Filipino",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Mathematics",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Music, Arts, PE \u0026 Health",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Science",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Special Program in the Arts",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Special Program in the Journalism",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 10",
+        "Subject":  "Technology and Livelihood Education",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 11",
+        "Subject":  "Oral Communication",
+        "EligibleTeachers":  11
+    },
+    {
+        "Grade":  "Grade 12",
+        "Subject":  "Oral Communication",
+        "EligibleTeachers":  11
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Araling Panlipunan",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Edukasyon sa Pagpapakatao",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "English",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Filipino",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Mathematics",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Music, Arts, PE \u0026 Health",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Science",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Special Program in the Arts",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Special Program in the Journalism",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 7",
+        "Subject":  "Technology and Livelihood Education",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Araling Panlipunan",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Edukasyon sa Pagpapakatao",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "English",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Filipino",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Mathematics",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Music, Arts, PE \u0026 Health",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Science",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Special Program in the Arts",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Special Program in the Journalism",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 8",
+        "Subject":  "Technology and Livelihood Education",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Araling Panlipunan",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Edukasyon sa Pagpapakatao",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "English",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Filipino",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Mathematics",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Music, Arts, PE \u0026 Health",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Science",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Special Program in the Arts",
+        "EligibleTeachers":  8
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Special Program in the Journalism",
+        "EligibleTeachers":  9
+    },
+    {
+        "Grade":  "Grade 9",
+        "Subject":  "Technology and Livelihood Education",
+        "EligibleTeachers":  9
+    }
+]

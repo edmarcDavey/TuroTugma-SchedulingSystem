@@ -61,7 +61,7 @@ export default function LoginForm() {
 
       <section className="login-form-panel">
         <div className="login-form-shell">
-          <a href="/dashboard" className="login-back-link">← Back to Public Dashboard</a>
+          <a href="/" className="login-back-link">← Back to Homepage</a>
           <h1 className="login-title">Admin Login</h1>
           <p className="login-subtitle">Enter your administrator credentials to continue.</p>
 
