@@ -31,6 +31,7 @@ export default function DashboardShell({ activeTab, children }) {
           <a href="/dashboard?tab=subjects" style={navLinkItemStyle(activeTab === "subjects")}>Subjects</a>
           <a href="/dashboard?tab=faculty" style={navLinkItemStyle(activeTab === "faculty")}>Faculty</a>
           <a href="/dashboard?tab=schedule-maker" style={navLinkItemStyle(activeTab === "schedule-maker")}>Schedule Maker</a>
+          <a href="/dashboard?tab=time-tables" style={navLinkItemStyle(activeTab === "time-tables")}>Time Tables</a>
         </nav>
 
         <div style={{ marginTop: "auto" }}>

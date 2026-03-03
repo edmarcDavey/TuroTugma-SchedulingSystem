@@ -78,7 +78,7 @@ const EMPTY_SUBJECT_RESTRICTION_FORM = {
   reason: "",
 };
 
-export default function ScheduleMaker() {
+export default function ScheduleMaker({ readOnly = false, hideControls = false }) {
   const [scheduleType, setScheduleType] = useState("jhs");
   const [configPanel, setConfigPanel] = useState("jhs");
   const [jhsSessionType, setJhsSessionType] = useState("regular");
@@ -1010,14 +1010,15 @@ export default function ScheduleMaker() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
-        <div>
-          <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Schedule Maker</h1>
-          <p style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
-            Generate conflict-aware timetables for JHS and SHS, configure period structures and breaks, assign directly in the grid,
-            and manage draft or published schedules.
-          </p>
-        </div>
+      {!hideControls && (
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+          <div>
+            <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Schedule Maker</h1>
+            <p style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
+              Generate conflict-aware timetables for JHS and SHS, configure period structures and breaks, assign directly in the grid,
+              and manage draft or published schedules.
+            </p>
+          </div>
 
           <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexWrap: "wrap", width: "100%", justifyContent: "flex-start" }}>
             <div style={{ display: "grid", gap: 8, minWidth: 320, flex: "1 1 320px", maxWidth: 400 }}>
@@ -1026,6 +1027,7 @@ export default function ScheduleMaker() {
                 value={scheduleType}
                 onChange={(event) => setScheduleType(event.target.value)}
                 style={selectStyle(false)}
+                disabled={readOnly}
               >
                 {SCHEDULE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -1036,21 +1038,21 @@ export default function ScheduleMaker() {
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={handleGenerateSchedule} style={{ ...primaryActionStyle(), width: 120, textAlign: "center" }}>
+              <button type="button" onClick={handleGenerateSchedule} style={{ ...primaryActionStyle(), width: 120, textAlign: "center" }} disabled={readOnly}>
                 <ActionButtonLabel icon={<GenerateIcon />}>
                   {schedule ? "Re-Generate" : "Generate"}
                 </ActionButtonLabel>
               </button>
-              <button type="button" onClick={handleSaveDraft} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}>
+              <button type="button" onClick={handleSaveDraft} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }} disabled={readOnly}>
                 <ActionButtonLabel icon={<SaveIcon />}>Save</ActionButtonLabel>
               </button>
-              <button type="button" onClick={() => setShowDraftsPanel((prev) => !prev)} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}>
+              <button type="button" onClick={() => setShowDraftsPanel((prev) => !prev)} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }} disabled={readOnly}>
                 <ActionButtonLabel icon={<DraftsIcon />}>Drafts ({draftsForCurrentSchedule.length})</ActionButtonLabel>
               </button>
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={!schedule || hasPublishBlockingConflicts}
+                disabled={!schedule || hasPublishBlockingConflicts || readOnly}
                 title={
                   !schedule
                     ? "Generate or load a draft before publishing."
@@ -1062,8 +1064,8 @@ export default function ScheduleMaker() {
                   ...secondaryActionStyle(),
                   width: 120,
                   textAlign: "center",
-                  opacity: !schedule || hasPublishBlockingConflicts ? 0.55 : 1,
-                  cursor: !schedule || hasPublishBlockingConflicts ? "not-allowed" : "pointer",
+                  opacity: !schedule || hasPublishBlockingConflicts || readOnly ? 0.55 : 1,
+                  cursor: !schedule || hasPublishBlockingConflicts || readOnly ? "not-allowed" : "pointer",
                 }}
               >
                 <ActionButtonLabel icon={<PublishIcon />}>Publish</ActionButtonLabel>
@@ -1075,6 +1077,7 @@ export default function ScheduleMaker() {
                   showNotice("Data refreshed from local storage.", "success");
                 }}
                 style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}
+                disabled={readOnly}
               >
                 <ActionButtonLabel icon={<RefreshIcon />}>Refresh Data</ActionButtonLabel>
               </button>
@@ -1083,6 +1086,7 @@ export default function ScheduleMaker() {
                 onClick={() => setShowSchedulingConfigurations((prev) => !prev)}
                 style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}
                 aria-pressed={!showSchedulingConfigurations}
+                disabled={readOnly}
               >
                 <ActionButtonLabel icon={showSchedulingConfigurations ? <HideConfigIcon /> : <ShowConfigIcon />}>
                   {showSchedulingConfigurations ? "Hide Config" : "Show Config"}
@@ -1090,7 +1094,8 @@ export default function ScheduleMaker() {
               </button>
             </div>
           </div>
-      </div>
+        </div>
+      )}
 
       {notice.text ? (
         <div
@@ -1147,14 +1152,14 @@ export default function ScheduleMaker() {
             }}
           >
             <Field label="Session Type">
-              <select value={gridSessionFilter} onChange={(event) => setGridSessionFilter(event.target.value)} style={selectStyle(false)}>
+              <select value={gridSessionFilter} onChange={(event) => setGridSessionFilter(event.target.value)} style={selectStyle(false)} disabled={readOnly}>
                 <option value="regular">Regular Session</option>
                 <option value="shortened">Shortened Session</option>
               </select>
             </Field>
 
             <Field label="Grade Level">
-              <select value={gridGradeFilter} onChange={(event) => setGridGradeFilter(event.target.value)} style={selectStyle(false)}>
+              <select value={gridGradeFilter} onChange={(event) => setGridGradeFilter(event.target.value)} style={selectStyle(false)} disabled={readOnly}>
                 <option value="all">All Grades</option>
                 {gridGradeOptions.map((grade) => (
                   <option key={grade} value={grade}>{`Grade ${grade}`}</option>
@@ -1164,7 +1169,7 @@ export default function ScheduleMaker() {
 
             {isJhsSchedule ? (
               <Field label="Section Type">
-                <select value={gridSectionTypeFilter} onChange={(event) => setGridSectionTypeFilter(event.target.value)} style={selectStyle(false)}>
+                <select value={gridSectionTypeFilter} onChange={(event) => setGridSectionTypeFilter(event.target.value)} style={selectStyle(false)} disabled={readOnly}>
                   <option value="all">All Section Types</option>
                   {jhsSectionTypeOptions.map((sectionType) => (
                     <option key={sectionType} value={sectionType}>{sectionType}</option>
@@ -1173,7 +1178,7 @@ export default function ScheduleMaker() {
               </Field>
             ) : (
               <Field label="Strand/Track">
-                <select value={gridTrackFilter} onChange={(event) => setGridTrackFilter(event.target.value)} style={selectStyle(false)}>
+                <select value={gridTrackFilter} onChange={(event) => setGridTrackFilter(event.target.value)} style={selectStyle(false)} disabled={readOnly}>
                   <option value="all">All Strands/Tracks</option>
                   {shsTrackOptions.map((track) => (
                     <option key={track} value={track}>{track}</option>
@@ -1310,7 +1315,7 @@ export default function ScheduleMaker() {
                           : [];
                         const subject = assignment ? subjectsById.get(assignment.subjectId) : null;
                         const teacher = assignment ? facultyById.get(assignment.teacherId) : null;
-                        const showEditor = allowed && hoveredCellKey === cellKey;
+                        const showEditor = allowed && hoveredCellKey === cellKey && !readOnly;
                         const draftSubject = !assignment && cellDraft.subjectId ? subjectsById.get(cellDraft.subjectId) : null;
                         const draftTeacher = !assignment && cellDraft.teacherId ? facultyById.get(cellDraft.teacherId) : null;
 
@@ -1351,6 +1356,7 @@ export default function ScheduleMaker() {
                                   value={cellDraft.subjectId}
                                   onChange={(event) => handleCellSubjectChange(section, slot, event.target.value)}
                                   style={cellEditorSelectStyle()}
+                                  disabled={readOnly}
                                 >
                                   <option value="">Select subject</option>
                                   {subjectOptionsWithState.map((option) => (
@@ -1364,7 +1370,7 @@ export default function ScheduleMaker() {
                                   value={cellDraft.teacherId}
                                   onChange={(event) => handleCellTeacherChange(section, slot, event.target.value)}
                                   style={cellEditorSelectStyle()}
-                                  disabled={!cellDraft.subjectId}
+                                  disabled={!cellDraft.subjectId || readOnly}
                                 >
                                   <option value="">Select teacher</option>
                                   {teacherOptions.map((option) => (
