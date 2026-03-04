@@ -685,6 +685,9 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
     const now = new Date().toISOString();
     const existing = drafts.find((draft) => draft.id === schedule.id);
 
+    // Save a snapshot of the current config with the draft
+    const configSnapshot = JSON.parse(JSON.stringify(config));
+
     const nextDraft = {
       id: existing?.id || schedule.id || `draft-${Date.now()}`,
       scheduleType,
@@ -695,6 +698,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         id: existing?.id || schedule.id || `draft-${Date.now()}`,
         updatedAt: now,
       },
+      config: configSnapshot,
     };
 
     const nextDrafts = upsertDraft(drafts, nextDraft);
@@ -764,6 +768,10 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
     }
 
     setSchedule(selectedDraft.schedule);
+    // Restore the config snapshot saved with the draft, if present
+    if (selectedDraft.config) {
+      setConfig(selectedDraft.config);
+    }
     setShowDraftsPanel(false);
     setCellEditorDrafts({});
     setHoveredCellKey("");
