@@ -19,7 +19,7 @@ export default function PublicDashboardPreview() {
             Public Access
           </span>
           <h2 style={{ fontSize: 38, fontWeight: 800, color: "#1a2536", marginBottom: 0, lineHeight: 1.1 }}>
-            Parents & students<br />
+            Teachers & students<br />
             <span style={{ fontFamily: "serif", fontStyle: "italic", fontWeight: 500 }}>see it live.</span>
           </h2>
           <p style={{ color: "#3a3a3a", fontSize: 17, margin: "18px 0 0 0", maxWidth: 480 }}>
@@ -33,7 +33,7 @@ export default function PublicDashboardPreview() {
               </li>
             ))}
           </ul>
-          <a href="/dashboard" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1a3a8c", color: "#fff", fontWeight: 700, fontSize: 16, border: "none", borderRadius: 10, padding: "16px 32px", textDecoration: "none", boxShadow: "0 2px 8px rgba(26,58,140,0.07)", cursor: "pointer" }}>
+          <a href="/public-dashboard" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1a3a8c", color: "#fff", fontWeight: 700, fontSize: 16, border: "none", borderRadius: 10, padding: "16px 32px", textDecoration: "none", boxShadow: "0 2px 8px rgba(26,58,140,0.07)", cursor: "pointer" }}>
             <span style={{ fontSize: 18 }}>→</span> View Public Dashboard
           </a>
         </div>

@@ -1,5 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+function ConfirmationModal({ open, message, onConfirm, onCancel }) {
+  if (!open) return null;
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      width: '100vw',
+      height: '100vh',
+      background: 'rgba(0,0,0,0.35)',
+      zIndex: 9999,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <div style={{
+        background: '#fff',
+        borderRadius: 12,
+        boxShadow: '0 4px 32px rgba(26,37,54,0.18)',
+        padding: '32px 28px',
+        minWidth: 340,
+        maxWidth: '90vw',
+        textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 18, color: '#1a2536' }}>Publish Confirmation</div>
+        <div style={{ fontSize: 15, marginBottom: 24, color: '#3a3a3a' }}>{message}</div>
+        <div style={{ display: 'flex', gap: 16, justifyContent: 'center' }}>
+          <button onClick={onCancel} style={{ padding: '10px 24px', borderRadius: 8, background: '#eaf0fa', color: '#1a3a8c', fontWeight: 700, border: 'none', fontSize: 15, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={onConfirm} style={{ padding: '10px 24px', borderRadius: 8, background: '#1a3a8c', color: '#fff', fontWeight: 700, border: 'none', fontSize: 15, cursor: 'pointer' }}>Publish Anyway</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const SECTIONS_STORAGE_KEY = "turotugma_sections_created";
 const SUBJECTS_STORAGE_KEY = "turotugma_subjects";
 const FACULTY_STORAGE_KEY = "turotugma_faculty";
@@ -709,23 +744,30 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
     showNotice("Draft saved.", "success");
   };
 
+  const [confirmModal, setConfirmModal] = useState({ open: false, message: '', onConfirm: null });
+
   const handlePublish = () => {
+    if (readOnly) return;
+
+    let message = '';
+    let needsConfirm = false;
+    const publishEvaluation = schedule
+      ? evaluateSchedule({
+          assignments: schedule.assignments || {},
+          sections,
+          slots,
+          subjects,
+          teachers: activeTeachers,
+          scheduleType,
+          config,
+        })
+      : { conflicts: [] };
+    const totalConflicts = (schedule?.conflicts?.length || 0) + (publishEvaluation.conflicts?.length || 0);
+
     if (!schedule) {
-      showNotice("Generate or load a draft before publishing.", "error");
-      return;
-    }
-
-    const publishEvaluation = evaluateSchedule({
-      assignments: schedule.assignments || {},
-      sections,
-      slots,
-      subjects,
-      teachers: activeTeachers,
-      scheduleType,
-      config,
-    });
-
-    if (publishEvaluation.conflicts.length > 0) {
+      message = 'No schedule is loaded or generated. Do you want to publish anyway?';
+      needsConfirm = true;
+    } else if (totalConflicts > 0) {
       setSchedule((current) =>
         current
           ? {
@@ -737,28 +779,60 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
             }
           : current
       );
-      showNotice(`Cannot publish: resolve ${publishEvaluation.conflicts.length} conflict(s) first.`, "error");
-      return;
+      message = `There are ${totalConflicts} conflict(s). Do you want to publish anyway?`;
+      needsConfirm = true;
     }
 
+    if (needsConfirm) {
+      setConfirmModal({
+        open: true,
+        message,
+        onConfirm: () => {
+          setConfirmModal({ open: false, message: '', onConfirm: null });
+          doPublish();
+        },
+        onCancel: () => setConfirmModal({ open: false, message: '', onConfirm: null }),
+      });
+      return;
+    }
+    doPublish();
+  };
+
+  function doPublish() {
     const now = new Date().toISOString();
+    // Always evaluate conflicts before publishing
+    const publishEvaluation = schedule
+      ? evaluateSchedule({
+          assignments: schedule.assignments || {},
+          sections,
+          slots,
+          subjects,
+          teachers: activeTeachers,
+          scheduleType,
+          config,
+        })
+      : { conflicts: [], conflictDetails: [], teacherLoadPercent: {} };
+
     const nextPublished = {
       ...publishedSchedules,
       [scheduleType]: {
         ...schedule,
         status: "published",
         publishedAt: now,
+        conflicts: publishEvaluation.conflicts,
+        conflictDetails: publishEvaluation.conflictDetails,
+        teacherLoadPercent: publishEvaluation.teacherLoadPercent,
       },
     };
 
     setPublishedSchedules(nextPublished);
     saveJson(PUBLISHED_STORAGE_KEY, nextPublished);
 
-    persistFacultyLoadPercent(schedule.teacherLoadPercent || {});
+    persistFacultyLoadPercent(schedule?.teacherLoadPercent || {});
     setDataRefreshToken((current) => current + 1);
 
     showNotice("Schedule published.", "success");
-  };
+  }
 
   const handleLoadDraft = (draftId) => {
     const selectedDraft = draftsForCurrentSchedule.find((draft) => draft.id === draftId);
@@ -1060,24 +1134,24 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={!schedule || hasPublishBlockingConflicts || readOnly}
-                title={
-                  !schedule
-                    ? "Generate or load a draft before publishing."
-                    : hasPublishBlockingConflicts
-                      ? `Resolve ${conflictCount} conflict(s) before publishing.`
-                      : "Publish schedule"
-                }
+                disabled={readOnly}
+                title={readOnly ? "Read-only mode" : "Publish schedule"}
                 style={{
                   ...secondaryActionStyle(),
                   width: 120,
                   textAlign: "center",
-                  opacity: !schedule || hasPublishBlockingConflicts || readOnly ? 0.55 : 1,
-                  cursor: !schedule || hasPublishBlockingConflicts || readOnly ? "not-allowed" : "pointer",
+                  opacity: readOnly ? 0.55 : 1,
+                  cursor: readOnly ? "not-allowed" : "pointer",
                 }}
               >
                 <ActionButtonLabel icon={<PublishIcon />}>Publish</ActionButtonLabel>
               </button>
+              <ConfirmationModal
+                open={confirmModal.open}
+                message={confirmModal.message}
+                onConfirm={confirmModal.onConfirm}
+                onCancel={confirmModal.onCancel}
+              />
               <button
                 type="button"
                 onClick={() => {
@@ -2527,7 +2601,17 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
   const teacherLoad = new Map(activeTeachers.map((teacher) => [teacher.id, 0]));
 
   sections.forEach((section) => {
-    const eligibleSubjects = getSubjectsForSection(section, subjects, scheduleType);
+    // Helper to shuffle an array in-place (Fisher-Yates)
+    function shuffleArray(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+      }
+      return array;
+    }
+
+    // Get and shuffle eligible subjects for this section
+    const eligibleSubjects = shuffleArray(getSubjectsForSection(section, subjects, scheduleType).slice());
     const sectionLabel = formatConflictSectionName(section);
 
     if (eligibleSubjects.length === 0) {
@@ -2550,11 +2634,22 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       }
     });
 
+    let specializedAssigned = false;
     validSlots.forEach((slot) => {
+      // Shuffle subject candidates for each slot to further randomize
+      let subjectCandidates = shuffleArray(
+        remainingHours.filter((subject) => subject.remaining > 0)
+      ).sort((left, right) => right.remaining - left.remaining);
 
-      const subjectCandidates = remainingHours
-        .filter((subject) => subject.remaining > 0)
-        .sort((left, right) => right.remaining - left.remaining);
+      // For special sections, only allow one specialized subject to be assigned
+      const classification = String(section.classification || "").toLowerCase();
+      const isSpecialSection = classification.includes("special");
+      if (isSpecialSection && specializedAssigned) {
+        // Remove all specialized subjects from candidates if one is already assigned
+        subjectCandidates = subjectCandidates.filter(
+          (subject) => String(subject.subjectType || "").toLowerCase() !== "specialized"
+        );
+      }
 
       if (subjectCandidates.length === 0) {
         return;
@@ -2590,6 +2685,14 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       if (!selectedPair) {
         pushConflict(`No eligible teacher is available for ${sectionLabel} at ${formatPeriodOrdinalLabel(slot)}.`, [createCellKey(section.id, slot.id)]);
         return;
+      }
+
+      // If assigning a specialized subject, mark as assigned for this section
+      if (
+        isSpecialSection &&
+        String(selectedPair.subject.subjectType || "").toLowerCase() === "specialized"
+      ) {
+        specializedAssigned = true;
       }
 
       const cellKey = createCellKey(section.id, slot.id);

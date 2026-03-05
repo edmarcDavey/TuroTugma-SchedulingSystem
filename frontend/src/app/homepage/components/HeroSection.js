@@ -35,7 +35,12 @@ export default function HeroSection() {
           </p>
         </div>
         <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 40 }}>
-          <button style={{ background: "#1a3a8c", color: "#fff", fontWeight: 700, fontSize: 16, border: "none", borderRadius: 8, padding: "16px 32px", cursor: "pointer" }}>
+          <button
+            style={{ background: "#1a3a8c", color: "#fff", fontWeight: 700, fontSize: 16, border: "none", borderRadius: 8, padding: "16px 32px", cursor: "pointer" }}
+            onClick={() => {
+              window.location.href = "/public-dashboard";
+            }}
+          >
             ➔ Let's Get Started
           </button>
           <button

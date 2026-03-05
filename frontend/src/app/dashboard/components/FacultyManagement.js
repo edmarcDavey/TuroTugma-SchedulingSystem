@@ -1,3 +1,76 @@
+// Utility to get schedule draft and config from localStorage
+function getScheduleDraftAndConfig() {
+  try {
+    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
+    const configRaw = localStorage.getItem("turotugma_schedule_configurations");
+    let draftArr = draftRaw ? JSON.parse(draftRaw) : null;
+    // Use the first draft object if array, else null
+    const draft = Array.isArray(draftArr) && draftArr.length > 0 ? draftArr[0] : null;
+    const config = configRaw ? JSON.parse(configRaw) : null;
+    // Prefer config from draft if available
+    const activeConfig = draft?.config?.jhs || config || {};
+    return { draft, config: activeConfig };
+  } catch {
+    return { draft: null, config: {} };
+  }
+}
+
+// Calculate teacher loads in minutes and percent
+function calculateTeacherLoads(facultyList) {
+  const { draft, config } = getScheduleDraftAndConfig();
+  if (!draft || !draft.schedule || !draft.schedule.assignments) return facultyList.map(f => ({ ...f, assignedLoadPercent: 0 }));
+
+  // Get periods per day (use the larger value)
+  const periodsPerDay = Math.max(
+    Number(config.periods?.regular || 0),
+    Number(config.periods?.special || 0)
+  );
+  // Get days of week
+  const regularDays = config.regularDays || [];
+  const shortenedDays = config.shortenedDays || [];
+  const periodMinutes = config.periodMinutes || { regular: 50, shortened: 45 };
+
+  // Calculate balanced min/max using fixed values (4 and 6) as per user formula
+  const minBalanced = (4 * regularDays.length * periodMinutes.regular) + (4 * shortenedDays.length * periodMinutes.shortened);
+  const maxBalanced = (6 * regularDays.length * periodMinutes.regular) + (6 * shortenedDays.length * periodMinutes.shortened);
+
+  // Improved calculation: count assigned classes per regular and shortened day, multiply by day count and interval, then sum
+  const teacherMinutes = {};
+  // Build a mapping of teacherId to assigned classes per day type
+  facultyList.forEach(faculty => {
+    // Count unique periods assigned to this teacher (e.g., all JHS-Px for this teacherId)
+    let assignedPeriods = new Set();
+    if (draft.schedule && draft.schedule.assignments) {
+      Object.entries(draft.schedule.assignments).forEach(([key, assignment]) => {
+        if (assignment.teacherId !== faculty.id) return;
+        // Only count JHS-Px periods
+        const periodMatch = key.match(/\|JHS-P(\d+)/);
+        if (periodMatch) {
+          assignedPeriods.add(periodMatch[0]);
+        }
+      });
+    }
+    const periodCount = assignedPeriods.size;
+    // Calculate total minutes for the week
+    const totalMinutes = (periodCount * regularDays.length * periodMinutes.regular) + (periodCount * shortenedDays.length * periodMinutes.shortened);
+    teacherMinutes[faculty.id] = totalMinutes;
+  });
+
+  // Calculate percent for each teacher
+  return facultyList.map(faculty => {
+    const minutes = teacherMinutes[faculty.id] || 0;
+    let percent = 0;
+    if (minutes > 0 && maxBalanced > 0) {
+      percent = Math.round((minutes / maxBalanced) * 100);
+    }
+    return {
+      ...faculty,
+      assignedLoadPercent: percent,
+      assignedLoadMinutes: minutes,
+      assignedLoadStatus: minutes === 0 ? "Unassigned" : (minutes < minBalanced ? "Underload" : (minutes <= maxBalanced ? "Balanced" : "Overload")),
+    };
+  });
+}
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
@@ -82,6 +155,26 @@ export default function FacultyManagement() {
 
   const subjectOptions = useMemo(() => getSubjectOptions(), []);
   const unavailablePeriodOptions = useMemo(() => getUnavailablePeriodOptions(), []);
+    const [facultyWithLoad, setFacultyWithLoad] = useState([]);
+
+    // Whenever faculty list, schedule, or config changes, recalculate loads
+    useEffect(() => {
+      function recalcLoads() {
+        const loaded = calculateTeacherLoads(facultyMembers);
+        setFacultyWithLoad(loaded);
+        // Persist updated faculty with load to localStorage for dashboard
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(FACULTY_STORAGE_KEY, JSON.stringify(loaded));
+        }
+      }
+      recalcLoads();
+      window.addEventListener("turotugma:faculty-updated", recalcLoads);
+      window.addEventListener("storage", recalcLoads);
+      return () => {
+        window.removeEventListener("turotugma:faculty-updated", recalcLoads);
+        window.removeEventListener("storage", recalcLoads);
+      };
+    }, [facultyMembers]);
 
   const validationErrors = useMemo(
     () => validateFacultyForm(formState, facultyMembers, editingId),
@@ -361,6 +454,7 @@ export default function FacultyManagement() {
               ...normalized,
               active: member.active,
               assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0,
+                assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0, // legacy, now handled in facultyWithLoad
               createdAt: member.createdAt,
               updatedAt: new Date().toISOString(),
             }
@@ -481,10 +575,10 @@ export default function FacultyManagement() {
   );
   const sortedFacultyMembers = useMemo(
     () =>
-      facultyMembers
+      facultyWithLoad
         .slice()
         .sort((left, right) => left.name.localeCompare(right.name)),
-    [facultyMembers]
+    [facultyWithLoad]
   );
   const filteredFacultyMembers = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -515,8 +609,8 @@ export default function FacultyManagement() {
       }
 
       if (workloadFilter !== "all") {
-        const loadPercent = Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0;
-        const memberLoadStatus = getTeacherLoadState(loadPercent).label.toLowerCase();
+        // Use assignedLoadStatus for filtering
+        const memberLoadStatus = (member.assignedLoadStatus || "Unassigned").toLowerCase();
         if (memberLoadStatus !== workloadFilter) {
           return false;
         }
@@ -1099,8 +1193,25 @@ export default function FacultyManagement() {
 }
 
 function FacultyListRow({ member, isEditing, onEdit }) {
+  // Use assignedLoadStatus for badge label and color
+  const statusToneMap = {
+    Unassigned: "neutral",
+    Underload: "warning",
+    Balanced: "good",
+    Overload: "danger",
+  };
+  const loadStatus = member.assignedLoadStatus || "Unassigned";
+  const badgeTone = statusToneMap[loadStatus] || "neutral";
+
+  // For the progress bar, still use percent, but color by status
   const loadPercent = Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0;
-  const loadState = getTeacherLoadState(loadPercent);
+  // Chart color mapping for consistency with dashboard
+  const fillColor = {
+    neutral: "#c3c9de",    // Unassigned
+    warning: "#8893d9",   // Underload
+    good: "#3B4197",      // Balanced
+    danger: "#e53935",    // Overload (red)
+  }[badgeTone];
 
   return (
     <div
@@ -1133,17 +1244,24 @@ function FacultyListRow({ member, isEditing, onEdit }) {
       <div style={{ marginTop: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
           <span style={{ color: "#5d698f", fontSize: 12, fontWeight: 600 }}>Teacher Load</span>
-          <span style={loadStateBadgeStyle(loadState.tone)}>{loadState.label}</span>
+          <span style={loadStateBadgeStyle(badgeTone)}>{loadStatus}</span>
         </div>
 
-        <div style={{ height: 8, borderRadius: 999, background: "#e8edf9", overflow: "hidden" }}>
-          <div
-            style={{
-              width: `${Math.max(0, Math.min(loadPercent, 100))}%`,
-              height: "100%",
-              background: loadState.fill,
-            }}
-          />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ height: 8, borderRadius: 999, background: "#e8edf9", overflow: "hidden" }}>
+              <div
+                style={{
+                  width: `${Math.max(0, Math.min(loadPercent, 100))}%`,
+                  height: "100%",
+                  background: fillColor,
+                }}
+              />
+            </div>
+          </div>
+          <span style={{ color: "#25336f", fontSize: 12, fontWeight: 500, marginLeft: 8 }}>
+            {member.assignedLoadMinutes ? `${(member.assignedLoadMinutes / 60).toFixed(2)} hrs (${member.assignedLoadMinutes} min)` : "0 hrs"}
+          </span>
         </div>
       </div>
     </div>
@@ -1365,15 +1483,14 @@ function statusPillStyle(active) {
 }
 
 function loadStateBadgeStyle(tone) {
+  // Chart color mapping for badge backgrounds and borders
   const palette = {
-    neutral: { color: "#4d5a84", background: "#f2f4f8", border: "#d9dfea" },
-    warning: { color: "#7f4a18", background: "#fff3e6", border: "#f2dcc2" },
-    good: { color: "#2f5f3a", background: "#edf8f0", border: "#cde8d4" },
-    danger: { color: "#b53f4e", background: "#fff1f3", border: "#f0c9cf" },
+    neutral: { color: "#4d5a84", background: "#c3c9de", border: "#c3c9de" },    // Unassigned
+    warning: { color: "#4d5a84", background: "#8893d9", border: "#8893d9" },   // Underload
+    good: { color: "#fff", background: "#3B4197", border: "#3B4197" },        // Balanced
+    danger: { color: "#fff", background: "#e53935", border: "#e53935" },      // Overload (red)
   };
-
   const selected = palette[tone] || palette.neutral;
-
   return {
     color: selected.color,
     fontSize: 11,

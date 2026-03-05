@@ -1,6 +1,7 @@
 import FeaturesSection from "./components/FeaturesSection";
 import HowItWorksSection from "./components/HowItWorksSection";
 import PublicDashboardPreview from "./components/PublicDashboardPreview";
+// import PublicDashboard from "./components/PublicDashboard";
 import Header from "../../components/Header";
 import Footer from "../../components/Footer";
 import HeroSection from "./components/HeroSection";

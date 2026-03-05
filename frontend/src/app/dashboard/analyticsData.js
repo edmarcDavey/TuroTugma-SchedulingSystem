@@ -156,20 +156,14 @@ export function getSystemSnapshot() {
   const sectionGradeBreakdown = getSectionGradeBreakdown(sections);
   const subjectBreakdown = getSubjectBreakdown(subjectsList);
 
+  // Use assignedLoadStatus for accurate distribution
   const loadDistribution = activeTeachers.reduce(
     (counts, teacher) => {
-      const load = Number(teacher?.assignedLoadPercent) || 0;
-
-      if (load <= 0) {
-        counts.unassigned += 1;
-      } else if (load > 100) {
-        counts.overload += 1;
-      } else if (load >= 70) {
-        counts.balanced += 1;
-      } else {
-        counts.underload += 1;
-      }
-
+      const status = teacher?.assignedLoadStatus || "Unassigned";
+      if (status === "Unassigned") counts.unassigned += 1;
+      else if (status === "Underload") counts.underload += 1;
+      else if (status === "Balanced") counts.balanced += 1;
+      else if (status === "Overload") counts.overload += 1;
       return counts;
     },
     { unassigned: 0, balanced: 0, underload: 0, overload: 0 }
@@ -296,7 +290,7 @@ export function toDashboardViewModel(payload) {
         datasets: [
           {
             data: payload.teacherLoadDistribution.values,
-            backgroundColor: ["#c3c9de", "#8893d9", "#3B4197", "#d0d8ff"],
+            backgroundColor: ["#c3c9de", "#8893d9", "#3B4197", "#e53935"],
             borderColor: "#ffffff",
             borderWidth: 2,
           },

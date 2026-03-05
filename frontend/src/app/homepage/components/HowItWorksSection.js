@@ -35,9 +35,9 @@ export default function HowItWorksSection() {
             title="Generate the Schedule"
             desc="Automatically allocate subject slots per section, match qualified teachers, check availability, and flag conflicts."
             bullets={[
-              "Respects period restrictions & travel rules",
+              "Respects period restrictions rules",
               "Strand/SPA/extra block allocation",
-              "Double-booking & room collision detection"
+              "Double-booking detection"
             ]}
           />
           <HowItWorksCard

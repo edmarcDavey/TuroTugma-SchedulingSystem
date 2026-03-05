@@ -11,7 +11,7 @@ export default function Footer() {
         {/* Center: Navigation Links */}
         <nav style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
           <a href="/" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Home</a>
-          <a href="/dashboard" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Public Dashboard</a>
+          <a href="/public-dashboard" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Public Dashboard</a>
           <a href="/login" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Staff Login</a>
           <a href="/privacy" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Privacy</a>
           <a href="/terms" style={{ color: '#888', textDecoration: 'none', fontSize: 15 }}>Terms</a>
