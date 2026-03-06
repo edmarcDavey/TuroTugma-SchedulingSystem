@@ -1,4 +1,5 @@
 import React from "react";
+import { FaFolderOpen, FaBolt, FaTrafficLight } from "react-icons/fa";
 
 export default function HowItWorksSection() {
   return (
@@ -19,7 +20,7 @@ export default function HowItWorksSection() {
           {/* Horizontal line behind cards */}
           <div style={{ position: "absolute", top: 40, left: 0, right: 0, height: 1, background: "linear-gradient(to right, #1a3a8c22 0%, #1a3a8c66 50%, #1a3a8c22 100%)", zIndex: 0 }}></div>
           <HowItWorksCard
-            icon="🗂️"
+            icon={<FaFolderOpen />}
             step="01"
             title="Profile Teachers & Sections"
             desc="Manage teacher specializations, grade permissions, unavailable periods, and max load. Create and organize sections with themed names and assign rooms."
@@ -30,7 +31,7 @@ export default function HowItWorksSection() {
             ]}
           />
           <HowItWorksCard
-            icon="⚡"
+            icon={<FaBolt />}
             step="02"
             title="Generate the Schedule"
             desc="Automatically allocate subject slots per section, match qualified teachers, check availability, and flag conflicts."
@@ -41,7 +42,7 @@ export default function HowItWorksSection() {
             ]}
           />
           <HowItWorksCard
-            icon="🚦"
+            icon={<FaTrafficLight />}
             step="03"
             title="Resolve & Finalize"
             desc="Conflicts appear in a panel next to the grid. Resolve by reassigning, dragging, or swapping. Finalize to lock the schedule and export PDFs."

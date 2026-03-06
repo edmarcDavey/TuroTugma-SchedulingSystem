@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { FaChalkboardTeacher, FaTable } from "react-icons/fa";
 import FinalTimeTables from './FinalTimeTables';
 import CurrentAssignmentView from './CurrentAssignmentView';
 
@@ -105,13 +106,13 @@ export default function PublicDashboard() {
             style={navLinkItemStyle(activeTab === "current-assignment")}
             onClick={() => setActiveTab("current-assignment")}
           >
-            Current Assignment View
+            <FaChalkboardTeacher style={{marginRight:8}} /> Current Assignment View
           </span>
           <span
             style={navLinkItemStyle(activeTab === "final-timetables")}
             onClick={() => setActiveTab("final-timetables")}
           >
-            Final Time Tables
+            <FaTable style={{marginRight:8}} /> Final Time Tables
           </span>
         </nav>
         <div style={{ marginTop: "auto" }}>

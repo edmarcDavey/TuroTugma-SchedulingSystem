@@ -1,3 +1,5 @@
+import { FaGlobe, FaEnvelope } from "react-icons/fa";
+
 export default function Footer() {
   return (
     <footer style={{ width: '100%', background: '#fff', borderTop: '1px solid #ececec', padding: '18px 0', fontFamily: 'Plus Jakarta Sans, sans-serif', fontSize: '1rem', fontWeight: 500 }}>
@@ -19,10 +21,10 @@ export default function Footer() {
         {/* Right: Icon Buttons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button style={{ background: '#ececec', border: 'none', borderRadius: 8, padding: 8, cursor: 'pointer' }} title="Website">
-            <span role="img" aria-label="Globe" style={{ fontSize: 20, color: '#888' }}>🌐</span>
+            <FaGlobe style={{ fontSize: 20, color: '#888' }} />
           </button>
           <button style={{ background: '#ececec', border: 'none', borderRadius: 8, padding: 8, cursor: 'pointer' }} title="Email">
-            <span role="img" aria-label="Mail" style={{ fontSize: 20, color: '#888' }}>✉️</span>
+            <FaEnvelope style={{ fontSize: 20, color: '#888' }} />
           </button>
         </div>
       </div>

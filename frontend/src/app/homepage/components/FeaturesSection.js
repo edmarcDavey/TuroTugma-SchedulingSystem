@@ -1,4 +1,5 @@
 import React from "react";
+import { FaFolderOpen, FaClipboard, FaSchool, FaCogs, FaRobot, FaBolt, FaTrafficLight, FaBrain, FaUpload } from "react-icons/fa";
 
 export default function FeaturesSection() {
   return (
@@ -23,33 +24,33 @@ export default function FeaturesSection() {
           {/* Data & Configuration Management Card */}
           <div style={{ flex: 1, background: "#fff", borderRadius: 20, boxShadow: "0 4px 24px rgba(26,37,54,0.07)", border: "1px solid #e3e7ef", padding: 32, minWidth: 320, maxWidth: 420 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-              <span style={{ background: "#eaf0fa", color: "#1a3a8c", fontWeight: 700, borderRadius: 8, padding: "8px 14px", fontSize: 18 }}>🗂️</span>
+              <span style={{ background: "#eaf0fa", color: "#1a3a8c", fontWeight: 700, borderRadius: 8, padding: "8px 14px", fontSize: 18 }}><FaFolderOpen /></span>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 18, color: "#1a2536" }}>Data & Configuration Management</div>
                 <div style={{ fontSize: 13, color: "#1a3a8c" }}>Administrator Workspace</div>
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <FeatureItem icon="📋" title="Teacher Profiling" desc="Manage teacher information including subject expertise, grade level assignments, unavailable periods, and maximum teaching load." />
-              <FeatureItem icon="🏫" title="Section Management" desc="Create and organize Junior High and Senior High sections, assign themes, classify special sections, and define Senior High tracks." />
-              <FeatureItem icon="🗃️" title="Subject Management" desc="Add and categorize subjects by grade level, semester, strand, and subject type with defined weekly hours." />
-              <FeatureItem icon="⚙️" title="Scheduling Configurations" desc="Define session types, school days, period structure, break settings, and system-wide constraints for accurate timetable generation." />
+              <FeatureItem icon={<FaClipboard />} title="Teacher Profiling" desc="Manage teacher information including subject expertise, grade level assignments, unavailable periods, and maximum teaching load." />
+              <FeatureItem icon={<FaSchool />} title="Section Management" desc="Create and organize Junior High and Senior High sections, assign themes, classify special sections, and define Senior High tracks." />
+              <FeatureItem icon={<FaFolderOpen />} title="Subject Management" desc="Add and categorize subjects by grade level, semester, strand, and subject type with defined weekly hours." />
+              <FeatureItem icon={<FaCogs />} title="Scheduling Configurations" desc="Define session types, school days, period structure, break settings, and system-wide constraints for accurate timetable generation." />
             </div>
           </div>
           {/* Intelligent Schedule Engine Card */}
           <div style={{ flex: 1, background: "linear-gradient(135deg, #1a3a8c 60%, #2a4ca7 100%)", borderRadius: 20, boxShadow: "0 4px 24px rgba(26,58,140,0.12)", border: "1px solid #e3e7ef", padding: 32, minWidth: 320, maxWidth: 420, color: "#fff" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-              <span style={{ background: "#eaf0fa", color: "#1a3a8c", fontWeight: 700, borderRadius: 8, padding: "8px 14px", fontSize: 18 }}>🤖</span>
+              <span style={{ background: "#eaf0fa", color: "#1a3a8c", fontWeight: 700, borderRadius: 8, padding: "8px 14px", fontSize: 18 }}><FaRobot /></span>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 18, color: "#fff" }}>Intelligent Schedule Engine</div>
                 <div style={{ fontSize: 13, color: "#eaf0fa" }}>Automated & Manual Timetable Control</div>
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <FeatureItem icon="⚡" title="One-Click Auto Generation" desc="Automatically generates conflict-free schedules while respecting teacher loads, subject limits, and restricted periods." dark />
-              <FeatureItem icon="🚦" title="Conflict Detection Panel" desc="Flags scheduling conflicts instantly and prevents double-booking or invalid assignments." dark />
-              <FeatureItem icon="🧠" title="Smart Allocation Logic" desc="Matches teachers to subjects strictly based on Subject Expertise and Grade Level Assignments, while respecting unavailable periods." dark />
-              <FeatureItem icon="📤" title="Finalize & Publish" desc="Save drafts, export per-section or per-teacher schedules as PDF, and publish the official timetable to the public dashboard." dark />
+              <FeatureItem icon={<FaBolt />} title="One-Click Auto Generation" desc="Automatically generates conflict-free schedules while respecting teacher loads, subject limits, and restricted periods." dark />
+              <FeatureItem icon={<FaTrafficLight />} title="Conflict Detection Panel" desc="Flags scheduling conflicts instantly and prevents double-booking or invalid assignments." dark />
+              <FeatureItem icon={<FaBrain />} title="Smart Allocation Logic" desc="Matches teachers to subjects strictly based on Subject Expertise and Grade Level Assignments, while respecting unavailable periods." dark />
+              <FeatureItem icon={<FaUpload />} title="Finalize & Publish" desc="Save drafts, export per-section or per-teacher schedules as PDF, and publish the official timetable to the public dashboard." dark />
             </div>
           </div>
         </div>

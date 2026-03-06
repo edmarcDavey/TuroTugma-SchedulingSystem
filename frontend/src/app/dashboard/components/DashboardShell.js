@@ -1,3 +1,5 @@
+import { FaTachometerAlt, FaUsers, FaBook, FaChalkboardTeacher, FaCalendarAlt, FaTable } from "react-icons/fa";
+
 export default function DashboardShell({ activeTab, children }) {
   return (
     <main style={{ minHeight: "100vh", display: "flex", background: "#f5f7ff" }}>
@@ -26,12 +28,12 @@ export default function DashboardShell({ activeTab, children }) {
         </div>
 
         <nav style={{ display: "grid", gap: 8 }}>
-          <a href="/dashboard" style={navLinkItemStyle(activeTab === "dashboard")}>Dashboard</a>
-          <a href="/dashboard?tab=sections" style={navLinkItemStyle(activeTab === "sections")}>Sections</a>
-          <a href="/dashboard?tab=subjects" style={navLinkItemStyle(activeTab === "subjects")}>Subjects</a>
-          <a href="/dashboard?tab=faculty" style={navLinkItemStyle(activeTab === "faculty")}>Faculty</a>
-          <a href="/dashboard?tab=schedule-maker" style={navLinkItemStyle(activeTab === "schedule-maker")}>Schedule Maker</a>
-          <a href="/dashboard?tab=time-tables" style={navLinkItemStyle(activeTab === "time-tables")}>Time Tables</a>
+          <a href="/dashboard" style={navLinkItemStyle(activeTab === "dashboard")}> <FaTachometerAlt style={{marginRight:8}} /> Dashboard</a>
+          <a href="/dashboard?tab=sections" style={navLinkItemStyle(activeTab === "sections")}> <FaTable style={{marginRight:8}} /> Sections</a>
+          <a href="/dashboard?tab=subjects" style={navLinkItemStyle(activeTab === "subjects")}> <FaBook style={{marginRight:8}} /> Subjects</a>
+          <a href="/dashboard?tab=faculty" style={navLinkItemStyle(activeTab === "faculty")}> <FaUsers style={{marginRight:8}} /> Faculty</a>
+          <a href="/dashboard?tab=schedule-maker" style={navLinkItemStyle(activeTab === "schedule-maker")}> <FaCalendarAlt style={{marginRight:8}} /> Schedule Maker</a>
+          <a href="/dashboard?tab=time-tables" style={navLinkItemStyle(activeTab === "time-tables")}> <FaChalkboardTeacher style={{marginRight:8}} /> Time Tables</a>
         </nav>
 
         <div style={{ marginTop: "auto" }}>

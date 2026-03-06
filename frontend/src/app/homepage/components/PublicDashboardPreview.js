@@ -1,12 +1,13 @@
 import React from "react";
+import { FaUser, FaSearch } from "react-icons/fa";
 
 const teacherList = [
-  { name: "Ms. Rowena Santos",    subject: "English 9",       section: "9-Narra",   building: "Main",  status: "In Class",  statusClass: "status-in-class" },
-  { name: "Mr. Manuel Cruz",      subject: "Math 9",          section: "9-Molave",  building: "JICA",  status: "In Class",  statusClass: "status-in-class" },
-  { name: "Ms. Liza Reyes",       subject: "Science 9",       section: "9-Acacia",  building: "Main",  status: "In Class",  statusClass: "status-in-class" },
-  { name: "Dr. Ana Bautista",     subject: "—",               section: "—",         building: "Main",  status: "In Meeting",statusClass: "status-meeting" },
-  { name: "Mr. Jose Flores",      subject: "AP 9",            section: "9-Ipil",    building: "JICA",  status: "In Class",  statusClass: "status-in-class" },
-  { name: "Ms. Carmen Garcia",    subject: "—",               section: "—",         building: "—",     status: "On Leave",  statusClass: "status-leave" },
+  { name: "Mr. Maverick Cadabuna",    subject: "English",       section: "9-Narra" },
+  { name: "Mr. Jigerson Benigno",      subject: "Mathematics",          section: "9-Molave" },
+  { name: "Mr. Rehd Pacis",       subject: "Science",       section: "9-Acacia" },
+  { name: "Dr. Daryl Jake Rivera",     subject: "Edukasyon sa Pagpapakatao",           section: "9-Kalantas" },
+  { name: "Mr. Earol John Gannaban",      subject: "Araling Panlipunan",            section: "9-Ipil-Ipil" },
+  { name: "Mr. Ian Rovic Tulayao",    subject: "Filipino",      section: "9-Mango" },
 ];
 
 export default function PublicDashboardPreview() {
@@ -23,7 +24,7 @@ export default function PublicDashboardPreview() {
             <span style={{ fontFamily: "serif", fontStyle: "italic", fontWeight: 500 }}>see it live.</span>
           </h2>
           <p style={{ color: "#3a3a3a", fontSize: 17, margin: "18px 0 0 0", maxWidth: 480 }}>
-            No login required. The public dashboard shows every teacher's current room assignment, real-time status, and the full finalized timetable — updated to the active period.
+            No login required. The public dashboard shows every teacher's current room assignment, and the full finalized timetable — updated to the active period.
           </p>
           <ul style={{ margin: "28px 0 32px 0", padding: 0, listStyle: "none" }}>
             {["Live period clock — always shows the current block", "Toggle to next period with one click", "Search by teacher name, section, or subject", "Download per-teacher timetable PDF"].map((item, i) => (
@@ -54,7 +55,7 @@ export default function PublicDashboardPreview() {
             {/* Search bar */}
             <div style={{ padding: "12px 32px", borderBottom: "1px solid #e3e7ef", background: "#fff" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#eaf0fa", borderRadius: 8, padding: "8px 16px", border: "1px solid #e3e7ef" }}>
-                <span style={{ color: "#1a3a8c", fontSize: 16 }}>🔍</span>
+                <span style={{ color: "#1a3a8c", fontSize: 16 }}><FaSearch /></span>
                 <span style={{ fontSize: 12, color: "#1a2536", opacity: 0.4 }}>Search teacher, section, subject…</span>
               </div>
             </div>
@@ -62,14 +63,13 @@ export default function PublicDashboardPreview() {
             <div>
               {teacherList.map((t, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 32px", borderBottom: i < teacherList.length - 1 ? "1px solid #e3e7ef" : "none", background: "#f8f6f1" }}>
-                  <span style={{ background: "#eaf0fa", color: "#1a3a8c", borderRadius: "50%", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>👤</span>
+                  <span style={{ background: "#eaf0fa", color: "#1a3a8c", borderRadius: "50%", width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}><FaUser /></span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ fontSize: 13, fontWeight: 700, color: "#1a2536", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</p>
                     <p style={{ fontSize: 10, color: "rgba(26,37,54,0.45)", fontWeight: 500, margin: 0 }}>
-                      {t.subject !== "—" ? `${t.subject} · ` : ""}{t.section !== "—" ? `${t.section} · ` : ""}{t.building !== "—" ? t.building : ""}
+                      {t.subject !== "—" ? `${t.subject}` : ""}{t.subject !== "—" && t.section !== "—" ? " · " : ""}{t.section !== "—" ? `${t.section}` : ""}
                     </p>
                   </div>
-                  <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 12, background: t.status === "In Class" ? "#2ecc71" : t.status === "In Meeting" ? "#1a3a8c" : "#e74c3c", color: t.status === "In Meeting" ? "#fff" : "#fff" }}>{t.status}</span>
                 </div>
               ))}
             </div>
