@@ -29,7 +29,10 @@ function normalizeSections(sectionsRaw, scheduleType = "jhs") {
 }
 
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
+// Add html2pdf.js for PDF export
+// You need to install html2pdf.js: npm install html2pdf.js
+import html2pdf from "html2pdf.js";
 
 function getFromStorage(key, fallback) {
   try {
@@ -47,6 +50,8 @@ const FACULTY_STORAGE_KEY = "turotugma_faculty";
 
 export default function TimeTables() {
   const [draft, setDraft] = useState(null);
+  // Ref for exportable schedules only (not the whole component)
+  const exportSchedulesRef = useRef();
   const [sections, setSections] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [teachers, setTeachers] = useState([]);
@@ -234,13 +239,44 @@ export default function TimeTables() {
     }
   }
 
+  function handleExport() {
+    if (exportSchedulesRef.current) {
+      // Clone only the schedules container
+      const exportClone = exportSchedulesRef.current.cloneNode(true);
+      // Add CSS for page-breaks
+      const style = document.createElement('style');
+      style.innerHTML = `
+        .export-section-page-break { page-break-after: always; break-after: page; }
+        @media print { .export-section-page-break { page-break-after: always; break-after: page; } }
+        body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      `;
+      exportClone.prepend(style);
+      // Add class to each schedule block (section or teacher)
+      Array.from(exportClone.querySelectorAll('div')).forEach(div => {
+        if (div.classList.contains('schedule-block')) {
+          div.classList.add('export-section-page-break');
+        }
+      });
+      html2pdf()
+        .set({
+          margin: 0.2,
+          filename: `ScheduleDraft-${draft.name || 'export'}.pdf`,
+          html2canvas: { scale: 2 },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+          pagebreak: { mode: ['css', 'legacy'] }
+        })
+        .from(exportClone)
+        .save();
+    }
+  }
+
   return (
     <div>
       <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Time Tables</h1>
       <div style={{ margin: "8px 0 8px", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
         Viewing saved schedule draft: <b>{draft.name}</b>
       </div>
-      {/* View filter and contextual dropdowns */}
+      {/* Filters and dropdowns (visible on page, not in export) + Export button */}
       <div style={{
         display: 'flex',
         flexDirection: 'row',
@@ -251,7 +287,9 @@ export default function TimeTables() {
         marginRight: 0,
         gap: 18,
         flexWrap: 'wrap',
+        justifyContent: 'space-between',
       }}>
+        <div style={{ display: 'flex', flexDirection: 'row', gap: 18, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
           <label style={{
             color: '#5b6787',
@@ -429,9 +467,14 @@ export default function TimeTables() {
             </div>
           </>
         )}
+        </div>
+        <button onClick={handleExport} style={{ padding: '10px 22px', background: '#1a3a8c', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer', marginLeft: 'auto', marginTop: 0, marginBottom: 0 }}>
+          Export as PDF
+        </button>
       </div>
-      {/* Main filter container removed as requested */}
-      {viewMode === 'sections' && sectionIds.map((sectionId) => {
+      {/* Schedules to export: only these are included in PDF */}
+      <div ref={exportSchedulesRef}>
+        {viewMode === 'sections' && sectionIds.map((sectionId) => {
         // Adviser: teacher assigned to first period (P1) for this section
         const firstPeriodKey = `${sectionId}|JHS-P1`;
         const adviserId = assignments[firstPeriodKey]?.teacherId;
@@ -506,6 +549,7 @@ export default function TimeTables() {
         return (
           <div
             key={sectionId}
+            className="schedule-block"
             style={{
               marginBottom: 32,
               background: '#fff',
@@ -746,6 +790,7 @@ export default function TimeTables() {
         return (
           <div
             key={teacherId}
+            className="schedule-block"
             style={{
               marginBottom: 32,
               background: '#fff',
@@ -900,6 +945,7 @@ export default function TimeTables() {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

@@ -29,7 +29,8 @@ function normalizeSections(sectionsRaw, scheduleType = "jhs") {
 }
 
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
+import html2pdf from "html2pdf.js";
 
 function getFromStorage(key, fallback) {
   try {
@@ -56,6 +57,39 @@ export default function FinalTimeTables() {
   const [selectedSection, setSelectedSection] = useState('all');
   const [selectedTeacher, setSelectedTeacher] = useState('all');
   const [teacherType, setTeacherType] = useState('all'); // 'all', 'adviser', 'non-adviser'
+  // Ref for exportable schedules only (not the whole component)
+  const exportSchedulesRef = useRef();
+
+  function handleExport() {
+    if (exportSchedulesRef.current) {
+      // Clone only the schedules container
+      const exportClone = exportSchedulesRef.current.cloneNode(true);
+      // Add CSS for page-breaks
+      const style = document.createElement('style');
+      style.innerHTML = `
+        .export-section-page-break { page-break-after: always; break-after: page; }
+        @media print { .export-section-page-break { page-break-after: always; break-after: page; } }
+        body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      `;
+      exportClone.prepend(style);
+      // Add class to each schedule block (section or teacher)
+      Array.from(exportClone.querySelectorAll('div')).forEach(div => {
+        if (div.classList.contains('schedule-block')) {
+          div.classList.add('export-section-page-break');
+        }
+      });
+      html2pdf()
+        .set({
+          margin: 0.2,
+          filename: `FinalSchedule-${draft.name || 'export'}.pdf`,
+          html2canvas: { scale: 2 },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+          pagebreak: { mode: ['css', 'legacy'] }
+        })
+        .from(exportClone)
+        .save();
+    }
+  }
 
   useEffect(() => {
     // Load the most recent draft, supporting both array and single object formats
@@ -238,9 +272,9 @@ export default function FinalTimeTables() {
     <div>
       <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Final Time Tables</h1>
       <div style={{ margin: "8px 0 8px", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
-        Viewing published schedule: <b>{draft.name}</b>
+        Viewing published schedule: <b>{draft && draft.name}</b>
       </div>
-      {/* View filter and contextual dropdowns */}
+      {/* View filter and contextual dropdowns + Export button */}
       <div style={{
         display: 'flex',
         flexDirection: 'row',
@@ -251,7 +285,9 @@ export default function FinalTimeTables() {
         marginRight: 0,
         gap: 18,
         flexWrap: 'wrap',
+        justifyContent: 'space-between',
       }}>
+        <div style={{ display: 'flex', flexDirection: 'row', gap: 18, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
           <label style={{
             color: '#5b6787',
@@ -429,8 +465,13 @@ export default function FinalTimeTables() {
             </div>
           </>
         )}
+        </div>
+        <button onClick={handleExport} style={{ padding: '10px 22px', background: '#1a3a8c', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer', marginLeft: 'auto', marginTop: 0, marginBottom: 0 }}>
+          Export as PDF
+        </button>
       </div>
-      {/* Main filter container removed as requested */}
+      {/* Schedules to export: only these are included in PDF */}
+      <div ref={exportSchedulesRef}>
       {viewMode === 'sections' && sectionIds.map((sectionId) => {
         // Adviser: teacher assigned to first period (P1) for this section
         const firstPeriodKey = `${sectionId}|JHS-P1`;
@@ -506,6 +547,7 @@ export default function FinalTimeTables() {
         return (
           <div
             key={sectionId}
+            className="schedule-block"
             style={{
               marginBottom: 32,
               background: '#fff',
@@ -633,7 +675,7 @@ export default function FinalTimeTables() {
                         whiteSpace: 'nowrap',
                       }}>{shortenedTimes[idx]}</td>
                       {days.map((day) => {
-                        // Compose slot key (e.g., jhs-7-0|JHS-P1)
+                        // For section view: show the assignment for this section, period, and day
                         const slotKey = `${sectionId}|JHS-P${periodNum}`;
                         const assignment = assignments[slotKey];
                         return (
@@ -746,6 +788,7 @@ export default function FinalTimeTables() {
         return (
           <div
             key={teacherId}
+            className="schedule-block"
             style={{
               marginBottom: 32,
               background: '#fff',
@@ -900,6 +943,7 @@ export default function FinalTimeTables() {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
