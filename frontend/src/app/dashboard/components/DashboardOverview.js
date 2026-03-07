@@ -12,11 +12,14 @@ import {
 } from "chart.js";
 import { Bar, Doughnut, Line } from "react-chartjs-2";
 import { getDashboardAnalyticsPayload, toDashboardViewModel } from "../analyticsData";
+import { getRecentActivityLog, formatActivityEntry } from "../analyticsData";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, BarElement, Filler, Tooltip, Legend);
 
 export default function DashboardOverview() {
   const analytics = toDashboardViewModel(getDashboardAnalyticsPayload());
+  // Fetch recent activity log (dynamic)
+  const recentActivity = (typeof window !== "undefined") ? getRecentActivityLog(10) : [];
 
   return (
     <>
@@ -42,23 +45,6 @@ export default function DashboardOverview() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 14, marginBottom: 18 }}>
         <div style={panelStyle()}>
-          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Conflict Trend (6 Weeks)</h2>
-          <div style={{ marginTop: 12, height: 220 }}>
-            <Line
-              data={analytics.charts.conflictTrend}
-              options={{
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                  x: { grid: { color: "rgba(31,44,111,0.08)" } },
-                  y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: "rgba(31,44,111,0.08)" } },
-                },
-              }}
-            />
-          </div>
-        </div>
-
-        <div style={panelStyle()}>
           <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Teacher Load Distribution</h2>
           <div style={{ marginTop: 12, height: 220 }}>
             <Doughnut
@@ -70,43 +56,33 @@ export default function DashboardOverview() {
             />
           </div>
         </div>
-      </div>
-
-      <div style={{ ...panelStyle(), marginBottom: 18 }}>
-        <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
-        <div style={{ marginTop: 12, height: 230 }}>
-          <Bar
-            data={analytics.charts.scheduleCompletion}
-            options={{
-              maintainAspectRatio: false,
-              plugins: { legend: { display: false } },
-              scales: {
-                y: {
-                  beginAtZero: true,
-                  max: 100,
-                  ticks: { callback: (value) => `${value}%` },
-                  grid: { color: "rgba(31,44,111,0.08)" },
+        <div style={{ ...panelStyle(), marginBottom: 18 }}>
+          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
+          <div style={{ marginTop: 12, height: 230 }}>
+            <Bar
+              data={analytics.charts.scheduleCompletion}
+              options={{
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    max: 100,
+                    ticks: { callback: (value) => `${value}%` },
+                    grid: { color: "rgba(31,44,111,0.08)" },
+                  },
+                  x: { grid: { display: false } },
                 },
-                x: { grid: { display: false } },
-              },
-            }}
-          />
+              }}
+            />
+          </div>
         </div>
       </div>
 
-      <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16, marginBottom: 18 }}>
-        <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Quick Actions</h2>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
-          <ActionLink label="Manage Sections" href="/dashboard/sections" />
-          <ActionLink label="Manage Subjects" href="/dashboard/subjects" />
-          <ActionLink label="Manage Faculty" href="/dashboard/faculty" />
-          <ActionButton label="Generate Schedule" />
-          <ActionButton label="View Drafts" />
-          <ActionButton label="Publish Schedule" primary />
-        </div>
-      </div>
+      {/* Quick Actions removed */}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        {/* Schedule Status Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Status</h2>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
@@ -114,15 +90,9 @@ export default function DashboardOverview() {
               <StatusRow key={item.label} label={item.label} value={item.value} />
             ))}
           </div>
-
-          <h3 style={{ margin: "20px 0 8px", fontSize: 14, color: "#2e3a6d" }}>Recent Activity</h3>
-          <ul style={{ margin: 0, paddingLeft: 18, color: "#4f5d83", fontSize: 13, display: "grid", gap: 6 }}>
-            {analytics.activity.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
         </div>
 
+        {/* Unresolved Conflicts Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Unresolved Conflicts</h2>
           {analytics.conflicts.length === 0 ? (
@@ -210,45 +180,7 @@ function MiniBarRow({ label, value, total, color }) {
   );
 }
 
-function ActionLink({ label, href }) {
-  return (
-    <a
-      href={href}
-      style={{
-        border: "1px solid #d7def2",
-        background: "#ffffff",
-        color: "#2d3a6f",
-        borderRadius: 10,
-        padding: "8px 12px",
-        fontSize: 13,
-        fontWeight: 600,
-        textDecoration: "none",
-      }}
-    >
-      {label}
-    </a>
-  );
-}
-
-function ActionButton({ label, primary = false }) {
-  return (
-    <button
-      type="button"
-      style={{
-        border: primary ? "none" : "1px solid #d7def2",
-        background: primary ? "#3B4197" : "#ffffff",
-        color: primary ? "#ffffff" : "#2d3a6f",
-        borderRadius: 10,
-        padding: "8px 12px",
-        fontSize: 13,
-        fontWeight: 600,
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
+// Quick Actions components removed
 
 function StatusRow({ label, value }) {
   return (

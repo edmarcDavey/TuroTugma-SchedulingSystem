@@ -28,7 +28,7 @@ export default function HeroSection() {
           <h1 style={{ fontSize: 48, fontWeight: 600, color: "#1a2536", marginBottom: 8 }}>
             Smart Scheduling<br />
             <span style={{ fontFamily: "serif", fontStyle: "italic", color: "#1a3a8c", fontWeight: 500 }}>
-              for Every Section.
+              for Every Teacher.
             </span>
           </h1>
           <p style={{ maxWidth: 600, margin: "0 auto", color: "#3a3a3a", fontSize: 18 }}>

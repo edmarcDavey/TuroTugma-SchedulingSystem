@@ -1,3 +1,71 @@
+import ScheduleMaker from "./components/ScheduleMaker";
+import { useMemo } from "react";
+
+// Activity log key for localStorage
+const ACTIVITY_LOG_STORAGE_KEY = "turotugma_activity_log";
+
+// Log an activity event
+export function logActivity(action, details = {}) {
+  if (typeof window === "undefined") return;
+  const log = safeParseStorage(ACTIVITY_LOG_STORAGE_KEY, []);
+  const entry = {
+    action,
+    details,
+    timestamp: new Date().toISOString(),
+  };
+  log.unshift(entry); // Add to start (most recent first)
+  // Limit log to last 100 entries
+  if (log.length > 100) log.length = 100;
+  window.localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(log));
+}
+
+// Get recent activity log (optionally limit count)
+export function getRecentActivityLog(limit = 20) {
+  const log = safeParseStorage(ACTIVITY_LOG_STORAGE_KEY, []);
+  return log.slice(0, limit);
+}
+
+// Format activity entry for display
+export function formatActivityEntry(entry) {
+  if (!entry) return "";
+  const date = new Date(entry.timestamp);
+  let desc = "";
+  switch (entry.action) {
+    case "add_subject":
+      desc = `Added subject: ${entry.details.name || "(unknown)"}`;
+      break;
+    case "import_subjects":
+      desc = `Imported ${entry.details.count || 0} subject(s)`;
+      break;
+    case "add_section":
+      desc = `Added section: ${entry.details.name || "(unknown)"}`;
+      break;
+    case "import_sections":
+      desc = `Imported ${entry.details.count || 0} section(s)`;
+      break;
+    case "add_teacher":
+      desc = `Added teacher: ${entry.details.name || "(unknown)"}`;
+      break;
+    case "import_teachers":
+      desc = `Imported ${entry.details.count || 0} teacher(s)`;
+      break;
+    case "generate_schedule":
+      desc = `Generated schedule: ${entry.details.name || "(unnamed)"}`;
+      break;
+    case "draft_schedule":
+      desc = `Drafted schedule: ${entry.details.name || "(unnamed)"}`;
+      break;
+    case "publish_schedule":
+      desc = `Published schedule: ${entry.details.name || "(unnamed)"}`;
+      break;
+    case "export_schedule":
+      desc = `Exported schedule: ${entry.details.name || "(unnamed)"}`;
+      break;
+    default:
+      desc = entry.action;
+  }
+  return `${date.toLocaleString()} — ${desc}`;
+}
 const FACULTY_STORAGE_KEY = "turotugma_faculty";
 const SUBJECTS_STORAGE_KEY = "turotugma_subjects";
 const SECTIONS_STORAGE_KEY = "turotugma_sections_created";
@@ -145,19 +213,48 @@ function getSubjectBreakdown(subjectsList) {
 }
 
 export function getSystemSnapshot() {
+  // Load all data
   const faculty = safeParseStorage(FACULTY_STORAGE_KEY, []);
   const subjects = safeParseStorage(SUBJECTS_STORAGE_KEY, []);
   const sections = safeParseStorage(SECTIONS_STORAGE_KEY, null);
+  const drafts = safeParseStorage("turotugma_schedule_drafts", []);
+  const published = safeParseStorage("turotugma_published_schedules", {});
 
-  const facultyList = Array.isArray(faculty) ? faculty : [];
-  const subjectsList = Array.isArray(subjects) ? subjects : [];
-  const activeTeachers = facultyList.filter((teacher) => teacher?.active !== false);
-  const assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers);
-  const sectionGradeBreakdown = getSectionGradeBreakdown(sections);
-  const subjectBreakdown = getSubjectBreakdown(subjectsList);
+  // Find the most recently updated schedule (published or draft)
+  let latestSchedule = null;
+  let latestConfig = null;
+  let latestUpdated = 0;
 
-  // Use assignedLoadStatus for accurate distribution
-  const loadDistribution = activeTeachers.reduce(
+  // Check published schedules
+  Object.values(published).forEach((sched) => {
+    if (sched && sched.updatedAt && new Date(sched.updatedAt).getTime() > latestUpdated) {
+      latestSchedule = sched;
+      latestConfig = sched.config;
+      latestUpdated = new Date(sched.updatedAt).getTime();
+    }
+  });
+  // Check drafts
+  if (Array.isArray(drafts)) {
+    drafts.forEach((draft) => {
+      if (draft && draft.updatedAt && new Date(draft.updatedAt).getTime() > latestUpdated) {
+        latestSchedule = draft.schedule || draft;
+        latestConfig = draft.config;
+        latestUpdated = new Date(draft.updatedAt).getTime();
+      }
+    });
+  }
+
+  let facultyList = Array.isArray(faculty) ? faculty : [];
+  let subjectsList = Array.isArray(subjects) ? subjects : [];
+  let activeTeachers = facultyList.filter((teacher) => teacher?.active !== false);
+  let sectionGradeBreakdown = getSectionGradeBreakdown(sections);
+  let subjectBreakdown = getSubjectBreakdown(subjectsList);
+  let totalSections = getTotalSectionsFromSavedConfig(sections);
+  let totalSubjects = subjectsList.length;
+  let jhsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "jhs").length;
+  let shsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "shs").length;
+  let assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers);
+  let loadDistribution = activeTeachers.reduce(
     (counts, teacher) => {
       const status = teacher?.assignedLoadStatus || "Unassigned";
       if (status === "Unassigned") counts.unassigned += 1;
@@ -168,16 +265,43 @@ export function getSystemSnapshot() {
     },
     { unassigned: 0, balanced: 0, underload: 0, overload: 0 }
   );
-
-  const jhsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "jhs").length;
-  const shsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "shs").length;
+  if (latestSchedule) {
+    // Use config from latest schedule if available
+    if (latestConfig) {
+      // Use config for section breakdown and total sections
+      sectionGradeBreakdown = getSectionGradeBreakdown(latestConfig);
+      totalSections = getTotalSectionsFromSavedConfig(latestConfig);
+    }
+    // Use assignments and teacher loads from latest schedule if available
+    if (latestSchedule.assignments && typeof latestSchedule.assignments === "object") {
+      // Count unique teacherIds in assignments as active teachers
+      const teacherIds = new Set();
+      Object.values(latestSchedule.assignments).forEach((a) => {
+        if (a && a.teacherId) teacherIds.add(a.teacherId);
+      });
+      activeTeachers = facultyList.filter((t) => teacherIds.has(t.id));
+      assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers);
+    }
+    // Use teacherLoadPercent for load distribution if available
+    if (latestSchedule.teacherLoadPercent && typeof latestSchedule.teacherLoadPercent === "object") {
+      // Map teacher load percent to load categories
+      const loadDist = { unassigned: 0, balanced: 0, underload: 0, overload: 0 };
+      Object.entries(latestSchedule.teacherLoadPercent).forEach(([tid, percent]) => {
+        if (percent === 0) loadDist.unassigned += 1;
+        else if (percent < 8) loadDist.underload += 1;
+        else if (percent === 8) loadDist.balanced += 1;
+        else if (percent > 8) loadDist.overload += 1;
+      });
+      loadDistribution = loadDist;
+    }
+  }
 
   return {
     activeTeachers: activeTeachers.length,
     totalTeachers: facultyList.length,
-    totalSections: getTotalSectionsFromSavedConfig(sections),
+    totalSections,
     sectionGradeBreakdown,
-    totalSubjects: subjectsList.length,
+    totalSubjects,
     subjectBreakdown,
     jhsSubjects,
     shsSubjects,
@@ -192,7 +316,74 @@ export function getDashboardAnalyticsPayload() {
   const hasAnyData = snapshot.totalTeachers > 0 || snapshot.totalSections > 0 || snapshot.totalSubjects > 0;
   const jhsCompletion = snapshot.totalSections > 0 ? Math.min(100, Math.round((snapshot.jhsSubjects / snapshot.totalSections) * 100)) : 0;
   const shsCompletion = snapshot.totalSections > 0 ? Math.min(100, Math.round((snapshot.shsSubjects / snapshot.totalSections) * 100)) : 0;
-  const overallCompletion = Math.min(100, Math.round((jhsCompletion + shsCompletion) / 2));
+
+  // Use valid/conflict-free assignment completion for 'Overall'
+  let validCompletion = { valid: 0, total: 0, percent: 0 };
+  // Find the latest schedule and its config/sections/slots
+  let latestSchedule = null;
+  let latestConfig = null;
+  let latestSections = null;
+  let latestSlots = null;
+  let latestScheduleType = null;
+  // Check published schedules
+  const publishedSchedules = safeParseStorage("turotugma_published_schedules", {});
+  let latestUpdated = 0;
+  Object.values(publishedSchedules).forEach((sched) => {
+    if (sched && sched.updatedAt && new Date(sched.updatedAt).getTime() > latestUpdated) {
+      latestSchedule = sched;
+      latestConfig = sched.config;
+      latestSections = sched.sections;
+      latestSlots = sched.slots;
+      latestScheduleType = sched.scheduleType;
+      latestUpdated = new Date(sched.updatedAt).getTime();
+    }
+  });
+  // Check drafts
+  const drafts = safeParseStorage("turotugma_schedule_drafts", []);
+  if (Array.isArray(drafts)) {
+    drafts.forEach((draft) => {
+      if (draft && draft.updatedAt && new Date(draft.updatedAt).getTime() > latestUpdated) {
+        latestSchedule = draft.schedule || draft;
+        latestConfig = draft.config;
+        latestSections = (draft.schedule && draft.schedule.sections) || draft.sections;
+        latestSlots = (draft.schedule && draft.schedule.slots) || draft.slots;
+        latestScheduleType = (draft.schedule && draft.schedule.scheduleType) || draft.scheduleType;
+        latestUpdated = new Date(draft.updatedAt).getTime();
+      }
+    });
+  }
+  if (latestSchedule && latestSections && latestSlots && latestScheduleType && latestConfig) {
+    validCompletion = getValidScheduleCompletion(latestSchedule, latestSections, latestSlots, latestScheduleType, latestConfig);
+  }
+
+  const hasPublished = publishedSchedules && Object.keys(publishedSchedules).length > 0;
+  let lastUpdatedString = "No data yet";
+  let currentVersionString = "No draft";
+  if (latestSchedule) {
+    // Use the name property if available, otherwise fallback to versioned label
+    if (latestSchedule.name && typeof latestSchedule.name === "string" && latestSchedule.name.trim() !== "") {
+      currentVersionString = latestSchedule.name;
+    } else if (latestSchedule.status === "published") {
+      currentVersionString = "Published v1";
+    } else if (latestSchedule.status === "draft") {
+      currentVersionString = "Draft v1";
+    }
+    if (latestSchedule.updatedAt) {
+      const date = new Date(latestSchedule.updatedAt);
+      lastUpdatedString = date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+    }
+  } else if (hasAnyData) {
+    lastUpdatedString = "Based on current records";
+    currentVersionString = "Draft v1";
+  }
 
   return {
     summary: {
@@ -206,12 +397,12 @@ export function getDashboardAnalyticsPayload() {
       totalSubjects: snapshot.totalSubjects,
       totalSubjectBreakdown: snapshot.subjectBreakdown,
       unresolvedConflicts: snapshot.unresolvedConflicts,
-      published: false,
+      published: hasPublished,
     },
     scheduleStatus: {
       activeSchedule: hasAnyData ? "Configured" : "Not configured",
-      currentVersion: hasAnyData ? "Draft v1" : "No draft",
-      lastUpdated: hasAnyData ? "Based on current records" : "No data yet",
+      currentVersion: currentVersionString,
+      lastUpdated: lastUpdatedString,
     },
     trends: {
       conflictCountByWeek: [0, 0, 0, 0, 0, snapshot.unresolvedConflicts],
@@ -228,7 +419,7 @@ export function getDashboardAnalyticsPayload() {
     },
     scheduleCompletionByLevel: {
       labels: ["JHS", "SHS", "Overall"],
-      percentages: [jhsCompletion, shsCompletion, overallCompletion],
+      percentages: [jhsCompletion, shsCompletion, validCompletion.percent],
     },
     activity: [
       `${snapshot.totalSections} sections currently configured`,
@@ -271,20 +462,7 @@ export function toDashboardViewModel(payload) {
     activity: payload.activity,
     conflicts: payload.conflicts,
     charts: {
-      conflictTrend: {
-        labels: payload.trends.labels,
-        datasets: [
-          {
-            label: "Conflicts",
-            data: payload.trends.conflictCountByWeek,
-            borderColor: "#3B4197",
-            backgroundColor: "rgba(59,65,151,0.12)",
-            borderWidth: 2,
-            tension: 0.35,
-            fill: true,
-          },
-        ],
-      },
+      
       teacherLoad: {
         labels: payload.teacherLoadDistribution.labels,
         datasets: [
