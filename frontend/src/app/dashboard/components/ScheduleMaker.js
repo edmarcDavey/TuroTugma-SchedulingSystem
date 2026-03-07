@@ -334,20 +334,17 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
   );
 
   const scheduleStatusLabel = useMemo(() => {
-    if (publishedSchedules?.[scheduleType]) {
-      return "Published";
-    }
-
-    if (draftsForCurrentSchedule.length > 0) {
-      return "Draft Saved";
-    }
-
     if (schedule) {
+      if (schedule.status === "published") return "Published";
+      if (schedule.status === "draft") return "Draft Saved";
+      if (schedule.status === "unsaved") return "Draft (Unsaved)";
+      // fallback for legacy or missing status
+      if (publishedSchedules?.[scheduleType] && publishedSchedules[scheduleType].id === schedule.id) return "Published";
+      if (draftsForCurrentSchedule.some((d) => d.id === schedule.id)) return "Draft Saved";
       return "Draft (Unsaved)";
     }
-
     return "Not Generated";
-  }, [draftsForCurrentSchedule.length, publishedSchedules, schedule, scheduleType]);
+  }, [schedule, publishedSchedules, scheduleType, draftsForCurrentSchedule]);
 
   const conflictCount = schedule?.conflicts?.length || 0;
   const hasPublishBlockingConflicts = conflictCount > 0;
@@ -699,6 +696,8 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
       config,
     });
 
+    // Mark as unsaved
+    autoSchedule.status = "unsaved";
     setSchedule(autoSchedule);
     setCellEditorDrafts({});
     setHoveredCellKey("");
@@ -732,6 +731,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         ...schedule,
         id: existing?.id || schedule.id || `draft-${Date.now()}`,
         updatedAt: now,
+        status: "draft",
       },
       config: configSnapshot,
     };
@@ -768,17 +768,6 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
       message = 'No schedule is loaded or generated. Do you want to publish anyway?';
       needsConfirm = true;
     } else if (totalConflicts > 0) {
-      setSchedule((current) =>
-        current
-          ? {
-              ...current,
-              conflicts: publishEvaluation.conflicts,
-              conflictDetails: publishEvaluation.conflictDetails,
-              teacherLoadPercent: publishEvaluation.teacherLoadPercent,
-              updatedAt: new Date().toISOString(),
-            }
-          : current
-      );
       message = `There are ${totalConflicts} conflict(s). Do you want to publish anyway?`;
       needsConfirm = true;
     }
@@ -789,12 +778,36 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         message,
         onConfirm: () => {
           setConfirmModal({ open: false, message: '', onConfirm: null });
+          // Only update conflicts after confirmation
+          setSchedule((current) =>
+            current
+              ? {
+                  ...current,
+                  conflicts: publishEvaluation.conflicts,
+                  conflictDetails: publishEvaluation.conflictDetails,
+                  teacherLoadPercent: publishEvaluation.teacherLoadPercent,
+                  updatedAt: new Date().toISOString(),
+                }
+              : current
+          );
           doPublish();
         },
         onCancel: () => setConfirmModal({ open: false, message: '', onConfirm: null }),
       });
       return;
     }
+    // If no confirmation needed, update conflicts immediately
+    setSchedule((current) =>
+      current
+        ? {
+            ...current,
+            conflicts: publishEvaluation.conflicts,
+            conflictDetails: publishEvaluation.conflictDetails,
+            teacherLoadPercent: publishEvaluation.teacherLoadPercent,
+            updatedAt: new Date().toISOString(),
+          }
+        : current
+    );
     doPublish();
   };
 
@@ -813,21 +826,25 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         })
       : { conflicts: [], conflictDetails: [], teacherLoadPercent: {} };
 
+    const publishedSchedule = {
+      ...schedule,
+      status: "published",
+      publishedAt: now,
+      conflicts: publishEvaluation.conflicts,
+      conflictDetails: publishEvaluation.conflictDetails,
+      teacherLoadPercent: publishEvaluation.teacherLoadPercent,
+      updatedAt: now,
+    };
+
     const nextPublished = {
       ...publishedSchedules,
-      [scheduleType]: {
-        ...schedule,
-        status: "published",
-        publishedAt: now,
-        conflicts: publishEvaluation.conflicts,
-        conflictDetails: publishEvaluation.conflictDetails,
-        teacherLoadPercent: publishEvaluation.teacherLoadPercent,
-      },
+      [scheduleType]: publishedSchedule,
     };
 
     setPublishedSchedules(nextPublished);
     saveJson(PUBLISHED_STORAGE_KEY, nextPublished);
 
+    setSchedule(publishedSchedule);
     persistFacultyLoadPercent(schedule?.teacherLoadPercent || {});
     setDataRefreshToken((current) => current + 1);
 
@@ -841,7 +858,8 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
       return;
     }
 
-    setSchedule(selectedDraft.schedule);
+    // Ensure status is set to draft when loading a draft
+    setSchedule({ ...selectedDraft.schedule, status: "draft" });
     // Restore the config snapshot saved with the draft, if present
     if (selectedDraft.config) {
       setConfig(selectedDraft.config);
