@@ -162,10 +162,7 @@ export default function FacultyManagement() {
       function recalcLoads() {
         const loaded = calculateTeacherLoads(facultyMembers);
         setFacultyWithLoad(loaded);
-        // Persist updated faculty with load to localStorage for dashboard
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(FACULTY_STORAGE_KEY, JSON.stringify(loaded));
-        }
+        // Do NOT persist to localStorage here; handled by persistFaculty
       }
       recalcLoads();
       window.addEventListener("turotugma:faculty-updated", recalcLoads);
@@ -414,8 +411,7 @@ export default function FacultyManagement() {
   };
 
   const handleSaveFaculty = () => {
-    const latestFaculty = getInitialFaculty();
-    const liveValidationErrors = validateFacultyForm(formState, latestFaculty, editingId);
+    const liveValidationErrors = validateFacultyForm(formState, facultyMembers, editingId);
     const hasErrors = Object.keys(liveValidationErrors).length > 0;
     if (hasErrors) {
       setTouched({
@@ -436,7 +432,7 @@ export default function FacultyManagement() {
     const normalized = normalizeFacultyRecord(formState, editingId);
 
     if (editingId) {
-      const existing = latestFaculty.find((member) => member.id === editingId);
+      const existing = facultyMembers.find((member) => member.id === editingId);
       if (!existing) {
         showNotice("Selected faculty record was not found.", "error");
         return;
@@ -448,13 +444,12 @@ export default function FacultyManagement() {
         return;
       }
 
-      const nextFaculty = latestFaculty.map((member) =>
+      const nextFaculty = facultyMembers.map((member) =>
         member.id === editingId
           ? {
               ...normalized,
               active: member.active,
               assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0,
-                assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0, // legacy, now handled in facultyWithLoad
               createdAt: member.createdAt,
               updatedAt: new Date().toISOString(),
             }
@@ -469,7 +464,7 @@ export default function FacultyManagement() {
       return;
     }
 
-    persistFaculty([...latestFaculty, normalized]);
+    persistFaculty([...facultyMembers, normalized]);
     setFormState(EMPTY_FORM);
     setTouched({});
     showNotice("Faculty record added.", "success");
