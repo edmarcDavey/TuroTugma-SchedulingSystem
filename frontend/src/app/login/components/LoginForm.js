@@ -45,15 +45,15 @@ export default function LoginForm() {
 
         <div className="login-brand-stats">
           <div className="login-brand-stat">
-            <p className="login-brand-stat-value">{snapshot.activeTeachers}</p>
+            <p className="login-brand-stat-value">{snapshot.profiledTeachers}</p>
             <p className="login-brand-stat-label">Teachers</p>
           </div>
           <div className="login-brand-stat">
-            <p className="login-brand-stat-value">{snapshot.totalSections}</p>
+            <p className="login-brand-stat-value">{snapshot.profiledSections}</p>
             <p className="login-brand-stat-label">Sections</p>
           </div>
           <div className="login-brand-stat">
-            <p className="login-brand-stat-value">{snapshot.totalSubjects}</p>
+            <p className="login-brand-stat-value">{snapshot.profiledSubjects}</p>
             <p className="login-brand-stat-label">Subjects</p>
           </div>
         </div>

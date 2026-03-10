@@ -305,6 +305,11 @@ export function getSystemSnapshot() {
   }
 
   return {
+    // Always show total profiled/created values, not filtered by schedule
+    profiledTeachers: facultyList.length,
+    profiledSections: getTotalSectionsFromSavedConfig(sections),
+    profiledSubjects: subjectsList.length,
+    // Keep old values for compatibility, but these are not used for login metrics anymore
     activeTeachers: activeTeachers.length,
     totalTeachers: facultyList.length,
     totalSections,
@@ -316,7 +321,6 @@ export function getSystemSnapshot() {
     unresolvedConflicts: loadDistribution.overload,
     loadDistribution,
     assignmentBreakdown, // active (filtered) breakdown
-    profiledTeachers: facultyList.length,
     profiledAssignmentBreakdown, // always full list breakdown
   };
 }
