@@ -3441,12 +3441,33 @@ function persistFacultyLoadPercent(teacherLoadPercent) {
     return;
   }
 
-  const updated = facultyList.map((teacher) => {
-    const nextPercent = teacherLoadPercent?.[teacher.id];
+  // Use the same thresholds as FacultyManagement.js
+  // 80% of maxBalanced is the minimum for 'Balanced', >100% is 'Overload'
+  // We'll use 100 as maxBalanced (percent), so:
+  // Unassigned: 0
+  // Underload: <80
+  // Balanced: 80-100
+  // Overload: >100
 
+  const minBalancedPercent = 80;
+  const maxBalancedPercent = 100;
+
+  const updated = facultyList.map((teacher) => {
+    const nextPercent = Number.isFinite(teacherLoadPercent?.[teacher.id]) ? teacherLoadPercent[teacher.id] : Number(teacher.assignedLoadPercent) || 0;
+    let assignedLoadStatus = "Unassigned";
+    if (nextPercent === 0) {
+      assignedLoadStatus = "Unassigned";
+    } else if (nextPercent < minBalancedPercent) {
+      assignedLoadStatus = "Underload";
+    } else if (nextPercent <= maxBalancedPercent) {
+      assignedLoadStatus = "Balanced";
+    } else if (nextPercent > maxBalancedPercent) {
+      assignedLoadStatus = "Overload";
+    }
     return {
       ...teacher,
-      assignedLoadPercent: Number.isFinite(nextPercent) ? nextPercent : Number(teacher.assignedLoadPercent) || 0,
+      assignedLoadPercent: nextPercent,
+      assignedLoadStatus,
       updatedAt: new Date().toISOString(),
     };
   });

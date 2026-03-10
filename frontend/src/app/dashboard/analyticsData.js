@@ -145,8 +145,8 @@ function parseGradeLevelValue(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function getTeacherAssignmentBreakdown(activeTeachers) {
-  return activeTeachers.reduce(
+function getTeacherAssignmentBreakdown(teachers, debugLabel = '') {
+  const counts = teachers.reduce(
     (counts, teacher) => {
       const gradeAssignments = Array.isArray(teacher?.gradeLevelAssignments)
         ? teacher.gradeLevelAssignments
@@ -154,19 +154,19 @@ function getTeacherAssignmentBreakdown(activeTeachers) {
       const gradeNumbers = gradeAssignments.map(parseGradeLevelValue).filter((grade) => grade !== null);
       const hasJhs = gradeNumbers.some((grade) => grade >= 7 && grade <= 10);
       const hasShs = gradeNumbers.some((grade) => grade >= 11 && grade <= 12);
-
       if (hasJhs && hasShs) {
         counts.both += 1;
-      } else if (hasJhs) {
+      } else if (hasJhs && !hasShs) {
         counts.jhs += 1;
-      } else if (hasShs) {
+      } else if (!hasJhs && hasShs) {
         counts.shs += 1;
       }
-
+      // Teachers with no assignments are not counted in any group
       return counts;
     },
     { jhs: 0, shs: 0, both: 0 }
   );
+  return counts;
 }
 
 function getSubjectBreakdown(subjectsList) {
@@ -253,7 +253,9 @@ export function getSystemSnapshot() {
   let totalSubjects = subjectsList.length;
   let jhsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "jhs").length;
   let shsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "shs").length;
-  let assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers);
+  // Always compute both breakdowns
+  let profiledAssignmentBreakdown = getTeacherAssignmentBreakdown(facultyList, 'FULL LIST');
+  let assignmentBreakdown = profiledAssignmentBreakdown;
   let loadDistribution = activeTeachers.reduce(
     (counts, teacher) => {
       const status = teacher?.assignedLoadStatus || "Unassigned";
@@ -280,17 +282,23 @@ export function getSystemSnapshot() {
         if (a && a.teacherId) teacherIds.add(a.teacherId);
       });
       activeTeachers = facultyList.filter((t) => teacherIds.has(t.id));
-      assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers);
+      assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers, 'ACTIVE ONLY');
     }
     // Use teacherLoadPercent for load distribution if available
     if (latestSchedule.teacherLoadPercent && typeof latestSchedule.teacherLoadPercent === "object") {
-      // Map teacher load percent to load categories
+      // Map teacher load percent to load categories using the same logic as Faculty Management
+      // Unassigned: 0
+      // Underload: <80
+      // Balanced: 80-100
+      // Overload: >100
+      const minBalancedPercent = 80;
+      const maxBalancedPercent = 100;
       const loadDist = { unassigned: 0, balanced: 0, underload: 0, overload: 0 };
       Object.entries(latestSchedule.teacherLoadPercent).forEach(([tid, percent]) => {
         if (percent === 0) loadDist.unassigned += 1;
-        else if (percent < 8) loadDist.underload += 1;
-        else if (percent === 8) loadDist.balanced += 1;
-        else if (percent > 8) loadDist.overload += 1;
+        else if (percent < minBalancedPercent) loadDist.underload += 1;
+        else if (percent <= maxBalancedPercent) loadDist.balanced += 1;
+        else if (percent > maxBalancedPercent) loadDist.overload += 1;
       });
       loadDistribution = loadDist;
     }
@@ -307,7 +315,9 @@ export function getSystemSnapshot() {
     shsSubjects,
     unresolvedConflicts: loadDistribution.overload,
     loadDistribution,
-    assignmentBreakdown,
+    assignmentBreakdown, // active (filtered) breakdown
+    profiledTeachers: facultyList.length,
+    profiledAssignmentBreakdown, // always full list breakdown
   };
 }
 
@@ -387,10 +397,10 @@ export function getDashboardAnalyticsPayload() {
 
   return {
     summary: {
-      activeTeachers: snapshot.activeTeachers,
-      activeAssignmentBreakdown: {
-        ...snapshot.assignmentBreakdown,
-        total: snapshot.activeTeachers,
+      profiledTeachers: snapshot.profiledTeachers,
+      profiledAssignmentBreakdown: {
+        ...snapshot.profiledAssignmentBreakdown,
+        total: snapshot.profiledTeachers,
       },
       totalSections: snapshot.totalSections,
       totalSectionGradeBreakdown: snapshot.sectionGradeBreakdown,
@@ -434,12 +444,13 @@ export function getDashboardAnalyticsPayload() {
 }
 
 export function toDashboardViewModel(payload) {
+  // Always use profiledAssignmentBreakdown for the profiled teachers card
   return {
     metrics: [
       {
-        label: "Active Teachers",
-        value: String(payload.summary.activeTeachers),
-        assignmentBreakdown: payload.summary.activeAssignmentBreakdown,
+        label: "Profiled Teachers",
+        value: String(payload.summary.profiledTeachers),
+        assignmentBreakdown: payload.summary.profiledAssignmentBreakdown,
       },
       {
         label: "Total Sections",
@@ -462,7 +473,6 @@ export function toDashboardViewModel(payload) {
     activity: payload.activity,
     conflicts: payload.conflicts,
     charts: {
-      
       teacherLoad: {
         labels: payload.teacherLoadDistribution.labels,
         datasets: [
