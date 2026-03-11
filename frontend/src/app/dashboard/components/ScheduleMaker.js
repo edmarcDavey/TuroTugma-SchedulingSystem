@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-function ConfirmationModal({ open, message, onConfirm, onCancel }) {
+function ConfirmationModal({ open, message, onConfirm, onCancel, title = "Confirmation", confirmLabel = "Confirm" }) {
   if (!open) return null;
   return (
     <div style={{
@@ -20,15 +20,16 @@ function ConfirmationModal({ open, message, onConfirm, onCancel }) {
         borderRadius: 12,
         boxShadow: '0 4px 32px rgba(26,37,54,0.18)',
         padding: '32px 28px',
-        minWidth: 340,
-        maxWidth: '90vw',
+        minWidth: 400,
+        maxWidth: 480,
+        width: '100%',
         textAlign: 'center',
       }}>
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 18, color: '#1a2536' }}>Publish Confirmation</div>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 18, color: '#1a2536' }}>{title}</div>
         <div style={{ fontSize: 15, marginBottom: 24, color: '#3a3a3a' }}>{message}</div>
         <div style={{ display: 'flex', gap: 16, justifyContent: 'center' }}>
           <button onClick={onCancel} style={{ padding: '10px 24px', borderRadius: 8, background: '#eaf0fa', color: '#1a3a8c', fontWeight: 700, border: 'none', fontSize: 15, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={onConfirm} style={{ padding: '10px 24px', borderRadius: 8, background: '#1a3a8c', color: '#fff', fontWeight: 700, border: 'none', fontSize: 15, cursor: 'pointer' }}>Publish Anyway</button>
+          <button onClick={onConfirm} style={{ padding: '10px 24px', borderRadius: 8, background: '#b53f4e', color: '#fff', fontWeight: 700, border: 'none', fontSize: 15, cursor: 'pointer' }}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -136,6 +137,28 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
   const [subjectRestrictionForm, setSubjectRestrictionForm] = useState(EMPTY_SUBJECT_RESTRICTION_FORM);
   const [showSubjectRestrictionEditor, setShowSubjectRestrictionEditor] = useState(false);
   const [notice, setNotice] = useState({ text: "", type: "success" });
+  // State for Clear Grid confirmation modal
+  const [clearGridModal, setClearGridModal] = useState({ open: false, message: '', onConfirm: null, onCancel: null });
+    // Clear Grid logic
+    function handleClearGrid() {
+      if (!schedule) return;
+      setSchedule((current) =>
+        current
+          ? {
+              ...current,
+              assignments: {},
+              conflicts: [],
+              conflictDetails: [],
+              teacherLoadPercent: {},
+              updatedAt: new Date().toISOString(),
+              // keep status as is
+            }
+          : current
+      );
+      setCellEditorDrafts({});
+      setHoveredCellKey("");
+      showNotice("All assignments cleared from the grid.", "success");
+    }
   const [dataRefreshToken, setDataRefreshToken] = useState(0);
   const [configSaveStatus, setConfigSaveStatus] = useState("saved");
   const configSaveTimerRef = useRef(null);
@@ -443,8 +466,21 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
   );
 
   useEffect(() => {
-    const latestDraft = draftsForCurrentSchedule[0];
-    setSchedule(latestDraft ? latestDraft.schedule : null);
+    // Find the most recent schedule (draft or published) for the selected schedule type
+    const draftsForType = draftsForCurrentSchedule;
+    const publishedForType = publishedSchedules?.[scheduleType] || null;
+    let mostRecent = null;
+    if (draftsForType.length > 0 && publishedForType) {
+      // Compare updatedAt timestamps
+      const draftDate = new Date(draftsForType[0].schedule?.updatedAt || draftsForType[0].updatedAt || 0).getTime();
+      const publishedDate = new Date(publishedForType.updatedAt || publishedForType.publishedAt || 0).getTime();
+      mostRecent = draftDate >= publishedDate ? draftsForType[0].schedule : publishedForType;
+    } else if (draftsForType.length > 0) {
+      mostRecent = draftsForType[0].schedule;
+    } else if (publishedForType) {
+      mostRecent = publishedForType;
+    }
+    setSchedule(mostRecent);
     setCellEditorDrafts({});
     setHoveredCellKey("");
     setShowDraftsPanel(false);
@@ -452,7 +488,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
     setGridGradeFilter("all");
     setGridSectionTypeFilter("all");
     setGridTrackFilter("all");
-  }, [scheduleType]);
+  }, [scheduleType, draftsForCurrentSchedule, publishedSchedules]);
 
   useEffect(() => {
     setConfigSaveStatus("saving");
@@ -749,6 +785,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
   const handlePublish = () => {
     if (readOnly) return;
 
+
     let message = '';
     let needsConfirm = false;
     const publishEvaluation = schedule
@@ -763,12 +800,27 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         })
       : { conflicts: [] };
     const totalConflicts = (schedule?.conflicts?.length || 0) + (publishEvaluation.conflicts?.length || 0);
+    const invalidCells = assignmentValidationSummary.invalidAssigned;
+    const totalAssigned = assignmentValidationSummary.totalAssigned;
 
     if (!schedule) {
       message = 'No schedule is loaded or generated. Do you want to publish anyway?';
       needsConfirm = true;
+    } else if (totalAssigned === 0) {
+      // Block publishing empty schedule
+      setNotice({ text: 'Cannot publish an empty schedule. Please assign at least one subject/teacher.', type: 'error' });
+      return;
+    } else if (totalAssigned < assignmentValidationSummary.totalRequired) {
+      message = `Warning: Only ${totalAssigned} out of ${assignmentValidationSummary.totalRequired} required assignments are filled. Do you want to publish anyway?`;
+      needsConfirm = true;
+    } else if (totalConflicts > 0 && invalidCells > 0) {
+      message = `There are ${totalConflicts} conflict(s) and ${invalidCells} invalid cell(s). Do you want to publish anyway?`;
+      needsConfirm = true;
     } else if (totalConflicts > 0) {
       message = `There are ${totalConflicts} conflict(s). Do you want to publish anyway?`;
+      needsConfirm = true;
+    } else if (invalidCells > 0) {
+      message = `There are ${invalidCells} invalid cell(s). Do you want to publish anyway?`;
       needsConfirm = true;
     }
 
@@ -1169,6 +1221,8 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                 message={confirmModal.message}
                 onConfirm={confirmModal.onConfirm}
                 onCancel={confirmModal.onCancel}
+                title={confirmModal.title || "Publish Confirmation"}
+                confirmLabel={confirmModal.confirmLabel || "Publish Anyway"}
               />
               <button
                 type="button"
@@ -1197,6 +1251,17 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         </div>
       )}
 
+      {/* Clear Grid Confirmation Modal (separate from publish) */}
+      {clearGridModal && clearGridModal.open && (
+        <ConfirmationModal
+          open={clearGridModal.open}
+          message={clearGridModal.message}
+          onConfirm={clearGridModal.onConfirm}
+          onCancel={clearGridModal.onCancel}
+          title="Clear Grid Confirmation"
+          confirmLabel="Yes, Clear Grid"
+        />
+      )}
       {notice.text ? (
         <div
           role="status"
@@ -1240,6 +1305,43 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 12, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
             <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>Schedule Grid</h2>
+            {/* Functional Clear Grid button */}
+            <button
+              type="button"
+              style={{
+                ...secondaryActionStyle(),
+                width: 120,
+                textAlign: "center",
+                background: "#f5f6fa",
+                color: "#b53f4e",
+                border: "1px solid #e3e7ef",
+                fontWeight: 700,
+                marginLeft: 12,
+                cursor: readOnly || !schedule ? "not-allowed" : "pointer",
+                opacity: readOnly || !schedule ? 0.7 : 1,
+              }}
+              disabled={readOnly || !schedule}
+              title="Clear all assignments in the grid"
+              onClick={() => {
+                if (!schedule) return;
+                const isDraftSaved = schedule.status === "draft" || draftsForCurrentSchedule.some((d) => d.id === schedule.id);
+                if (isDraftSaved) {
+                  handleClearGrid();
+                } else {
+                  setClearGridModal({
+                    open: true,
+                    message: "This schedule is not saved as a draft. Clearing the grid will remove all assignments and cannot be undone. Do you want to continue?",
+                    onConfirm: () => {
+                      setClearGridModal({ open: false, message: '', onConfirm: null, onCancel: null });
+                      handleClearGrid();
+                    },
+                    onCancel: () => setClearGridModal({ open: false, message: '', onConfirm: null, onCancel: null }),
+                  });
+                }
+              }}
+            >
+              Clear Grid
+            </button>
           </div>
 
           <div
