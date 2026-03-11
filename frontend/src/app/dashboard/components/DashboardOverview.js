@@ -95,19 +95,31 @@ export default function DashboardOverview() {
         {/* Unresolved Conflicts Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Unresolved Conflicts</h2>
-          {analytics.conflicts.length === 0 ? (
-            <p style={{ margin: "6px 0 0", color: "#5f6b8f", fontSize: 13 }}>No unresolved conflicts at the moment.</p>
-          ) : (
-            <ul style={{ margin: "8px 0 0", paddingLeft: 18, color: "#5f6b8f", fontSize: 13, display: "grid", gap: 6 }}>
-              {analytics.conflicts.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          )}
-
-          <div style={{ marginTop: 12, border: "1px dashed #cfd8ef", borderRadius: 10, background: "#f8faff", padding: 12, color: "#5a6687", fontSize: 12 }}>
+          <p style={{ margin: "6px 0 0", color: "#5f6b8f", fontSize: 13 }}>
             Conflict detection checks teacher overlap, unavailable periods, and subject duplication.
-          </div>
+          </p>
+          {analytics.conflicts.length === 0 ? (
+            <div style={{ marginTop: 12, color: "#5f6b8f", fontSize: 13 }}>No unresolved conflicts at the moment.</div>
+          ) : (
+            <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              {analytics.conflicts.map((item, idx) => (
+                <div
+                  key={item + idx}
+                  style={{
+                    border: "1.5px dashed #e53935",
+                    borderRadius: 10,
+                    background: "#fff7f8",
+                    padding: 12,
+                    color: "#b71c1c",
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {item}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </>

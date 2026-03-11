@@ -1,3 +1,65 @@
+// --- BEGIN: Copied from FacultyManagement.js for consistent teacher load calculation ---
+function getScheduleDraftAndConfig() {
+  try {
+    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
+    const configRaw = localStorage.getItem("turotugma_schedule_configurations");
+    let draftArr = draftRaw ? JSON.parse(draftRaw) : null;
+    const draft = Array.isArray(draftArr) && draftArr.length > 0 ? draftArr[0] : null;
+    const config = configRaw ? JSON.parse(configRaw) : null;
+    const activeConfig = draft?.config?.jhs || config || {};
+    return { draft, config: activeConfig };
+  } catch {
+    return { draft: null, config: {} };
+  }
+}
+
+function calculateTeacherLoads(facultyList) {
+  const { draft, config } = getScheduleDraftAndConfig();
+  if (!draft || !draft.schedule || !draft.schedule.assignments) return facultyList.map(f => ({ ...f, assignedLoadPercent: 0 }));
+
+  const periodsPerDay = Math.max(
+    Number(config.periods?.regular || 0),
+    Number(config.periods?.special || 0)
+  );
+  const regularDays = config.regularDays || [];
+  const shortenedDays = config.shortenedDays || [];
+  const periodMinutes = config.periodMinutes || { regular: 50, shortened: 45 };
+
+  const minBalanced = (4 * regularDays.length * periodMinutes.regular) + (4 * shortenedDays.length * periodMinutes.shortened);
+  const maxBalanced = (6 * regularDays.length * periodMinutes.regular) + (6 * shortenedDays.length * periodMinutes.shortened);
+
+  const teacherMinutes = {};
+  facultyList.forEach(faculty => {
+    let assignedPeriods = new Set();
+    if (draft.schedule && draft.schedule.assignments) {
+      Object.entries(draft.schedule.assignments).forEach(([key, assignment]) => {
+        if (assignment.teacherId !== faculty.id) return;
+        const periodMatch = key.match(/\|JHS-P(\d+)/);
+        if (periodMatch) {
+          assignedPeriods.add(periodMatch[0]);
+        }
+      });
+    }
+    const periodCount = assignedPeriods.size;
+    const totalMinutes = (periodCount * regularDays.length * periodMinutes.regular) + (periodCount * shortenedDays.length * periodMinutes.shortened);
+    teacherMinutes[faculty.id] = totalMinutes;
+  });
+
+  return facultyList.map(faculty => {
+    const minutes = teacherMinutes[faculty.id] || 0;
+    let percent = 0;
+    if (minutes > 0 && maxBalanced > 0) {
+      percent = Math.round((minutes / maxBalanced) * 100);
+    }
+    return {
+      ...faculty,
+      assignedLoadPercent: percent,
+      assignedLoadMinutes: minutes,
+      assignedLoadStatus: minutes === 0 ? "Unassigned" : (minutes < minBalanced ? "Underload" : (minutes <= maxBalanced ? "Balanced" : "Overload")),
+    };
+  });
+}
+// --- END: Copied from FacultyManagement.js ---
 import ScheduleMaker from "./components/ScheduleMaker";
 import { useMemo } from "react";
 
@@ -256,17 +318,17 @@ export function getSystemSnapshot() {
   // Always compute both breakdowns
   let profiledAssignmentBreakdown = getTeacherAssignmentBreakdown(facultyList, 'FULL LIST');
   let assignmentBreakdown = profiledAssignmentBreakdown;
-  let loadDistribution = activeTeachers.reduce(
-    (counts, teacher) => {
-      const status = teacher?.assignedLoadStatus || "Unassigned";
-      if (status === "Unassigned") counts.unassigned += 1;
-      else if (status === "Underload") counts.underload += 1;
-      else if (status === "Balanced") counts.balanced += 1;
-      else if (status === "Overload") counts.overload += 1;
-      return counts;
-    },
-    { unassigned: 0, balanced: 0, underload: 0, overload: 0 }
-  );
+
+  // --- Use the same load calculation as FacultyManagement.js for dashboard chart ---
+  let loadDistribution = { unassigned: 0, balanced: 0, underload: 0, overload: 0 };
+  const teacherLoads = calculateTeacherLoads(activeTeachers);
+  teacherLoads.forEach((teacher) => {
+    const status = teacher.assignedLoadStatus || "Unassigned";
+    if (status === "Unassigned") loadDistribution.unassigned += 1;
+    else if (status === "Underload") loadDistribution.underload += 1;
+    else if (status === "Balanced") loadDistribution.balanced += 1;
+    else if (status === "Overload") loadDistribution.overload += 1;
+  });
   if (latestSchedule) {
     // Use config from latest schedule if available
     if (latestConfig) {
@@ -285,23 +347,7 @@ export function getSystemSnapshot() {
       assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers, 'ACTIVE ONLY');
     }
     // Use teacherLoadPercent for load distribution if available
-    if (latestSchedule.teacherLoadPercent && typeof latestSchedule.teacherLoadPercent === "object") {
-      // Map teacher load percent to load categories using the same logic as Faculty Management
-      // Unassigned: 0
-      // Underload: <80
-      // Balanced: 80-100
-      // Overload: >100
-      const minBalancedPercent = 80;
-      const maxBalancedPercent = 100;
-      const loadDist = { unassigned: 0, balanced: 0, underload: 0, overload: 0 };
-      Object.entries(latestSchedule.teacherLoadPercent).forEach(([tid, percent]) => {
-        if (percent === 0) loadDist.unassigned += 1;
-        else if (percent < minBalancedPercent) loadDist.underload += 1;
-        else if (percent <= maxBalancedPercent) loadDist.balanced += 1;
-        else if (percent > maxBalancedPercent) loadDist.overload += 1;
-      });
-      loadDistribution = loadDist;
-    }
+    // (No longer needed: teacherLoadPercent percent-based logic is replaced by config-driven minute-based logic above)
   }
 
   return {
