@@ -151,7 +151,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
               conflictDetails: [],
               teacherLoadPercent: {},
               updatedAt: new Date().toISOString(),
-              // keep status as is
+              status: "unsaved",
             }
           : current
       );

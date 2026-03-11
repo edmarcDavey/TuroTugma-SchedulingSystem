@@ -60,8 +60,58 @@ function calculateTeacherLoads(facultyList) {
   });
 }
 // --- END: Copied from FacultyManagement.js ---
+
 import ScheduleMaker from "./components/ScheduleMaker";
 import { useMemo } from "react";
+
+// Helper: Get most recent schedule (draft or published) for a given level
+function getMostRecentScheduleForLevel(level) {
+  const drafts = safeParseStorage("turotugma_schedule_drafts", []);
+  const published = safeParseStorage("turotugma_published_schedules", {});
+  let mostRecent = null;
+  let mostRecentTime = 0;
+  // Check published
+  Object.values(published).forEach((sched) => {
+    if (sched && sched.scheduleType === level && sched.updatedAt) {
+      const t = new Date(sched.updatedAt).getTime();
+      if (t > mostRecentTime) {
+        mostRecent = sched;
+        mostRecentTime = t;
+      }
+    }
+  });
+  // Check drafts
+  if (Array.isArray(drafts)) {
+    drafts.forEach((draft) => {
+      const sched = draft.schedule || draft;
+      if (sched && sched.scheduleType === level && draft.updatedAt) {
+        const t = new Date(draft.updatedAt).getTime();
+        if (t > mostRecentTime) {
+          mostRecent = sched;
+          mostRecentTime = t;
+        }
+      }
+    });
+  }
+  return mostRecent;
+}
+
+// Helper: Count valid assignments (has subjectId and teacherId, no conflicts)
+function countValidAssignments(schedule) {
+  if (!schedule || !schedule.assignments) return { valid: 0, total: 0 };
+  let valid = 0;
+  let total = 0;
+  Object.values(schedule.assignments).forEach((a) => {
+    total++;
+    if (a && a.subjectId && a.teacherId) valid++;
+  });
+  return { valid, total };
+}
+
+// Helper: Calculate percent
+function percent(valid, total) {
+  return total > 0 ? Math.round((valid / total) * 100) : 0;
+}
 
 // Activity log key for localStorage
 const ACTIVITY_LOG_STORAGE_KEY = "turotugma_activity_log";
@@ -374,53 +424,36 @@ export function getSystemSnapshot() {
 export function getDashboardAnalyticsPayload() {
   const snapshot = getSystemSnapshot();
   const hasAnyData = snapshot.totalTeachers > 0 || snapshot.totalSections > 0 || snapshot.totalSubjects > 0;
-  const jhsCompletion = snapshot.totalSections > 0 ? Math.min(100, Math.round((snapshot.jhsSubjects / snapshot.totalSections) * 100)) : 0;
-  const shsCompletion = snapshot.totalSections > 0 ? Math.min(100, Math.round((snapshot.shsSubjects / snapshot.totalSections) * 100)) : 0;
 
-  // Use valid/conflict-free assignment completion for 'Overall'
-  let validCompletion = { valid: 0, total: 0, percent: 0 };
-  // Find the latest schedule and its config/sections/slots
+  // Get most recent schedules for each level
+  const jhsSched = getMostRecentScheduleForLevel("jhs");
+  const shsFirstSched = getMostRecentScheduleForLevel("shs_first");
+  // If you want to support SHS Second Sem, add: const shsSecondSched = getMostRecentScheduleForLevel("shs_second");
+
+  const jhsValid = countValidAssignments(jhsSched);
+  const shsFirstValid = countValidAssignments(shsFirstSched);
+  // For now, ignore SHS Second Sem in overall
+
+  const jhsCompletion = percent(jhsValid.valid, jhsValid.total);
+  const shsFirstCompletion = percent(shsFirstValid.valid, shsFirstValid.total);
+  const overallCompletion = Math.round((jhsCompletion + shsFirstCompletion) / 2);
+
+  // Use the most recent schedule for status info
   let latestSchedule = null;
-  let latestConfig = null;
-  let latestSections = null;
-  let latestSlots = null;
-  let latestScheduleType = null;
-  // Check published schedules
-  const publishedSchedules = safeParseStorage("turotugma_published_schedules", {});
   let latestUpdated = 0;
-  Object.values(publishedSchedules).forEach((sched) => {
-    if (sched && sched.updatedAt && new Date(sched.updatedAt).getTime() > latestUpdated) {
-      latestSchedule = sched;
-      latestConfig = sched.config;
-      latestSections = sched.sections;
-      latestSlots = sched.slots;
-      latestScheduleType = sched.scheduleType;
-      latestUpdated = new Date(sched.updatedAt).getTime();
+  [jhsSched, shsFirstSched].forEach((sched) => {
+    if (sched && sched.updatedAt) {
+      const t = new Date(sched.updatedAt).getTime();
+      if (t > latestUpdated) {
+        latestSchedule = sched;
+        latestUpdated = t;
+      }
     }
   });
-  // Check drafts
-  const drafts = safeParseStorage("turotugma_schedule_drafts", []);
-  if (Array.isArray(drafts)) {
-    drafts.forEach((draft) => {
-      if (draft && draft.updatedAt && new Date(draft.updatedAt).getTime() > latestUpdated) {
-        latestSchedule = draft.schedule || draft;
-        latestConfig = draft.config;
-        latestSections = (draft.schedule && draft.schedule.sections) || draft.sections;
-        latestSlots = (draft.schedule && draft.schedule.slots) || draft.slots;
-        latestScheduleType = (draft.schedule && draft.schedule.scheduleType) || draft.scheduleType;
-        latestUpdated = new Date(draft.updatedAt).getTime();
-      }
-    });
-  }
-  if (latestSchedule && latestSections && latestSlots && latestScheduleType && latestConfig) {
-    validCompletion = getValidScheduleCompletion(latestSchedule, latestSections, latestSlots, latestScheduleType, latestConfig);
-  }
 
-  const hasPublished = publishedSchedules && Object.keys(publishedSchedules).length > 0;
   let lastUpdatedString = "No data yet";
   let currentVersionString = "No draft";
   if (latestSchedule) {
-    // Use the name property if available, otherwise fallback to versioned label
     if (latestSchedule.name && typeof latestSchedule.name === "string" && latestSchedule.name.trim() !== "") {
       currentVersionString = latestSchedule.name;
     } else if (latestSchedule.status === "published") {
@@ -444,6 +477,9 @@ export function getDashboardAnalyticsPayload() {
     lastUpdatedString = "Based on current records";
     currentVersionString = "Draft v1";
   }
+
+  const publishedSchedules = safeParseStorage("turotugma_published_schedules", {});
+  const hasPublished = publishedSchedules && Object.keys(publishedSchedules).length > 0;
 
   return {
     summary: {
@@ -479,7 +515,7 @@ export function getDashboardAnalyticsPayload() {
     },
     scheduleCompletionByLevel: {
       labels: ["JHS", "SHS", "Overall"],
-      percentages: [jhsCompletion, shsCompletion, validCompletion.percent],
+      percentages: [jhsCompletion, shsFirstCompletion, overallCompletion],
     },
     activity: [
       `${snapshot.totalSections} sections currently configured`,
