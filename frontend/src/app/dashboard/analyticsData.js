@@ -361,6 +361,7 @@ export function getSystemSnapshot() {
   let activeTeachers = facultyList.filter((teacher) => teacher?.active !== false);
   let sectionGradeBreakdown = getSectionGradeBreakdown(sections);
   let subjectBreakdown = getSubjectBreakdown(subjectsList);
+  // Total Sections is always based on created sections in storage
   let totalSections = getTotalSectionsFromSavedConfig(sections);
   let totalSubjects = subjectsList.length;
   let jhsSubjects = subjectsList.filter((subject) => subject?.schoolLevel === "jhs").length;
@@ -380,12 +381,6 @@ export function getSystemSnapshot() {
     else if (status === "Overload") loadDistribution.overload += 1;
   });
   if (latestSchedule) {
-    // Use config from latest schedule if available
-    if (latestConfig) {
-      // Use config for section breakdown and total sections
-      sectionGradeBreakdown = getSectionGradeBreakdown(latestConfig);
-      totalSections = getTotalSectionsFromSavedConfig(latestConfig);
-    }
     // Use assignments and teacher loads from latest schedule if available
     if (latestSchedule.assignments && typeof latestSchedule.assignments === "object") {
       // Count unique teacherIds in assignments as active teachers
@@ -441,26 +436,45 @@ export function getDashboardAnalyticsPayload() {
   // Use the most recent schedule for status info
   let latestSchedule = null;
   let latestUpdated = 0;
+  let latestScheduleType = null;
   [jhsSched, shsFirstSched].forEach((sched) => {
     if (sched && sched.updatedAt) {
       const t = new Date(sched.updatedAt).getTime();
       if (t > latestUpdated) {
         latestSchedule = sched;
         latestUpdated = t;
+        latestScheduleType = sched.scheduleType || null;
       }
     }
   });
 
   let lastUpdatedString = "No data yet";
   let currentVersionString = "No draft";
+  let activeScheduleString = "Not configured";
+  let publishedString = "No";
+  let draftCount = 0;
+  if (latestScheduleType) {
+    // Count drafts for the active schedule type
+    const drafts = safeParseStorage("turotugma_schedule_drafts", []);
+    draftCount = Array.isArray(drafts)
+      ? drafts.filter(d => (d.scheduleType || d.schedule?.scheduleType) === latestScheduleType).length
+      : 0;
+  }
   if (latestSchedule) {
-    if (latestSchedule.name && typeof latestSchedule.name === "string" && latestSchedule.name.trim() !== "") {
-      currentVersionString = latestSchedule.name;
-    } else if (latestSchedule.status === "published") {
-      currentVersionString = "Published v1";
-    } else if (latestSchedule.status === "draft") {
-      currentVersionString = "Draft v1";
+    // Determine schedule type label
+    if (latestScheduleType === "jhs") {
+      activeScheduleString = "JHS";
+    } else if (latestScheduleType === "shs_first") {
+      activeScheduleString = "SHS First Sem";
+    } else if (latestScheduleType === "shs_second") {
+      activeScheduleString = "SHS Second Sem";
+    } else if (latestScheduleType) {
+      activeScheduleString = latestScheduleType;
     }
+    // Always show Draft vN for current version
+    currentVersionString = draftCount > 0 ? `Draft v${draftCount}` : "Draft v1";
+    // Published only Yes if most recent schedule is published
+    publishedString = latestSchedule.status === "published" ? "Yes" : "No";
     if (latestSchedule.updatedAt) {
       const date = new Date(latestSchedule.updatedAt);
       lastUpdatedString = date.toLocaleString(undefined, {
@@ -476,10 +490,19 @@ export function getDashboardAnalyticsPayload() {
   } else if (hasAnyData) {
     lastUpdatedString = "Based on current records";
     currentVersionString = "Draft v1";
+    activeScheduleString = "Configured";
+    publishedString = "No";
   }
 
   const publishedSchedules = safeParseStorage("turotugma_published_schedules", {});
   const hasPublished = publishedSchedules && Object.keys(publishedSchedules).length > 0;
+
+  // Use actual conflicts from the most recent schedule
+  let actualConflicts = [];
+  if (latestSchedule && Array.isArray(latestSchedule.conflicts)) {
+    actualConflicts = latestSchedule.conflicts;
+  }
+  const unresolvedConflictsCount = actualConflicts.length;
 
   return {
     summary: {
@@ -492,16 +515,16 @@ export function getDashboardAnalyticsPayload() {
       totalSectionGradeBreakdown: snapshot.sectionGradeBreakdown,
       totalSubjects: snapshot.totalSubjects,
       totalSubjectBreakdown: snapshot.subjectBreakdown,
-      unresolvedConflicts: snapshot.unresolvedConflicts,
-      published: hasPublished,
+      unresolvedConflicts: unresolvedConflictsCount,
+      published: publishedString,
     },
     scheduleStatus: {
-      activeSchedule: hasAnyData ? "Configured" : "Not configured",
+      activeSchedule: activeScheduleString,
       currentVersion: currentVersionString,
       lastUpdated: lastUpdatedString,
     },
     trends: {
-      conflictCountByWeek: [0, 0, 0, 0, 0, snapshot.unresolvedConflicts],
+      conflictCountByWeek: [0, 0, 0, 0, 0, unresolvedConflictsCount],
       labels: ["W1", "W2", "W3", "W4", "W5", "W6"],
     },
     teacherLoadDistribution: {
@@ -523,8 +546,8 @@ export function getDashboardAnalyticsPayload() {
       `${snapshot.activeTeachers} active teachers currently available`,
     ],
     conflicts:
-      snapshot.unresolvedConflicts > 0
-        ? [`${snapshot.unresolvedConflicts} teacher load conflict(s) detected (overload).`]
+      unresolvedConflictsCount > 0
+        ? actualConflicts.map((c, i) => typeof c === "string" ? c : `Conflict ${i + 1}`)
         : [],
   };
 }

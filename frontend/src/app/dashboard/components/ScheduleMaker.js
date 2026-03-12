@@ -115,6 +115,7 @@ const EMPTY_SUBJECT_RESTRICTION_FORM = {
 };
 
 export default function ScheduleMaker({ readOnly = false, hideControls = false }) {
+  // State declarations
   const [scheduleType, setScheduleType] = useState("jhs");
   const [configPanel, setConfigPanel] = useState("jhs");
   const [jhsSessionType, setJhsSessionType] = useState("regular");
@@ -139,6 +140,24 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
   const [notice, setNotice] = useState({ text: "", type: "success" });
   // State for Clear Grid confirmation modal
   const [clearGridModal, setClearGridModal] = useState({ open: false, message: '', onConfirm: null, onCancel: null });
+
+  // Robust scroll to conflicts card if anchor is present in URL
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#conflicts-card") {
+      let attempts = 0;
+      const maxAttempts = 20;
+      const scrollToConflicts = () => {
+        const el = document.getElementById("conflicts-card");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "end" });
+        } else if (attempts < maxAttempts) {
+          attempts++;
+          setTimeout(scrollToConflicts, 150);
+        }
+      };
+      scrollToConflicts();
+    }
+  }, [schedule]);
     // Clear Grid logic
     function handleClearGrid() {
       if (!schedule) return;
@@ -2246,21 +2265,71 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
       </div>
 
       {schedule?.conflicts?.length ? (
-        <div style={{ background: "#fff7f8", border: "1px solid #f0c9cf", borderRadius: 12, padding: 12 }}>
-          <h3 style={{ margin: 0, color: "#a44652", fontSize: 14 }}>Detected Conflicts ({schedule.conflicts.length})</h3>
-          <p style={{ margin: "6px 0 0", color: "#8a4a55", fontSize: 12, fontWeight: 600 }}>
-            Conflicting cells are highlighted in red in the schedule grid.
-          </p>
-          <ul style={{ margin: "8px 0 0", paddingLeft: 18, color: "#8a4a55", fontSize: 12, display: "grid", gap: 4 }}>
-            {schedule.conflicts.slice(0, 12).map((conflict, index) => (
-              <li key={`${conflict}-${index}`}>{conflict}</li>
-            ))}
-          </ul>
-          {schedule.conflicts.length > 12 ? (
-            <p style={{ margin: "8px 0 0", color: "#8a4a55", fontSize: 12 }}>
-              +{schedule.conflicts.length - 12} more conflict(s)
-            </p>
-          ) : null}
+        <div id="conflicts-card" style={{ background: "#fff7f8", border: "1px solid #f0c9cf", borderRadius: 12, padding: 12, position: 'relative' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h3 style={{ margin: 0, color: "#a44652", fontSize: 14 }}>Detected Conflicts ({schedule.conflicts.length})</h3>
+              <p style={{ margin: "6px 0 0", color: "#8a4a55", fontSize: 12, fontWeight: 600 }}>
+                Conflicting cells are highlighted in red in the schedule grid.
+              </p>
+            </div>
+            <button
+              type="button"
+              style={{ ...secondaryActionStyle(), minWidth: 90, opacity: 0.6, cursor: 'not-allowed' }}
+              disabled
+              title="Auto-fix all conflicts (coming soon)"
+            >
+              Auto-Fix All
+            </button>
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+            {schedule.conflicts.map((conflict, index) => {
+              // Simple prescriptive analytics: suggest a fix based on conflict type
+              let suggestion = null;
+              if (/double[- ]?book(ed)?|overlap/i.test(conflict)) {
+                suggestion = "Suggestion: Move one of the assignments to a different period or teacher to resolve the overlap.";
+              } else if (/unavailable|not available|absent/i.test(conflict)) {
+                suggestion = "Suggestion: Assign a different teacher or move the subject to another period.";
+              } else if (/duplicate|already assigned|assigned twice/i.test(conflict)) {
+                suggestion = "Suggestion: Remove or reassign the duplicate assignment.";
+              } else if (/underload|overload/i.test(conflict)) {
+                suggestion = "Suggestion: Adjust teacher assignments to balance the load.";
+              } else {
+                suggestion = "Suggestion: Review this conflict and adjust assignments as needed.";
+              }
+              return (
+                <div
+                  key={`${conflict}-${index}`}
+                  style={{
+                    border: "1.5px dashed #e53935",
+                    borderRadius: 10,
+                    background: "#fff7f8",
+                    padding: 12,
+                    color: "#b71c1c",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 16,
+                  }}
+                >
+                  <div>
+                    <div>{conflict}</div>
+                    <div style={{ color: "#7a8bb7", fontSize: 12, fontWeight: 500, marginTop: 6 }}>{suggestion}</div>
+                  </div>
+                  <button
+                    type="button"
+                    style={{ ...secondaryActionStyle(), minWidth: 70, opacity: 0.6, cursor: 'not-allowed' }}
+                    disabled
+                    title="Auto-fix this conflict (coming soon)"
+                  >
+                    Auto-Fix
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
     </div>

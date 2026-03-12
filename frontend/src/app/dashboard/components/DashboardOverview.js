@@ -45,7 +45,19 @@ export default function DashboardOverview() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 14, marginBottom: 18 }}>
         <div style={panelStyle()}>
-          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Teacher Load Distribution</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Teacher Load Distribution</h2>
+            <span
+              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              onClick={() => window.location.href = "/dashboard?tab=faculty"}
+              tabIndex={0}
+              role="button"
+              aria-label="Manage Faculty"
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=faculty"; }}
+            >
+              Manage Faculty
+            </span>
+          </div>
           <div style={{ marginTop: 12, height: 220 }}>
             <Doughnut
               data={analytics.charts.teacherLoad}
@@ -57,7 +69,19 @@ export default function DashboardOverview() {
           </div>
         </div>
         <div style={{ ...panelStyle(), marginBottom: 18 }}>
-          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
+            <span
+              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              onClick={() => window.location.href = "/dashboard?tab=schedule-maker"}
+              tabIndex={0}
+              role="button"
+              aria-label="View Schedule Grid"
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=schedule-maker"; }}
+            >
+              View Schedule Grid
+            </span>
+          </div>
           <div style={{ marginTop: 12, height: 230 }}>
             <Bar
               data={analytics.charts.scheduleCompletion}
@@ -84,7 +108,19 @@ export default function DashboardOverview() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         {/* Schedule Status Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Status</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Status</h2>
+            <span
+              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              onClick={() => window.location.href = "/dashboard?tab=schedule-maker"}
+              tabIndex={0}
+              role="button"
+              aria-label="View Schedule Grid"
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=schedule-maker"; }}
+            >
+              View Schedule Grid
+            </span>
+          </div>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {analytics.scheduleStatusRows.map((item) => (
               <StatusRow key={item.label} label={item.label} value={item.value} />
@@ -94,7 +130,19 @@ export default function DashboardOverview() {
 
         {/* Unresolved Conflicts Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Unresolved Conflicts</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Unresolved Conflicts</h2>
+            <span
+              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              onClick={() => window.location.href = "/dashboard?tab=schedule-maker#conflicts-card"}
+              tabIndex={0}
+              role="button"
+              aria-label="Resolve Conflicts"
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=schedule-maker#conflicts-card"; }}
+            >
+              Resolve Conflicts
+            </span>
+          </div>
           <p style={{ margin: "6px 0 0", color: "#5f6b8f", fontSize: 13 }}>
             Conflict detection checks teacher overlap, unavailable periods, and subject duplication.
           </p>
