@@ -2998,6 +2998,20 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
     });
   };
 
+  // First pass: gather all teacher-slot assignments
+  const teacherSlotAssignments = new Map(); // teacherId -> slotId -> [{ sectionId, cellKey }]
+
+  Object.entries(assignments || {}).forEach(([cellKey, assignment]) => {
+    const [sectionId, slotId] = splitCellKey(cellKey);
+    const teacherId = assignment.teacherId;
+    if (!teacherId) return;
+    if (!teacherSlotAssignments.has(teacherId)) teacherSlotAssignments.set(teacherId, new Map());
+    const slotMap = teacherSlotAssignments.get(teacherId);
+    if (!slotMap.has(slotId)) slotMap.set(slotId, []);
+    slotMap.get(slotId).push({ sectionId, cellKey });
+  });
+
+  // Second pass: process assignments and detect conflicts
   Object.entries(assignments || {}).forEach(([cellKey, assignment]) => {
     const [sectionId, slotId] = splitCellKey(cellKey);
     const section = sectionsById.get(sectionId);
@@ -3042,21 +3056,32 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       }
     }
 
+    // Multiple-booking detection
     if (config.constraints.enforceNoDoubleBooking) {
-      const teacherSlots = teacherSlotMap.get(teacher.id) || new Map();
-      const existingSectionId = teacherSlots.get(slot.id);
-      if (existingSectionId && existingSectionId !== section.id) {
-        const existingSection = sectionsById.get(existingSectionId);
-        const currentSectionLabel = formatConflictSectionName(section);
-        const existingSectionLabel = existingSection ? formatConflictSectionName(existingSection) : existingSectionId;
-        pushConflict(
-          `${teacher.name} is double-booked at ${formatPeriodOrdinalLabel(slot)} for ${existingSectionLabel} and ${currentSectionLabel}.`,
-          [createCellKey(existingSectionId, slot.id), currentCellKey]
-        );
+      const slotMap = teacherSlotAssignments.get(teacher.id);
+      const assignmentsInSlot = slotMap ? slotMap.get(slot.id) : [];
+      if (assignmentsInSlot && assignmentsInSlot.length > 1) {
+        // Only generate the conflict once per slot per teacher
+        if (assignmentsInSlot[0].cellKey === cellKey) {
+          const sectionLabels = assignmentsInSlot.map(({ sectionId }) => {
+            const sec = sectionsById.get(sectionId);
+            return sec ? formatConflictSectionName(sec) : sectionId;
+          });
+          const involvedCellKeys = assignmentsInSlot.map(({ cellKey }) => cellKey);
+          let conflictType = '';
+          if (assignmentsInSlot.length === 2) {
+            conflictType = 'double-booked';
+          } else if (assignmentsInSlot.length === 3) {
+            conflictType = 'triple-booked';
+          } else {
+            conflictType = 'multiple-booked';
+          }
+          pushConflict(
+            `${teacher.name} is ${conflictType} at ${formatPeriodOrdinalLabel(slot)} for ${sectionLabels.join(", ")}.`,
+            involvedCellKeys
+          );
+        }
       }
-
-      teacherSlots.set(slot.id, section.id);
-      teacherSlotMap.set(teacher.id, teacherSlots);
     }
 
     teacherLoadCount.set(teacher.id, (teacherLoadCount.get(teacher.id) || 0) + 1);
