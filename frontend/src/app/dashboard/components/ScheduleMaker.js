@@ -115,6 +115,8 @@ const EMPTY_SUBJECT_RESTRICTION_FORM = {
 };
 
 export default function ScheduleMaker({ readOnly = false, hideControls = false }) {
+    // Track which suggestion to show for each conflict (default or alternative)
+    const [conflictSuggestionMode, setConflictSuggestionMode] = useState({});
   // State declarations
   const [scheduleType, setScheduleType] = useState("jhs");
   const [configPanel, setConfigPanel] = useState("jhs");
@@ -2284,19 +2286,154 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
           </div>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {schedule.conflicts.map((conflict, index) => {
-              // Simple prescriptive analytics: suggest a fix based on conflict type
-              let suggestion = null;
-              if (/double[- ]?book(ed)?|overlap/i.test(conflict)) {
-                suggestion = "Suggestion: Move one of the assignments to a different period or teacher to resolve the overlap.";
-              } else if (/unavailable|not available|absent/i.test(conflict)) {
-                suggestion = "Suggestion: Assign a different teacher or move the subject to another period.";
-              } else if (/duplicate|already assigned|assigned twice/i.test(conflict)) {
-                suggestion = "Suggestion: Remove or reassign the duplicate assignment.";
-              } else if (/underload|overload/i.test(conflict)) {
-                suggestion = "Suggestion: Adjust teacher assignments to balance the load.";
-              } else {
-                suggestion = "Suggestion: Review this conflict and adjust assignments as needed.";
+              // Dynamic, explicit suggestions: cycle through all possible options for double-booking
+              let suggestions = [];
+              let isDoubleBooking = false;
+              if (/is (double|triple|multiple)-booked at (.+) for (.+)/i.test(conflict)) {
+                const match = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
+                if (match) {
+                  isDoubleBooking = true;
+                  const teacher = match[1];
+                  const period = match[3];
+                  const sectionsStr = match[4];
+                  const sections = sectionsStr.split(/, ?/);
+                  // For demo, use placeholder subject names; in real code, map section to subject if available
+                  sections.forEach((section, i) => {
+                    suggestions.push(`Assign a different teacher to ${section} so that ${teacher} is only scheduled for ${sections.filter((s, idx) => idx !== i).join(' and ')} at ${period}.`);
+                  });
+                  sections.forEach((section) => {
+                    suggestions.push(`For ${section}, move its subject to a different period where ${teacher} is available.`);
+                  });
+                  // Pairwise keep/replace
+                  if (sections.length === 2) {
+                    suggestions.push(`Keep ${teacher} in ${sections[0]}, and assign a different teacher in ${sections[1]}.`);
+                    suggestions.push(`Keep ${teacher} in ${sections[1]}, and assign a different teacher in ${sections[0]}.`);
+                  }
+                }
               }
+              // Fallback to previous logic for other conflicts
+              if (!isDoubleBooking) {
+                const mode = conflictSuggestionMode[index] || 0;
+                // Unavailable teacher
+                if (/(.+) is unavailable\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) (\d+.*?): (.*?) is unavailable\.$/i);
+                  if (match) {
+                    const sectionPeriod = match[1] + ' ' + match[2];
+                    const teacher = match[3];
+                    suggestions = [
+                      `${teacher} is not available for ${sectionPeriod}. Assign a different teacher who is available at this time.`,
+                      `Move this subject in ${sectionPeriod} to a period when ${teacher} is available.`,
+                      `Assign a substitute teacher for ${sectionPeriod} to cover for ${teacher}.`,
+                      `Reschedule ${teacher}'s other commitments to make them available for ${sectionPeriod}.`,
+                    ];
+                  } else {
+                    suggestions = [
+                      "The assigned teacher is unavailable. Assign a different teacher.",
+                      "Move this subject to a period when the teacher is available.",
+                      "Assign a substitute teacher for this period.",
+                    ];
+                  }
+                } else if (/(.+) is restricted for this period\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) (\d+.*?): (.*?) is restricted for this period\.$/i);
+                  if (match) {
+                    const sectionPeriod = match[1] + ' ' + match[2];
+                    const teacher = match[3];
+                    suggestions = [
+                      `${teacher} cannot be assigned to ${sectionPeriod} due to a restriction. Assign a different teacher.`,
+                      `Move this subject in ${sectionPeriod} to a period that is not restricted for ${teacher}.`,
+                      `Request an exception to the restriction for ${teacher} at ${sectionPeriod}.`,
+                    ];
+                  } else {
+                    suggestions = [
+                      "The assigned teacher is restricted for this period. Assign a different teacher.",
+                      "Move this subject to a period without restrictions.",
+                    ];
+                  }
+                } else if (/(.+) is restricted for this period\./i.test(conflict)) {
+                  suggestions = [
+                    "The subject is restricted for this period. Move this subject to a different period.",
+                    "Adjust the subject's restrictions to allow this period.",
+                  ];
+                } else if (/is duplicated in multiple periods for (.+)\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) is duplicated in multiple periods for (.*?)\.$/i);
+                  if (match) {
+                    const subject = match[1];
+                    const section = match[2];
+                    suggestions = [
+                      `${subject} is assigned more than once for ${section}. Remove the duplicate assignment(s) so that this subject only appears once per section.`,
+                      `Keep only one assignment of ${subject} for ${section} and remove the rest.`,
+                      `Reassign one of the duplicate periods to a different subject.`,
+                    ];
+                  }
+                } else if (/lacks subject expertise for (.+)\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) lacks subject expertise for (.*?)\.$/i);
+                  if (match) {
+                    const teacher = match[1];
+                    const subject = match[2];
+                    suggestions = [
+                      `${teacher} does not have the required expertise to teach ${subject}. Assign a teacher who is qualified for this subject.`,
+                      `Assign a different teacher with expertise in ${subject}.`,
+                      `Provide training to ${teacher} so they can teach ${subject} in the future.`,
+                    ];
+                  }
+                } else if (/does not match Grade (\d+)/i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) does not match Grade (\d+)\.$/i);
+                  if (match) {
+                    const teacher = match[1];
+                    const grade = match[2];
+                    suggestions = [
+                      `${teacher} is not qualified to teach Grade ${grade}. Assign a teacher who is qualified for Grade ${grade}.`,
+                      `Assign a teacher with Grade ${grade} qualifications.`,
+                      `Move this assignment to a grade that matches ${teacher}'s qualifications.`,
+                    ];
+                  }
+                } else if (/has more than one specialized subject assigned \((.+)\)\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
+                  if (match) {
+                    const section = match[1];
+                    const subjects = match[2];
+                    suggestions = [
+                      `${section} has more than one specialized subject assigned: ${subjects}. Remove one of these specialized subjects so that only one is assigned to this section.`,
+                      `Review the specialized subjects assigned to ${section} and keep only the most appropriate one.`,
+                      `Consult the curriculum guidelines to determine which specialized subject should remain.`,
+                    ];
+                  }
+                } else if (/Invalid assignment reference in (.+)\./i.test(conflict)) {
+                  const match = conflict.match(/^Invalid assignment reference in (.*?)\.$/i);
+                  if (match) {
+                    const ref = match[1];
+                    suggestions = [
+                      `There is an invalid assignment for ${ref.replace(/-/g, ' ')}. Please review and correct or remove this assignment.`,
+                      `Remove or update the invalid assignment for ${ref.replace(/-/g, ' ')} to resolve this issue.`,
+                      `Check the assignment data for errors or inconsistencies in ${ref.replace(/-/g, ' ')}.`,
+                    ];
+                  }
+                } else if (/period not valid for section settings\./i.test(conflict)) {
+                  const match = conflict.match(/^(.*?) (\d+.*?): period not valid for section settings\.$/i);
+                  if (match) {
+                    const section = match[1];
+                    const period = match[2];
+                    suggestions = [
+                      `The ${period} is not a valid period for ${section} based on its section settings. Move this assignment to a valid period for this section.`,
+                      `Check the section settings for ${section} and assign this subject to a valid period.`,
+                      `Adjust the section's period configuration to allow for this assignment, if appropriate.`,
+                    ];
+                  } else {
+                    suggestions = [
+                      "This period is not valid for the section. Move the assignment to a valid period.",
+                      "Assign this subject to a valid period for the section.",
+                    ];
+                  }
+                } else {
+                  suggestions = [
+                    "Review this conflict and adjust assignments as needed.",
+                    "Consult the scheduling guidelines or contact an administrator for further assistance.",
+                  ];
+                }
+              }
+              // Determine which suggestion to show
+              const mode = conflictSuggestionMode[index] || 0;
+              const suggestionToShow = suggestions[mode % suggestions.length];
               return (
                 <div
                   key={`${conflict}-${index}`}
@@ -2309,23 +2446,57 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                     fontSize: 13,
                     fontWeight: 600,
                     display: 'flex',
-                    justifyContent: 'space-between',
                     alignItems: 'center',
                     gap: 16,
                   }}
                 >
-                  <div>
-                    <div>{conflict}</div>
-                    <div style={{ color: "#7a8bb7", fontSize: 12, fontWeight: 500, marginTop: 6 }}>{suggestion}</div>
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, justifyContent: 'center' }}>
+                    <div style={{ wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{conflict}</div>
+                    <div style={{ color: "#7a8bb7", fontSize: 12, fontWeight: 500, wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{suggestionToShow}</div>
                   </div>
-                  <button
-                    type="button"
-                    style={{ ...secondaryActionStyle(), minWidth: 70, opacity: 0.6, cursor: 'not-allowed' }}
-                    disabled
-                    title="Auto-fix this conflict (coming soon)"
-                  >
-                    Auto-Fix
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        minWidth: 110,
+                        padding: '6px 18px',
+                        background: '#1a3a8c',
+                        color: '#fff',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 8px rgba(26,58,140,0.08)',
+                        opacity: 0.7,
+                        transition: 'background 0.2s',
+                      }}
+                      disabled
+                      title="Apply this fix (coming soon)"
+                    >
+                      Apply Fix
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        border: 'none',
+                        borderRadius: 999,
+                        minWidth: 110,
+                        padding: '6px 18px',
+                        background: '#eaf0fa',
+                        color: '#1a3a8c',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 8px rgba(26,58,140,0.08)',
+                        opacity: 0.7,
+                      }}
+                      onClick={() => setConflictSuggestionMode((prev) => ({ ...prev, [index]: (prev[index] || 0) + 1 }))}
+                      title="See other options"
+                    >
+                      See Other Option
+                    </button>
+                  </div>
                 </div>
               );
             })}
