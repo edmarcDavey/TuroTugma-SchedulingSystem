@@ -2286,33 +2286,290 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
           </div>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {schedule.conflicts.map((conflict, index) => {
-              // Dynamic, explicit suggestions: cycle through all possible options for double-booking
+                            // Handler for Apply Fix button for multiple-booking conflicts
+                            async function handleApplyFixMultipleBooking() {
+                              if (!isMultipleBooking) return;
+                              const match = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
+                              if (!match) return;
+                              const teacher = match[1];
+                              const period = match[3];
+                              const sectionsStr = match[4];
+                              const sectionNames = sectionsStr.split(/, ?/);
+                              const mode = conflictSuggestionMode[index] || 0;
+                              let sectionsToChange = [];
+                              let sectionToKeep = null;
+                              if (sectionNames.length === 2) {
+                                if (mode % 2 === 0) {
+                                  sectionsToChange = [sectionNames[0]];
+                                  sectionToKeep = sectionNames[1];
+                                } else {
+                                  sectionsToChange = [sectionNames[1]];
+                                  sectionToKeep = sectionNames[0];
+                                }
+                              } else if (sectionNames.length === 3) {
+                                if (mode % 3 === 0) {
+                                  sectionsToChange = [sectionNames[0], sectionNames[1]];
+                                  sectionToKeep = sectionNames[2];
+                                } else if (mode % 3 === 1) {
+                                  sectionsToChange = [sectionNames[1], sectionNames[2]];
+                                  sectionToKeep = sectionNames[0];
+                                } else {
+                                  sectionsToChange = [sectionNames[0], sectionNames[2]];
+                                  sectionToKeep = sectionNames[1];
+                                }
+                              } else if (sectionNames.length > 3) {
+                                const keepIdx = mode % sectionNames.length;
+                                sectionToKeep = sectionNames[keepIdx];
+                                sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
+                              }
+                              // Helper: normalize a string for loose matching
+                              function normalizeSectionString(str) {
+                                return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
+                              }
+                              function normalizePeriodLabel(str) {
+                                return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
+                              }
+                              let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
+                              if (!slot) {
+                                const periodNumMatch = period.match(/(\d+)/);
+                                if (periodNumMatch) {
+                                  const periodNum = parseInt(periodNumMatch[1], 10);
+                                  slot = slots.find((s) => String(s.period) === String(periodNum));
+                                }
+                              }
+                              if (!slot) return;
+                              // Build new assignments (merge with drafts)
+                              let nextAssignments = { ...(schedule?.assignments || {}) };
+                              let nextDrafts = { ...(cellEditorDrafts || {}) };
+                              // For each section to change, assign first available eligible teacher (not the conflicted teacher)
+                              sectionsToChange.forEach((sectionName) => {
+                                let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
+                                if (!sectionObj) {
+                                  sectionObj = sections.find((sec) => {
+                                    const code = sec.code || '';
+                                    const name = sec.name || '';
+                                    const grade = sec.grade ? String(sec.grade) : '';
+                                    return (
+                                      normalizeSectionString(code) === normalizeSectionString(sectionName) ||
+                                      normalizeSectionString(name) === normalizeSectionString(sectionName) ||
+                                      normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
+                                      normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
+                                    );
+                                  });
+                                }
+                                if (!sectionObj) return;
+                                const cellKey = createCellKey(sectionObj.id, slot.id);
+                                // Determine subjectId (from draft or assignment)
+                                const draft = cellEditorDrafts?.[cellKey] || null;
+                                let subjectId = draft?.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null);
+                                if (!subjectId) return;
+                                const subject = subjectsById.get(subjectId);
+                                // Find available teachers for this subject and slot (excluding conflicted teacher)
+                                let availableTeachers = [];
+                                if (subject && slot) {
+                                  availableTeachers = activeTeachers.filter((t) => {
+                                    if (t.name === teacher) return false;
+                                    return isTeacherEligible({
+                                      teacher: t,
+                                      subject,
+                                      section: sectionObj,
+                                      slot,
+                                      constraints: config.constraints,
+                                      teacherBusyBySlot,
+                                      excludedSectionId: sectionObj.id,
+                                    });
+                                  });
+                                }
+                                // Assign first available teacher, or clear teacher if none
+                                const newTeacherId = availableTeachers.length > 0 ? availableTeachers[0].id : '';
+                                nextDrafts[cellKey] = { subjectId, teacherId: newTeacherId };
+                                // Optionally, update assignments as well for immediate effect
+                                nextAssignments[cellKey] = {
+                                  subjectId,
+                                  teacherId: newTeacherId,
+                                  source: 'auto-fix',
+                                  updatedAt: new Date().toISOString(),
+                                };
+                              });
+                              // For section to keep, do nothing (keep conflicted teacher)
+                              // Update state
+                              // Re-evaluate conflicts after autofix
+                              const evaluation = evaluateSchedule({
+                                assignments: nextAssignments,
+                                sections,
+                                slots,
+                                subjects,
+                                teachers: activeTeachers,
+                                scheduleType,
+                                config,
+                              });
+                              setCellEditorDrafts(nextDrafts);
+                              setSchedule((current) => ({
+                                ...current,
+                                assignments: nextAssignments,
+                                conflicts: evaluation.conflicts,
+                                conflictDetails: evaluation.conflictDetails,
+                                teacherLoadPercent: evaluation.teacherLoadPercent,
+                                updatedAt: new Date().toISOString(),
+                              }));
+                            }
+              // Dynamic, explicit suggestions: fully resolve multiple-booking conflicts
               let suggestions = [];
-              let isDoubleBooking = false;
+              let isMultipleBooking = false;
+              let debugInfo = null;
               if (/is (double|triple|multiple)-booked at (.+) for (.+)/i.test(conflict)) {
                 const match = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
                 if (match) {
-                  isDoubleBooking = true;
+                  isMultipleBooking = true;
                   const teacher = match[1];
                   const period = match[3];
                   const sectionsStr = match[4];
-                  const sections = sectionsStr.split(/, ?/);
-                  // For demo, use placeholder subject names; in real code, map section to subject if available
-                  sections.forEach((section, i) => {
-                    suggestions.push(`Assign a different teacher to ${section} so that ${teacher} is only scheduled for ${sections.filter((s, idx) => idx !== i).join(' and ')} at ${period}.`);
-                  });
-                  sections.forEach((section) => {
-                    suggestions.push(`For ${section}, move its subject to a different period where ${teacher} is available.`);
-                  });
-                  // Pairwise keep/replace
-                  if (sections.length === 2) {
-                    suggestions.push(`Keep ${teacher} in ${sections[0]}, and assign a different teacher in ${sections[1]}.`);
-                    suggestions.push(`Keep ${teacher} in ${sections[1]}, and assign a different teacher in ${sections[0]}.`);
+                  const sectionNames = sectionsStr.split(/, ?/);
+                  // Build suggestions as before
+                  if (sectionNames.length === 2) {
+                    suggestions.push(`Assign a different teacher to ${sectionNames[0]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[1]} at that period.`);
+                    suggestions.push(`Assign a different teacher to ${sectionNames[1]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[0]} at that period.`);
+                  } else if (sectionNames.length === 3) {
+                    suggestions.push(`Assign different teachers to ${sectionNames[0]} and ${sectionNames[1]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[2]} at that period.`);
+                    suggestions.push(`Assign different teachers to ${sectionNames[1]} and ${sectionNames[2]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[0]} at that period.`);
+                    suggestions.push(`Assign different teachers to ${sectionNames[0]} and ${sectionNames[2]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[1]} at that period.`);
+                  } else if (sectionNames.length > 3) {
+                    for (let i = 0; i < sectionNames.length; i++) {
+                      const keepSection = sectionNames[i];
+                      const reassignSections = sectionNames.filter((_, idx) => idx !== i);
+                      suggestions.push(`Assign different teachers to ${reassignSections.join(", ")} at ${period}, so ${teacher} is only scheduled for ${keepSection} at that period.`);
+                    }
                   }
+                  // Build debug info for the current suggestion
+                  const mode = conflictSuggestionMode[index] || 0;
+                  let sectionsToChange = [];
+                  let sectionToKeep = null;
+                  if (sectionNames.length === 2) {
+                    // Only one to change, one to keep
+                    if (mode % 2 === 0) {
+                      sectionsToChange = [sectionNames[0]];
+                      sectionToKeep = sectionNames[1];
+                    } else {
+                      sectionsToChange = [sectionNames[1]];
+                      sectionToKeep = sectionNames[0];
+                    }
+                  } else if (sectionNames.length === 3) {
+                    if (mode % 3 === 0) {
+                      sectionsToChange = [sectionNames[0], sectionNames[1]];
+                      sectionToKeep = sectionNames[2];
+                    } else if (mode % 3 === 1) {
+                      sectionsToChange = [sectionNames[1], sectionNames[2]];
+                      sectionToKeep = sectionNames[0];
+                    } else {
+                      sectionsToChange = [sectionNames[0], sectionNames[2]];
+                      sectionToKeep = sectionNames[1];
+                    }
+                  } else if (sectionNames.length > 3) {
+                    const keepIdx = mode % sectionNames.length;
+                    sectionToKeep = sectionNames[keepIdx];
+                    sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
+                  }
+                  // Find slot by period label
+                  // Robustly match period label to slot (normalize both)
+                  function normalizePeriodLabel(str) {
+                    return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
+                  }
+                  let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
+                  // Fallback: try to match by period number (e.g., "1st Period" => slot with period: 1)
+                  if (!slot) {
+                    const periodNumMatch = period.match(/(\d+)/);
+                    if (periodNumMatch) {
+                      const periodNum = parseInt(periodNumMatch[1], 10);
+                      slot = slots.find((s) => String(s.period) === String(periodNum));
+                    }
+                  }
+                  debugInfo = [];
+                  debugInfo.push(`[DEBUG]`);
+                  debugInfo.push(`Conflict: ${conflict}`);
+                  debugInfo.push(`Period: ${period}`);
+                  debugInfo.push(`Sections to change: ${sectionsToChange.join(", ")}`);
+                  // Helper: normalize a string for loose matching
+                  function normalizeSectionString(str) {
+                    return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
+                  }
+                  sectionsToChange.forEach((sectionName) => {
+                    // Use the full sections list for matching
+                    let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
+                    if (!sectionObj) {
+                      // Try matching by code or name only
+                      sectionObj = sections.find((sec) => {
+                        const code = sec.code || '';
+                        const name = sec.name || '';
+                        const grade = sec.grade ? String(sec.grade) : '';
+                        return (
+                          normalizeSectionString(code) === normalizeSectionString(sectionName) ||
+                          normalizeSectionString(name) === normalizeSectionString(sectionName) ||
+                          normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
+                          normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
+                        );
+                      });
+                    }
+                    if (!sectionObj) {
+                      debugInfo.push(`  ${sectionName}: [Section not found in data]`);
+                      return;
+                    }
+                    let cellKey = null;
+                    let assignment = null;
+                    let subject = null;
+                    let slotId = slot ? slot.id : '(no slot)';
+                    let sectionId = sectionObj.id || '(no section id)';
+                    let draft = null;
+                    if (slot) {
+                      cellKey = createCellKey(sectionObj.id, slot.id);
+                      // Use draft if present, else assignment
+                      draft = cellEditorDrafts?.[cellKey] || null;
+                      if (draft && (draft.subjectId || draft.teacherId)) {
+                        assignment = {
+                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                          source: 'draft',
+                          updatedAt: null
+                        };
+                      } else {
+                        assignment = schedule?.assignments?.[cellKey] || null;
+                      }
+                      subject = assignment && assignment.subjectId ? subjectsById.get(assignment.subjectId) : null;
+                    }
+                    // Find available teachers for this subject and slot
+                    let availableTeachers = [];
+                    if (subject && slot) {
+                      availableTeachers = activeTeachers.filter((t) => {
+                        if (t.name === teacher) return false; // Exclude conflicted teacher
+                        return isTeacherEligible({
+                          teacher: t,
+                          subject,
+                          section: sectionObj,
+                          slot,
+                          constraints: config.constraints,
+                          teacherBusyBySlot,
+                          excludedSectionId: sectionObj.id,
+                        });
+                      });
+                    }
+                    debugInfo.push(`  ${sectionName}:`);
+                    debugInfo.push(`    Section ID: ${sectionId}`);
+                    debugInfo.push(`    Slot ID: ${slotId}`);
+                    debugInfo.push(`    CellKey: ${cellKey || '(no id)'}`);
+                    debugInfo.push(`    Assignment: ${assignment ? JSON.stringify(assignment) : 'null'}`);
+                    debugInfo.push(`    Assigned Subject: ${subject ? subject.subjectName : '(none)'}`);
+                    debugInfo.push(`    Assigned Teacher: ${assignment ? (facultyById.get(assignment.teacherId)?.name || '(none)') : '(none)'}`);
+                    debugInfo.push(`    Available Teachers: ${availableTeachers.length > 0 ? availableTeachers.map(t => t.name).join(', ') : '(none)'}`);
+                    // Show assignment keys for this cell
+                    if (schedule && schedule.assignments && cellKey) {
+                      debugInfo.push(`    Assignment keys: ${Object.keys(schedule.assignments).filter(k => k === cellKey).join(', ')}`);
+                    }
+                  });
+                  // (Removed debug line for all assignment keys)
+                  debugInfo.push(`Section to keep: ${sectionToKeep}`);
                 }
               }
               // Fallback to previous logic for other conflicts
-              if (!isDoubleBooking) {
+              if (!isMultipleBooking) {
                 const mode = conflictSuggestionMode[index] || 0;
                 // Unavailable teacher
                 if (/(.+) is unavailable\./i.test(conflict)) {
@@ -2468,11 +2725,11 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                         fontSize: 13,
                         cursor: 'pointer',
                         boxShadow: '0 2px 8px rgba(26,58,140,0.08)',
-                        opacity: 0.7,
+                        opacity: 1,
                         transition: 'background 0.2s',
                       }}
-                      disabled
-                      title="Apply this fix (coming soon)"
+                      onClick={handleApplyFixMultipleBooking}
+                      title="Apply this fix"
                     >
                       Apply Fix
                     </button>
