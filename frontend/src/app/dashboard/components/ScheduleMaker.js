@@ -767,6 +767,461 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
     }
   };
 
+  const handleAutoFixAllConflicts = () => {
+    if (!schedule) {
+      showNotice("Generate or load a schedule first.", "error");
+      return;
+    }
+
+    const normalizeSectionString = (value) => String(value || "").replace(/\s+/g, "").replace(/-/g, "").toLowerCase();
+    const normalizePeriodLabel = (value) => String(value || "").replace(/\s+/g, "").replace(/[-–—]/g, "").replace(/\./g, "").toLowerCase();
+
+    const findSectionByLabel = (label) => {
+      let sectionObj = sections.find((sec) => normalizeSectionString(formatConflictSectionName(sec)) === normalizeSectionString(label));
+      if (!sectionObj) {
+        sectionObj = sections.find((sec) => {
+          const code = sec.code || "";
+          const name = sec.name || "";
+          const grade = sec.grade ? String(sec.grade) : "";
+          return (
+            normalizeSectionString(code) === normalizeSectionString(label) ||
+            normalizeSectionString(name) === normalizeSectionString(label) ||
+            normalizeSectionString(`${grade}${name}`) === normalizeSectionString(label) ||
+            normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(label)
+          );
+        });
+      }
+      return sectionObj;
+    };
+
+    let workingAssignments = { ...(schedule.assignments || {}) };
+    let workingDrafts = { ...(cellEditorDrafts || {}) };
+    let fixedCount = 0;
+    let pass = 0;
+    const maxPasses = 60;
+
+    while (pass < maxPasses) {
+      pass += 1;
+
+      const evaluation = evaluateSchedule({
+        assignments: workingAssignments,
+        sections,
+        slots,
+        subjects,
+        teachers: activeTeachers,
+        scheduleType,
+        config,
+      });
+
+      const conflicts = Array.isArray(evaluation.conflicts) ? evaluation.conflicts : [];
+      const conflictDetails = Array.isArray(evaluation.conflictDetails) ? evaluation.conflictDetails : [];
+      if (conflicts.length === 0) {
+        break;
+      }
+
+      const orderedConflictIndexes = [
+        ...conflicts.map((message, idx) => ({ message, idx })).filter((item) => /is duplicated in multiple periods for (.+)\./i.test(item.message)).map((item) => item.idx),
+        ...conflicts.map((message, idx) => ({ message, idx })).filter((item) => /has more than one specialized subject assigned \((.+)\)\./i.test(item.message)).map((item) => item.idx),
+        ...conflicts.map((message, idx) => ({ message, idx })).filter((item) => /is (double|triple|multiple)-booked at (.+) for (.+)/i.test(item.message)).map((item) => item.idx),
+      ];
+
+      let appliedThisPass = false;
+
+      orderedConflictIndexes.some((conflictIndex) => {
+        const conflict = conflicts[conflictIndex];
+        const mode = conflictSuggestionMode[conflictIndex] || 0;
+        const detail = conflictDetails.find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
+
+        const getEffectiveAssignment = (cellKey) => {
+          const draft = workingDrafts?.[cellKey] || null;
+          if (draft && (draft.subjectId || draft.teacherId)) {
+            return {
+              subjectId: draft.subjectId || (workingAssignments?.[cellKey]?.subjectId ?? null),
+              teacherId: draft.teacherId || (workingAssignments?.[cellKey]?.teacherId ?? null),
+            };
+          }
+          return workingAssignments?.[cellKey] || null;
+        };
+
+        const multipleBookingMatch = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
+        if (multipleBookingMatch) {
+          const conflictedTeacherName = multipleBookingMatch[1];
+          const period = multipleBookingMatch[3];
+          const sectionNames = multipleBookingMatch[4].split(/, ?/);
+
+          let sectionsToChange = [];
+          if (sectionNames.length === 2) {
+            sectionsToChange = mode % 2 === 0 ? [sectionNames[0]] : [sectionNames[1]];
+          } else if (sectionNames.length === 3) {
+            if (mode % 3 === 0) {
+              sectionsToChange = [sectionNames[0], sectionNames[1]];
+            } else if (mode % 3 === 1) {
+              sectionsToChange = [sectionNames[1], sectionNames[2]];
+            } else {
+              sectionsToChange = [sectionNames[0], sectionNames[2]];
+            }
+          } else if (sectionNames.length > 3) {
+            const keepIdx = mode % sectionNames.length;
+            sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
+          }
+
+          let slot = slots.find((item) => normalizePeriodLabel(item.label) === normalizePeriodLabel(period));
+          if (!slot) {
+            const periodNumMatch = period.match(/(\d+)/);
+            if (periodNumMatch) {
+              const periodNum = parseInt(periodNumMatch[1], 10);
+              slot = slots.find((item) => String(item.period) === String(periodNum));
+            }
+          }
+          if (!slot) {
+            return false;
+          }
+
+          let changed = false;
+          sectionsToChange.forEach((sectionName) => {
+            const sectionObj = findSectionByLabel(sectionName);
+            if (!sectionObj) {
+              return;
+            }
+
+            const cellKey = createCellKey(sectionObj.id, slot.id);
+            const assignment = getEffectiveAssignment(cellKey);
+            const subjectId = assignment?.subjectId || null;
+            if (!subjectId) {
+              return;
+            }
+
+            const subjectObj = subjectsById.get(subjectId);
+            if (!subjectObj) {
+              return;
+            }
+
+            const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
+            const availableTeacher = activeTeachers.find((teacher) => {
+              if (teacher.name === conflictedTeacherName) {
+                return false;
+              }
+
+              return isTeacherEligible({
+                teacher,
+                subject: subjectObj,
+                section: sectionObj,
+                slot,
+                constraints: config.constraints,
+                teacherBusyBySlot: busyMap,
+                excludedSectionId: sectionObj.id,
+              });
+            });
+
+            const newTeacherId = availableTeacher ? availableTeacher.id : "";
+            if ((assignment?.teacherId || "") === newTeacherId) {
+              return;
+            }
+
+            workingDrafts[cellKey] = { subjectId, teacherId: newTeacherId };
+            workingAssignments[cellKey] = {
+              subjectId,
+              teacherId: newTeacherId,
+              source: "auto-fix",
+              updatedAt: new Date().toISOString(),
+            };
+            changed = true;
+          });
+
+          if (changed) {
+            fixedCount += 1;
+            appliedThisPass = true;
+            return true;
+          }
+
+          return false;
+        }
+
+        const duplicateSubjectMatch = conflict.match(/^(.*?) is duplicated in multiple periods for (.*?)\.$/i);
+        if (duplicateSubjectMatch) {
+          const sectionObj = findSectionByLabel(duplicateSubjectMatch[2]);
+          if (!sectionObj) {
+            return false;
+          }
+
+          const duplicateEntries = Array.isArray(detail?.cellKeys)
+            ? detail.cellKeys
+                .map((cellKey) => {
+                  const [, slotId] = splitCellKey(cellKey);
+                  return { cellKey, slot: slotsById.get(slotId) };
+                })
+                .filter((entry) => Boolean(entry.cellKey))
+            : [];
+
+          if (duplicateEntries.length <= 1) {
+            return false;
+          }
+
+          const keepIndex = mode % duplicateEntries.length;
+          const targetEntries = duplicateEntries.filter((_, entryIndex) => entryIndex !== keepIndex);
+          const sectionCellKeys = Array.from(new Set([
+            ...Object.keys(workingAssignments || {}),
+            ...Object.keys(workingDrafts || {}),
+          ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
+
+          const assignedSubjectIds = new Set();
+          sectionCellKeys.forEach((cellKey) => {
+            const assignment = getEffectiveAssignment(cellKey);
+            if (assignment?.subjectId) {
+              assignedSubjectIds.add(assignment.subjectId);
+            }
+          });
+
+          const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
+          const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
+
+          let changed = false;
+          targetEntries.forEach((entry, replacementIndex) => {
+            const replacementSubject = missingSubjects[replacementIndex] || missingSubjects[0] || null;
+            if (!replacementSubject || !entry?.cellKey) {
+              return;
+            }
+
+            const currentAssignment = getEffectiveAssignment(entry.cellKey);
+            let newTeacherId = currentAssignment?.teacherId || "";
+            const currentTeacher = newTeacherId ? facultyById.get(newTeacherId) : null;
+            const canKeepTeacher = entry.slot && currentTeacher
+              ? isTeacherEligible({
+                  teacher: currentTeacher,
+                  subject: replacementSubject,
+                  section: sectionObj,
+                  slot: entry.slot,
+                  constraints: config.constraints,
+                  teacherBusyBySlot: buildTeacherBusyMap(workingAssignments, sectionsById, slotsById),
+                  excludedSectionId: sectionObj.id,
+                })
+              : false;
+
+            if (!canKeepTeacher) {
+              const fallbackTeacher = entry.slot
+                ? activeTeachers.find((teacher) =>
+                    isTeacherEligible({
+                      teacher,
+                      subject: replacementSubject,
+                      section: sectionObj,
+                      slot: entry.slot,
+                      constraints: config.constraints,
+                      teacherBusyBySlot: buildTeacherBusyMap(workingAssignments, sectionsById, slotsById),
+                      excludedSectionId: sectionObj.id,
+                    })
+                  )
+                : null;
+              newTeacherId = fallbackTeacher ? fallbackTeacher.id : "";
+            }
+
+            if ((currentAssignment?.subjectId || "") === replacementSubject.id && (currentAssignment?.teacherId || "") === newTeacherId) {
+              return;
+            }
+
+            workingDrafts[entry.cellKey] = { subjectId: replacementSubject.id, teacherId: newTeacherId };
+            workingAssignments[entry.cellKey] = {
+              subjectId: replacementSubject.id,
+              teacherId: newTeacherId,
+              source: "auto-fix",
+              updatedAt: new Date().toISOString(),
+            };
+            changed = true;
+          });
+
+          if (changed) {
+            fixedCount += 1;
+            appliedThisPass = true;
+            return true;
+          }
+
+          return false;
+        }
+
+        const specializedMatch = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
+        if (specializedMatch) {
+          const sectionObj = findSectionByLabel(specializedMatch[1]);
+          if (!sectionObj) {
+            return false;
+          }
+
+          const specializedEntries = Array.isArray(detail?.cellKeys)
+            ? detail.cellKeys
+                .map((cellKey) => {
+                  const [, slotId] = splitCellKey(cellKey);
+                  const slot = slotsById.get(slotId);
+                  const assignment = getEffectiveAssignment(cellKey);
+                  const subjectObj = assignment?.subjectId ? subjectsById.get(assignment.subjectId) : null;
+                  return { cellKey, slot, assignment, subjectObj };
+                })
+                .filter((entry) => {
+                  const type = String(entry?.subjectObj?.subjectType || "").toLowerCase();
+                  return Boolean(entry?.cellKey) && type === "specialized";
+                })
+            : [];
+
+          if (specializedEntries.length <= 1) {
+            return false;
+          }
+
+          const sectionCellKeys = Array.from(new Set([
+            ...Object.keys(workingAssignments || {}),
+            ...Object.keys(workingDrafts || {}),
+          ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
+
+          const assignedSubjectIds = new Set();
+          sectionCellKeys.forEach((cellKey) => {
+            const assignment = getEffectiveAssignment(cellKey);
+            if (assignment?.subjectId) {
+              assignedSubjectIds.add(assignment.subjectId);
+            }
+          });
+
+          const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
+          const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
+
+          const options = specializedEntries.flatMap((keepSubjectEntry) =>
+            specializedEntries.map((keepPeriodEntry) => ({ keepSubjectEntry, keepPeriodEntry }))
+          );
+          if (options.length === 0) {
+            return false;
+          }
+
+          const selected = options[mode % options.length];
+          const keepSubjectEntry = selected.keepSubjectEntry;
+          const keepPeriodEntry = selected.keepPeriodEntry;
+          const reassignEntries = specializedEntries.filter((entry) => entry.cellKey !== keepPeriodEntry.cellKey);
+
+          const pickTeacherId = ({ preferredTeacherId, subject, slot }) => {
+            if (!subject || !slot) {
+              return "";
+            }
+
+            const preferred = preferredTeacherId ? facultyById.get(preferredTeacherId) : null;
+            if (
+              preferred &&
+              isTeacherEligible({
+                teacher: preferred,
+                subject,
+                section: sectionObj,
+                slot,
+                constraints: config.constraints,
+                teacherBusyBySlot: buildTeacherBusyMap(workingAssignments, sectionsById, slotsById),
+                excludedSectionId: sectionObj.id,
+              })
+            ) {
+              return preferred.id;
+            }
+
+            const fallback = activeTeachers.find((teacher) =>
+              isTeacherEligible({
+                teacher,
+                subject,
+                section: sectionObj,
+                slot,
+                constraints: config.constraints,
+                teacherBusyBySlot: buildTeacherBusyMap(workingAssignments, sectionsById, slotsById),
+                excludedSectionId: sectionObj.id,
+              })
+            );
+
+            return fallback ? fallback.id : "";
+          };
+
+          let changed = false;
+          const keepCellKey = keepPeriodEntry.cellKey;
+          const keepSubjectId = keepSubjectEntry?.assignment?.subjectId || keepSubjectEntry?.subjectObj?.id || null;
+          if (keepCellKey && keepSubjectId) {
+            const keepSubjectObj = subjectsById.get(keepSubjectId);
+            const keepTeacherId = pickTeacherId({
+              preferredTeacherId: keepPeriodEntry?.assignment?.teacherId || "",
+              subject: keepSubjectObj,
+              slot: keepPeriodEntry?.slot,
+            });
+            const currentAssignment = getEffectiveAssignment(keepCellKey);
+
+            if ((currentAssignment?.subjectId || "") !== keepSubjectId || (currentAssignment?.teacherId || "") !== keepTeacherId) {
+              workingDrafts[keepCellKey] = { subjectId: keepSubjectId, teacherId: keepTeacherId };
+              workingAssignments[keepCellKey] = {
+                subjectId: keepSubjectId,
+                teacherId: keepTeacherId,
+                source: "auto-fix",
+                updatedAt: new Date().toISOString(),
+              };
+              changed = true;
+            }
+          }
+
+          reassignEntries.forEach((entry, replacementIndex) => {
+            const replacementSubject = missingSubjects[replacementIndex] || missingSubjects[0] || null;
+            if (!replacementSubject || !entry?.cellKey) {
+              return;
+            }
+
+            const teacherId = pickTeacherId({
+              preferredTeacherId: entry?.assignment?.teacherId || "",
+              subject: replacementSubject,
+              slot: entry?.slot,
+            });
+            const currentAssignment = getEffectiveAssignment(entry.cellKey);
+            if ((currentAssignment?.subjectId || "") === replacementSubject.id && (currentAssignment?.teacherId || "") === teacherId) {
+              return;
+            }
+
+            workingDrafts[entry.cellKey] = { subjectId: replacementSubject.id, teacherId: teacherId };
+            workingAssignments[entry.cellKey] = {
+              subjectId: replacementSubject.id,
+              teacherId: teacherId,
+              source: "auto-fix",
+              updatedAt: new Date().toISOString(),
+            };
+            changed = true;
+          });
+
+          if (changed) {
+            fixedCount += 1;
+            appliedThisPass = true;
+            return true;
+          }
+
+          return false;
+        }
+
+        return false;
+      });
+
+      if (!appliedThisPass) {
+        break;
+      }
+    }
+
+    const finalEvaluation = evaluateSchedule({
+      assignments: workingAssignments,
+      sections,
+      slots,
+      subjects,
+      teachers: activeTeachers,
+      scheduleType,
+      config,
+    });
+
+    setCellEditorDrafts(workingDrafts);
+    setSchedule((current) => ({
+      ...current,
+      assignments: workingAssignments,
+      conflicts: finalEvaluation.conflicts,
+      conflictDetails: finalEvaluation.conflictDetails,
+      teacherLoadPercent: finalEvaluation.teacherLoadPercent,
+      updatedAt: new Date().toISOString(),
+    }));
+
+    if (fixedCount > 0) {
+      showNotice(`Auto-fix all applied ${fixedCount} fix(es). Remaining conflicts: ${finalEvaluation.conflicts.length}.`, "success");
+      return;
+    }
+
+    showNotice("Auto-fix all could not apply any supported fixes for the current conflicts.", "error");
+  };
+
   const handleSaveDraft = () => {
     if (!schedule) {
       showNotice("Generate or load a schedule first.", "error");
@@ -2277,123 +2732,456 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
             </div>
             <button
               type="button"
-              style={{ ...secondaryActionStyle(), minWidth: 90, opacity: 0.6, cursor: 'not-allowed' }}
-              disabled
-              title="Auto-fix all conflicts (coming soon)"
+              style={{ ...secondaryActionStyle(), minWidth: 90 }}
+              onClick={handleAutoFixAllConflicts}
+              title="Auto-fix all supported conflicts"
             >
               Auto-Fix All
             </button>
           </div>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {schedule.conflicts.map((conflict, index) => {
-                            // Handler for Apply Fix button for multiple-booking conflicts
-                            async function handleApplyFixMultipleBooking() {
-                              if (!isMultipleBooking) return;
-                              const match = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
-                              if (!match) return;
-                              const teacher = match[1];
-                              const period = match[3];
-                              const sectionsStr = match[4];
-                              const sectionNames = sectionsStr.split(/, ?/);
+                            // Handler for Apply Fix button for supported conflict types
+                            async function handleApplyFixConflict() {
+                              const multipleBookingMatch = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
+                              if (multipleBookingMatch) {
+                                const teacher = multipleBookingMatch[1];
+                                const period = multipleBookingMatch[3];
+                                const sectionsStr = multipleBookingMatch[4];
+                                const sectionNames = sectionsStr.split(/, ?/);
+                                const mode = conflictSuggestionMode[index] || 0;
+                                let sectionsToChange = [];
+                                if (sectionNames.length === 2) {
+                                  sectionsToChange = mode % 2 === 0 ? [sectionNames[0]] : [sectionNames[1]];
+                                } else if (sectionNames.length === 3) {
+                                  if (mode % 3 === 0) {
+                                    sectionsToChange = [sectionNames[0], sectionNames[1]];
+                                  } else if (mode % 3 === 1) {
+                                    sectionsToChange = [sectionNames[1], sectionNames[2]];
+                                  } else {
+                                    sectionsToChange = [sectionNames[0], sectionNames[2]];
+                                  }
+                                } else if (sectionNames.length > 3) {
+                                  const keepIdx = mode % sectionNames.length;
+                                  sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
+                                }
+
+                                function normalizeSectionString(str) {
+                                  return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
+                                }
+                                function normalizePeriodLabel(str) {
+                                  return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
+                                }
+
+                                let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
+                                if (!slot) {
+                                  const periodNumMatch = period.match(/(\d+)/);
+                                  if (periodNumMatch) {
+                                    const periodNum = parseInt(periodNumMatch[1], 10);
+                                    slot = slots.find((s) => String(s.period) === String(periodNum));
+                                  }
+                                }
+                                if (!slot) return;
+
+                                let nextAssignments = { ...(schedule?.assignments || {}) };
+                                let nextDrafts = { ...(cellEditorDrafts || {}) };
+
+                                sectionsToChange.forEach((sectionName) => {
+                                  let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
+                                  if (!sectionObj) {
+                                    sectionObj = sections.find((sec) => {
+                                      const code = sec.code || '';
+                                      const name = sec.name || '';
+                                      const grade = sec.grade ? String(sec.grade) : '';
+                                      return (
+                                        normalizeSectionString(code) === normalizeSectionString(sectionName) ||
+                                        normalizeSectionString(name) === normalizeSectionString(sectionName) ||
+                                        normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
+                                        normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
+                                      );
+                                    });
+                                  }
+                                  if (!sectionObj) return;
+
+                                  const cellKey = createCellKey(sectionObj.id, slot.id);
+                                  const draft = cellEditorDrafts?.[cellKey] || null;
+                                  const subjectId = draft?.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null);
+                                  if (!subjectId) return;
+                                  const subject = subjectsById.get(subjectId);
+
+                                  let availableTeachers = [];
+                                  if (subject && slot) {
+                                    availableTeachers = activeTeachers.filter((t) => {
+                                      if (t.name === teacher) return false;
+                                      return isTeacherEligible({
+                                        teacher: t,
+                                        subject,
+                                        section: sectionObj,
+                                        slot,
+                                        constraints: config.constraints,
+                                        teacherBusyBySlot,
+                                        excludedSectionId: sectionObj.id,
+                                      });
+                                    });
+                                  }
+
+                                  const newTeacherId = availableTeachers.length > 0 ? availableTeachers[0].id : '';
+                                  nextDrafts[cellKey] = { subjectId, teacherId: newTeacherId };
+                                  nextAssignments[cellKey] = {
+                                    subjectId,
+                                    teacherId: newTeacherId,
+                                    source: 'auto-fix',
+                                    updatedAt: new Date().toISOString(),
+                                  };
+                                });
+
+                                const evaluation = evaluateSchedule({
+                                  assignments: nextAssignments,
+                                  sections,
+                                  slots,
+                                  subjects,
+                                  teachers: activeTeachers,
+                                  scheduleType,
+                                  config,
+                                });
+                                setCellEditorDrafts(nextDrafts);
+                                setSchedule((current) => ({
+                                  ...current,
+                                  assignments: nextAssignments,
+                                  conflicts: evaluation.conflicts,
+                                  conflictDetails: evaluation.conflictDetails,
+                                  teacherLoadPercent: evaluation.teacherLoadPercent,
+                                  updatedAt: new Date().toISOString(),
+                                }));
+                                return;
+                              }
+
+                                const specializedConflictMatch = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
+                                if (specializedConflictMatch) {
+                                  const sectionLabel = specializedConflictMatch[1];
+                                  const mode = conflictSuggestionMode[index] || 0;
+
+                                  function findSectionForSpecializedFix(label) {
+                                    let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(label).toLowerCase());
+                                    if (!sectionObj) {
+                                      sectionObj = sections.find((sec) => {
+                                        const code = sec.code || "";
+                                        const name = sec.name || "";
+                                        const grade = sec.grade ? String(sec.grade) : "";
+                                        return (
+                                          sanitizeText(code).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                          sanitizeText(name).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                          sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                          sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(label).toLowerCase()
+                                        );
+                                      });
+                                    }
+                                    return sectionObj;
+                                  }
+
+                                  const sectionObj = findSectionForSpecializedFix(sectionLabel);
+                                  if (!sectionObj) {
+                                    return;
+                                  }
+
+                                  const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
+                                  const specializedEntries = Array.isArray(conflictDetail?.cellKeys)
+                                    ? conflictDetail.cellKeys
+                                        .map((cellKey) => {
+                                          const [, slotId] = splitCellKey(cellKey);
+                                          const slot = slotsById.get(slotId);
+                                          const draft = cellEditorDrafts?.[cellKey] || null;
+                                          const assignment = draft?.subjectId || draft?.teacherId
+                                            ? {
+                                                subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                                                teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                                              }
+                                            : (schedule?.assignments?.[cellKey] || null);
+                                          const subjectObj = assignment?.subjectId ? subjectsById.get(assignment.subjectId) : null;
+                                          return { cellKey, slot, assignment, subjectObj };
+                                        })
+                                        .filter((entry) => {
+                                          const type = String(entry?.subjectObj?.subjectType || "").toLowerCase();
+                                          return Boolean(entry?.cellKey) && type === "specialized";
+                                        })
+                                    : [];
+
+                                  if (specializedEntries.length <= 1) {
+                                    return;
+                                  }
+
+                                  const sectionCellKeys = Array.from(new Set([
+                                    ...Object.keys(schedule?.assignments || {}),
+                                    ...Object.keys(cellEditorDrafts || {}),
+                                  ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
+
+                                  const assignedSubjectIds = new Set();
+                                  sectionCellKeys.forEach((cellKey) => {
+                                    const draft = cellEditorDrafts?.[cellKey] || null;
+                                    const assignment = draft?.subjectId || draft?.teacherId
+                                      ? {
+                                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                                        }
+                                      : (schedule?.assignments?.[cellKey] || null);
+                                    if (assignment?.subjectId) {
+                                      assignedSubjectIds.add(assignment.subjectId);
+                                    }
+                                  });
+
+                                  const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
+                                  const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
+
+                                  const options = specializedEntries.flatMap((keepSubjectEntry) =>
+                                    specializedEntries.map((keepPeriodEntry) => ({
+                                      keepSubjectEntry,
+                                      keepPeriodEntry,
+                                    }))
+                                  );
+
+                                  if (options.length === 0) {
+                                    return;
+                                  }
+
+                                  const selectedOption = options[mode % options.length];
+                                  const keepSubjectEntry = selectedOption.keepSubjectEntry;
+                                  const keepPeriodEntry = selectedOption.keepPeriodEntry;
+                                  const reassignEntries = specializedEntries.filter((entry) => entry.cellKey !== keepPeriodEntry.cellKey);
+
+                                  let nextAssignments = { ...(schedule?.assignments || {}) };
+                                  let nextDrafts = { ...(cellEditorDrafts || {}) };
+
+                                  function pickTeacherId({ preferredTeacherId, subject, slot }) {
+                                    if (!subject || !slot) {
+                                      return "";
+                                    }
+
+                                    const preferredTeacher = preferredTeacherId ? facultyById.get(preferredTeacherId) : null;
+                                    if (
+                                      preferredTeacher &&
+                                      isTeacherEligible({
+                                        teacher: preferredTeacher,
+                                        subject,
+                                        section: sectionObj,
+                                        slot,
+                                        constraints: config.constraints,
+                                        teacherBusyBySlot,
+                                        excludedSectionId: sectionObj.id,
+                                      })
+                                    ) {
+                                      return preferredTeacher.id;
+                                    }
+
+                                    const fallback = activeTeachers.find((teacher) =>
+                                      isTeacherEligible({
+                                        teacher,
+                                        subject,
+                                        section: sectionObj,
+                                        slot,
+                                        constraints: config.constraints,
+                                        teacherBusyBySlot,
+                                        excludedSectionId: sectionObj.id,
+                                      })
+                                    );
+
+                                    return fallback ? fallback.id : "";
+                                  }
+
+                                  const keepCellKey = keepPeriodEntry.cellKey;
+                                  const keepSlot = keepPeriodEntry.slot;
+                                  const keepSubjectId = keepSubjectEntry?.assignment?.subjectId || keepSubjectEntry?.subjectObj?.id || null;
+                                  if (keepCellKey && keepSubjectId) {
+                                    const keepSubjectObj = subjectsById.get(keepSubjectId);
+                                    const keepTeacherId = pickTeacherId({
+                                      preferredTeacherId: keepPeriodEntry?.assignment?.teacherId || "",
+                                      subject: keepSubjectObj,
+                                      slot: keepSlot,
+                                    });
+
+                                    nextDrafts[keepCellKey] = { subjectId: keepSubjectId, teacherId: keepTeacherId };
+                                    nextAssignments[keepCellKey] = {
+                                      subjectId: keepSubjectId,
+                                      teacherId: keepTeacherId,
+                                      source: 'auto-fix',
+                                      updatedAt: new Date().toISOString(),
+                                    };
+                                  }
+
+                                  reassignEntries.forEach((entry, replacementIndex) => {
+                                    const replacementSubject = missingSubjects[replacementIndex] || missingSubjects[0] || null;
+                                    if (!replacementSubject || !entry?.cellKey) {
+                                      return;
+                                    }
+
+                                    const newTeacherId = pickTeacherId({
+                                      preferredTeacherId: entry?.assignment?.teacherId || "",
+                                      subject: replacementSubject,
+                                      slot: entry?.slot,
+                                    });
+
+                                    nextDrafts[entry.cellKey] = { subjectId: replacementSubject.id, teacherId: newTeacherId };
+                                    nextAssignments[entry.cellKey] = {
+                                      subjectId: replacementSubject.id,
+                                      teacherId: newTeacherId,
+                                      source: 'auto-fix',
+                                      updatedAt: new Date().toISOString(),
+                                    };
+                                  });
+
+                                  const evaluation = evaluateSchedule({
+                                    assignments: nextAssignments,
+                                    sections,
+                                    slots,
+                                    subjects,
+                                    teachers: activeTeachers,
+                                    scheduleType,
+                                    config,
+                                  });
+
+                                  setCellEditorDrafts(nextDrafts);
+                                  setSchedule((current) => ({
+                                    ...current,
+                                    assignments: nextAssignments,
+                                    conflicts: evaluation.conflicts,
+                                    conflictDetails: evaluation.conflictDetails,
+                                    teacherLoadPercent: evaluation.teacherLoadPercent,
+                                    updatedAt: new Date().toISOString(),
+                                  }));
+                                  return;
+                                }
+
+                              const duplicateSubjectMatch = conflict.match(/^(.*?) is duplicated in multiple periods for (.*?)\.$/i);
+                              if (!duplicateSubjectMatch) {
+                                return;
+                              }
+
+                              const sectionLabel = duplicateSubjectMatch[2];
                               const mode = conflictSuggestionMode[index] || 0;
-                              let sectionsToChange = [];
-                              let sectionToKeep = null;
-                              if (sectionNames.length === 2) {
-                                if (mode % 2 === 0) {
-                                  sectionsToChange = [sectionNames[0]];
-                                  sectionToKeep = sectionNames[1];
-                                } else {
-                                  sectionsToChange = [sectionNames[1]];
-                                  sectionToKeep = sectionNames[0];
-                                }
-                              } else if (sectionNames.length === 3) {
-                                if (mode % 3 === 0) {
-                                  sectionsToChange = [sectionNames[0], sectionNames[1]];
-                                  sectionToKeep = sectionNames[2];
-                                } else if (mode % 3 === 1) {
-                                  sectionsToChange = [sectionNames[1], sectionNames[2]];
-                                  sectionToKeep = sectionNames[0];
-                                } else {
-                                  sectionsToChange = [sectionNames[0], sectionNames[2]];
-                                  sectionToKeep = sectionNames[1];
-                                }
-                              } else if (sectionNames.length > 3) {
-                                const keepIdx = mode % sectionNames.length;
-                                sectionToKeep = sectionNames[keepIdx];
-                                sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
-                              }
-                              // Helper: normalize a string for loose matching
-                              function normalizeSectionString(str) {
-                                return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
-                              }
-                              function normalizePeriodLabel(str) {
-                                return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
-                              }
-                              let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
-                              if (!slot) {
-                                const periodNumMatch = period.match(/(\d+)/);
-                                if (periodNumMatch) {
-                                  const periodNum = parseInt(periodNumMatch[1], 10);
-                                  slot = slots.find((s) => String(s.period) === String(periodNum));
-                                }
-                              }
-                              if (!slot) return;
-                              // Build new assignments (merge with drafts)
-                              let nextAssignments = { ...(schedule?.assignments || {}) };
-                              let nextDrafts = { ...(cellEditorDrafts || {}) };
-                              // For each section to change, assign first available eligible teacher (not the conflicted teacher)
-                              sectionsToChange.forEach((sectionName) => {
-                                let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
+
+                              function findSectionForDuplicateFix(label) {
+                                let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(label).toLowerCase());
                                 if (!sectionObj) {
                                   sectionObj = sections.find((sec) => {
-                                    const code = sec.code || '';
-                                    const name = sec.name || '';
-                                    const grade = sec.grade ? String(sec.grade) : '';
+                                    const code = sec.code || "";
+                                    const name = sec.name || "";
+                                    const grade = sec.grade ? String(sec.grade) : "";
                                     return (
-                                      normalizeSectionString(code) === normalizeSectionString(sectionName) ||
-                                      normalizeSectionString(name) === normalizeSectionString(sectionName) ||
-                                      normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
-                                      normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
+                                      sanitizeText(code).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                      sanitizeText(name).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                      sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(label).toLowerCase() ||
+                                      sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(label).toLowerCase()
                                     );
                                   });
                                 }
-                                if (!sectionObj) return;
-                                const cellKey = createCellKey(sectionObj.id, slot.id);
-                                // Determine subjectId (from draft or assignment)
+                                return sectionObj;
+                              }
+
+                              const sectionObj = findSectionForDuplicateFix(sectionLabel);
+                              if (!sectionObj) {
+                                return;
+                              }
+
+                              const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
+                              const duplicateEntries = Array.isArray(conflictDetail?.cellKeys)
+                                ? conflictDetail.cellKeys
+                                    .map((cellKey) => {
+                                      const [, slotId] = splitCellKey(cellKey);
+                                      const slot = slotsById.get(slotId);
+                                      return {
+                                        cellKey,
+                                        slot,
+                                      };
+                                    })
+                                    .filter((entry) => Boolean(entry.cellKey))
+                                : [];
+
+                              if (duplicateEntries.length <= 1) {
+                                return;
+                              }
+
+                              const keepIndex = mode % duplicateEntries.length;
+                              const targetEntries = duplicateEntries.filter((_, entryIndex) => entryIndex !== keepIndex);
+                              let nextAssignments = { ...(schedule?.assignments || {}) };
+                              let nextDrafts = { ...(cellEditorDrafts || {}) };
+
+                              const sectionCellKeys = Array.from(new Set([
+                                ...Object.keys(schedule?.assignments || {}),
+                                ...Object.keys(cellEditorDrafts || {}),
+                              ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
+
+                              const assignedSubjectIds = new Set();
+                              sectionCellKeys.forEach((cellKey) => {
                                 const draft = cellEditorDrafts?.[cellKey] || null;
-                                let subjectId = draft?.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null);
-                                if (!subjectId) return;
-                                const subject = subjectsById.get(subjectId);
-                                // Find available teachers for this subject and slot (excluding conflicted teacher)
-                                let availableTeachers = [];
-                                if (subject && slot) {
-                                  availableTeachers = activeTeachers.filter((t) => {
-                                    if (t.name === teacher) return false;
-                                    return isTeacherEligible({
-                                      teacher: t,
-                                      subject,
+                                const assignment = draft?.subjectId || draft?.teacherId
+                                  ? {
+                                      subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                                      teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                                    }
+                                  : (schedule?.assignments?.[cellKey] || null);
+                                if (assignment?.subjectId) {
+                                  assignedSubjectIds.add(assignment.subjectId);
+                                }
+                              });
+
+                              const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
+                              const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
+
+                              targetEntries.forEach((entry, replacementIndex) => {
+                                const replacementSubject = missingSubjects[replacementIndex] || missingSubjects[0] || null;
+                                if (!replacementSubject) {
+                                  return;
+                                }
+
+                                const cellKey = entry.cellKey;
+                                const slot = entry.slot;
+                                const draft = cellEditorDrafts?.[cellKey] || null;
+                                const currentAssignment = draft?.subjectId || draft?.teacherId
+                                  ? {
+                                      subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                                      teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                                    }
+                                  : (schedule?.assignments?.[cellKey] || null);
+
+                                let newTeacherId = currentAssignment?.teacherId || '';
+                                const currentTeacher = newTeacherId ? facultyById.get(newTeacherId) : null;
+                                const canKeepTeacher = slot && currentTeacher
+                                  ? isTeacherEligible({
+                                      teacher: currentTeacher,
+                                      subject: replacementSubject,
                                       section: sectionObj,
                                       slot,
                                       constraints: config.constraints,
                                       teacherBusyBySlot,
                                       excludedSectionId: sectionObj.id,
-                                    });
-                                  });
+                                    })
+                                  : false;
+
+                                if (!canKeepTeacher) {
+                                  const fallbackTeacher = slot
+                                    ? activeTeachers.find((teacher) =>
+                                        isTeacherEligible({
+                                          teacher,
+                                          subject: replacementSubject,
+                                          section: sectionObj,
+                                          slot,
+                                          constraints: config.constraints,
+                                          teacherBusyBySlot,
+                                          excludedSectionId: sectionObj.id,
+                                        })
+                                      )
+                                    : null;
+                                  newTeacherId = fallbackTeacher ? fallbackTeacher.id : '';
                                 }
-                                // Assign first available teacher, or clear teacher if none
-                                const newTeacherId = availableTeachers.length > 0 ? availableTeachers[0].id : '';
-                                nextDrafts[cellKey] = { subjectId, teacherId: newTeacherId };
-                                // Optionally, update assignments as well for immediate effect
+
+                                nextDrafts[cellKey] = { subjectId: replacementSubject.id, teacherId: newTeacherId };
                                 nextAssignments[cellKey] = {
-                                  subjectId,
+                                  subjectId: replacementSubject.id,
                                   teacherId: newTeacherId,
                                   source: 'auto-fix',
                                   updatedAt: new Date().toISOString(),
                                 };
                               });
-                              // For section to keep, do nothing (keep conflicted teacher)
-                              // Update state
-                              // Re-evaluate conflicts after autofix
+
                               const evaluation = evaluateSchedule({
                                 assignments: nextAssignments,
                                 sections,
@@ -2403,6 +3191,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                                 scheduleType,
                                 config,
                               });
+
                               setCellEditorDrafts(nextDrafts);
                               setSchedule((current) => ({
                                 ...current,
@@ -2616,11 +3405,208 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                   if (match) {
                     const subject = match[1];
                     const section = match[2];
-                    suggestions = [
-                      `${subject} is assigned more than once for ${section}. Remove the duplicate assignment(s) so that this subject only appears once per section.`,
-                      `Keep only one assignment of ${subject} for ${section} and remove the rest.`,
-                      `Reassign one of the duplicate periods to a different subject.`,
-                    ];
+                    function findSectionForDuplicateDebug(sectionLabel) {
+                      let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(sectionLabel).toLowerCase());
+                      if (!sectionObj) {
+                        sectionObj = sections.find((sec) => {
+                          const code = sec.code || "";
+                          const name = sec.name || "";
+                          const grade = sec.grade ? String(sec.grade) : "";
+                          return (
+                            sanitizeText(code).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(name).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase()
+                          );
+                        });
+                      }
+                      return sectionObj;
+                    }
+
+                    const sectionObj = findSectionForDuplicateDebug(section);
+                    const offeredSubjects = sectionObj ? getSubjectsForSection(sectionObj, subjects, scheduleType) : [];
+                    const sectionCellKeys = sectionObj
+                      ? Array.from(new Set([
+                          ...Object.keys(schedule?.assignments || {}),
+                          ...Object.keys(cellEditorDrafts || {}),
+                        ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id)
+                      : [];
+
+                    const assignedSubjectMap = new Map();
+                    sectionCellKeys.forEach((cellKey) => {
+                      const [sectionId, slotId] = splitCellKey(cellKey);
+                      if (!sectionObj || sectionId !== sectionObj.id) {
+                        return;
+                      }
+
+                      const draft = cellEditorDrafts?.[cellKey] || null;
+                      const assignment = draft?.subjectId || draft?.teacherId
+                        ? {
+                            subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                            teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                            source: "draft",
+                          }
+                        : (schedule?.assignments?.[cellKey] || null);
+
+                      if (!assignment?.subjectId) {
+                        return;
+                      }
+
+                      const existing = assignedSubjectMap.get(assignment.subjectId) || {
+                        label: subjectsById.get(assignment.subjectId)?.subjectName || subjectsById.get(assignment.subjectId)?.subjectCode || assignment.subjectId,
+                        periods: [],
+                        cellKeys: [],
+                        teachers: [],
+                      };
+                      const slot = slotsById.get(slotId);
+                      const periodLabel = slot ? formatPeriodOrdinalLabel(slot) : slotId;
+                      const teacherLabel = assignment.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
+
+                      existing.periods.push(periodLabel);
+                      existing.cellKeys.push(cellKey);
+                      if (!existing.teachers.includes(teacherLabel)) {
+                        existing.teachers.push(teacherLabel);
+                      }
+                      assignedSubjectMap.set(assignment.subjectId, existing);
+                    });
+
+                    const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectMap.has(subjectItem.id));
+                    const missingSubjectNames = missingSubjects
+                      .map((subjectItem) => sanitizeText(subjectItem?.subjectName))
+                      .filter(Boolean);
+
+                    function formatNaturalList(items) {
+                      const safeItems = (items || []).map((item) => sanitizeText(item)).filter(Boolean);
+                      if (safeItems.length === 0) {
+                        return "the missing subject";
+                      }
+
+                      if (safeItems.length === 1) {
+                        return safeItems[0];
+                      }
+
+                      if (safeItems.length === 2) {
+                        return `${safeItems[0]} and ${safeItems[1]}`;
+                      }
+
+                      return `${safeItems.slice(0, -1).join(", ")}, and ${safeItems[safeItems.length - 1]}`;
+                    }
+                    const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
+                    const duplicatePeriods = Array.isArray(conflictDetail?.cellKeys)
+                      ? conflictDetail.cellKeys
+                          .map((cellKey) => {
+                            const [, slotId] = splitCellKey(cellKey);
+                            const slot = slotsById.get(slotId);
+                            return {
+                              cellKey,
+                              slot,
+                              label: slot ? formatPeriodOrdinalLabel(slot) : slotId,
+                            };
+                          })
+                          .filter((entry) => Boolean(entry.cellKey))
+                      : [];
+
+                    if (duplicatePeriods.length > 0) {
+                      suggestions = duplicatePeriods.map((keepEntry, duplicateIndex) => {
+                        const otherPeriods = duplicatePeriods
+                          .filter((_, otherIndex) => otherIndex !== duplicateIndex)
+                          .map((entry) => entry.label);
+                        const subjectsToAssign = otherPeriods.map((_, idx) => missingSubjectNames[idx] || "a missing subject");
+                        const missingListText = formatNaturalList(subjectsToAssign);
+
+                        if (otherPeriods.length === 0) {
+                          return `This section does not have ${formatNaturalList(missingSubjectNames)}. Keep ${subject} at ${keepEntry.label}.`;
+                        }
+
+                        if (otherPeriods.length === 1) {
+                          return `This section does not have ${missingListText}. Keep ${subject} at ${keepEntry.label}, and assign ${subjectsToAssign[0]} at ${otherPeriods[0]}.`;
+                        }
+
+                        const assignmentsText = formatNaturalList(subjectsToAssign.map((subjectName, idx) => `${subjectName} at ${otherPeriods[idx]}`));
+                        return `This section does not have ${missingListText}. Keep ${subject} at ${keepEntry.label}, and assign ${assignmentsText}.`;
+                      });
+                      const currentMode = conflictSuggestionMode[index] || 0;
+                      const activeSuggestion = suggestions[currentMode % suggestions.length] || "";
+                      const debugLines = [
+                        "[DEBUG] Duplicate Subject Conflict",
+                        `Section: ${sectionObj ? formatConflictSectionName(sectionObj) : section}`,
+                        `Duplicated Subject: ${subject}`,
+                        "Periods where subject is duplicated:",
+                      ];
+
+                      duplicatePeriods.forEach((entry, periodIndex) => {
+                        const draft = cellEditorDrafts?.[entry.cellKey] || null;
+                        const assignment = draft?.subjectId || draft?.teacherId
+                          ? {
+                              subjectId: draft.subjectId || (schedule?.assignments?.[entry.cellKey]?.subjectId ?? null),
+                              teacherId: draft.teacherId || (schedule?.assignments?.[entry.cellKey]?.teacherId ?? null),
+                              source: "draft",
+                            }
+                          : (schedule?.assignments?.[entry.cellKey] || null);
+                        const assignedSubject = assignment?.subjectId ? (subjectsById.get(assignment.subjectId)?.subjectName || assignment.subjectId) : "(none)";
+                        const assignedTeacher = assignment?.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
+                        debugLines.push(`  ${periodIndex + 1}. Period: ${entry.label}`);
+                        debugLines.push(`     CellKey: ${entry.cellKey}`);
+                        debugLines.push(`     Assignment: ${assignment ? JSON.stringify(assignment) : "null"}`);
+                        debugLines.push(`     Assigned Subject: ${assignedSubject}`);
+                        debugLines.push(`     Assigned Teacher: ${assignedTeacher}`);
+                      });
+
+                      if (sectionObj) {
+                        debugLines.push(`Subject offerings for ${getScheduleTypeLabel(scheduleType)}:`);
+                        if (offeredSubjects.length === 0) {
+                          debugLines.push("  [No subject offerings found for this section and schedule type]");
+                        } else {
+                          offeredSubjects.forEach((subjectItem) => {
+                            debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
+                          });
+                        }
+
+                        debugLines.push("Assigned subjects in this section:");
+                        if (assignedSubjectMap.size === 0) {
+                          debugLines.push("  [No assigned subjects found]");
+                        } else {
+                          Array.from(assignedSubjectMap.values()).forEach((entry) => {
+                            debugLines.push(`  - ${entry.label}`);
+                            debugLines.push(`    Periods: ${entry.periods.join(", ")}`);
+                            debugLines.push(`    CellKeys: ${entry.cellKeys.join(", ")}`);
+                            debugLines.push(`    Teachers: ${entry.teachers.join(", ")}`);
+                          });
+                        }
+
+                        debugLines.push("Missing subjects in this section:");
+                        if (missingSubjects.length === 0) {
+                          debugLines.push("  [No missing subjects]");
+                        } else {
+                          missingSubjects.forEach((subjectItem) => {
+                            debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
+                          });
+                        }
+                      } else {
+                        debugLines.push("Subject offerings for this schedule type:");
+                        debugLines.push("  [Section not found in data, so offerings and missing subjects could not be derived]");
+                      }
+
+                      debugLines.push(`Current suggested fix shown: ${activeSuggestion}`);
+                      debugInfo = debugLines;
+                    } else {
+                      suggestions = [
+                        `${subject} is assigned more than once for ${section}. Remove the duplicate assignment(s) so that this subject only appears once per section.`,
+                        `Keep only one assignment of ${subject} for ${section} and remove the rest.`,
+                        `Reassign one of the duplicate periods to a different subject.`,
+                      ];
+                    }
+
+                    if (!debugInfo) {
+                      debugInfo = [
+                        "[DEBUG] Duplicate Subject Conflict",
+                        `Section: ${section}`,
+                        `Duplicated Subject: ${subject}`,
+                        "Periods where subject is duplicated:",
+                        "  [No duplicate period data found in conflict details]",
+                        `Current suggested fix shown: ${suggestions[conflictSuggestionMode[index] || 0] || "(none)"}`,
+                      ];
+                    }
                   }
                 } else if (/lacks subject expertise for (.+)\./i.test(conflict)) {
                   const match = conflict.match(/^(.*?) lacks subject expertise for (.*?)\.$/i);
@@ -2648,12 +3634,222 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                   const match = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
                   if (match) {
                     const section = match[1];
-                    const subjects = match[2];
-                    suggestions = [
-                      `${section} has more than one specialized subject assigned: ${subjects}. Remove one of these specialized subjects so that only one is assigned to this section.`,
-                      `Review the specialized subjects assigned to ${section} and keep only the most appropriate one.`,
-                      `Consult the curriculum guidelines to determine which specialized subject should remain.`,
-                    ];
+                    function findSectionForSpecializedFix(sectionLabel) {
+                      let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(sectionLabel).toLowerCase());
+                      if (!sectionObj) {
+                        sectionObj = sections.find((sec) => {
+                          const code = sec.code || "";
+                          const name = sec.name || "";
+                          const grade = sec.grade ? String(sec.grade) : "";
+                          return (
+                            sanitizeText(code).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(name).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
+                            sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase()
+                          );
+                        });
+                      }
+                      return sectionObj;
+                    }
+
+                    function formatNaturalList(items) {
+                      const safeItems = (items || []).map((item) => sanitizeText(item)).filter(Boolean);
+                      if (safeItems.length === 0) {
+                        return "the missing subject";
+                      }
+
+                      if (safeItems.length === 1) {
+                        return safeItems[0];
+                      }
+
+                      if (safeItems.length === 2) {
+                        return `${safeItems[0]} and ${safeItems[1]}`;
+                      }
+
+                      return `${safeItems.slice(0, -1).join(", ")}, and ${safeItems[safeItems.length - 1]}`;
+                    }
+
+                    const sectionObj = findSectionForSpecializedFix(section);
+                    const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
+                    const specializedEntries = Array.isArray(conflictDetail?.cellKeys)
+                      ? conflictDetail.cellKeys
+                          .map((cellKey) => {
+                            const [, slotId] = splitCellKey(cellKey);
+                            const slot = slotsById.get(slotId);
+                            const draft = cellEditorDrafts?.[cellKey] || null;
+                            const assignment = draft?.subjectId || draft?.teacherId
+                              ? {
+                                  subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                                  teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                                  source: "draft",
+                                }
+                              : (schedule?.assignments?.[cellKey] || null);
+                            const subjectObj = assignment?.subjectId ? subjectsById.get(assignment.subjectId) : null;
+                            return {
+                              cellKey,
+                              slot,
+                              label: slot ? formatPeriodOrdinalLabel(slot) : slotId,
+                              assignment,
+                              subjectObj,
+                            };
+                          })
+                          .filter((entry) => {
+                            const type = String(entry?.subjectObj?.subjectType || "").toLowerCase();
+                            return Boolean(entry?.cellKey) && type === "specialized";
+                          })
+                      : [];
+
+                    const offeredSubjects = sectionObj ? getSubjectsForSection(sectionObj, subjects, scheduleType) : [];
+                    const sectionCellKeys = sectionObj
+                      ? Array.from(new Set([
+                          ...Object.keys(schedule?.assignments || {}),
+                          ...Object.keys(cellEditorDrafts || {}),
+                        ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id)
+                      : [];
+
+                    const assignedSubjectIds = new Set();
+                    sectionCellKeys.forEach((cellKey) => {
+                      const draft = cellEditorDrafts?.[cellKey] || null;
+                      const assignment = draft?.subjectId || draft?.teacherId
+                        ? {
+                            subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                            teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                          }
+                        : (schedule?.assignments?.[cellKey] || null);
+                      if (assignment?.subjectId) {
+                        assignedSubjectIds.add(assignment.subjectId);
+                      }
+                    });
+
+                    const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
+                    const missingSubjectNames = missingSubjects
+                      .map((subjectItem) => sanitizeText(subjectItem?.subjectName))
+                      .filter(Boolean);
+                    const assignedSubjectMap = new Map();
+                    sectionCellKeys.forEach((cellKey) => {
+                      const [, slotId] = splitCellKey(cellKey);
+                      const slot = slotsById.get(slotId);
+                      const draft = cellEditorDrafts?.[cellKey] || null;
+                      const assignment = draft?.subjectId || draft?.teacherId
+                        ? {
+                            subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
+                            teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
+                            source: "draft",
+                          }
+                        : (schedule?.assignments?.[cellKey] || null);
+                      if (!assignment?.subjectId) {
+                        return;
+                      }
+
+                      const subjectObj = subjectsById.get(assignment.subjectId);
+                      const subjectLabel = subjectObj?.subjectName || subjectObj?.subjectCode || assignment.subjectId;
+                      const periodLabel = slot ? formatPeriodOrdinalLabel(slot) : slotId;
+                      const teacherLabel = assignment.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
+                      const existing = assignedSubjectMap.get(assignment.subjectId) || {
+                        label: subjectLabel,
+                        periods: [],
+                        cellKeys: [],
+                        teachers: [],
+                      };
+
+                      existing.periods.push(periodLabel);
+                      existing.cellKeys.push(cellKey);
+                      if (!existing.teachers.includes(teacherLabel)) {
+                        existing.teachers.push(teacherLabel);
+                      }
+                      assignedSubjectMap.set(assignment.subjectId, existing);
+                    });
+
+                    if (specializedEntries.length > 0) {
+                      suggestions = specializedEntries.flatMap((keepSubjectEntry) => {
+                        const keptSpecializedLabel = keepSubjectEntry?.subjectObj?.subjectName || keepSubjectEntry?.subjectObj?.subjectCode || "specialized subject";
+
+                        return specializedEntries.map((keepPeriodEntry) => {
+                          const reassignEntries = specializedEntries.filter((entry) => entry.cellKey !== keepPeriodEntry.cellKey);
+                          const subjectsToAssign = reassignEntries.map((_, assignIndex) => missingSubjectNames[assignIndex] || "a missing subject");
+                          const missingListText = formatNaturalList(subjectsToAssign);
+
+                          if (reassignEntries.length === 0) {
+                            return `A special section should only have atmost one specialized subject. This section does not have ${formatNaturalList(missingSubjectNames)}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}.`;
+                          }
+
+                          if (reassignEntries.length === 1) {
+                            return `A special section should only have atmost one specialized subject. This section does not have ${missingListText}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}, and assign ${subjectsToAssign[0]} at ${reassignEntries[0].label}.`;
+                          }
+
+                          const assignmentsText = formatNaturalList(reassignEntries.map((entry, assignIndex) => `${subjectsToAssign[assignIndex]} at ${entry.label}`));
+                          return `A special section should only have atmost one specialized subject. This section does not have ${missingListText}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}, and assign ${assignmentsText}.`;
+                        });
+                      });
+
+                      const currentMode = conflictSuggestionMode[index] || 0;
+                      const activeSuggestion = suggestions[currentMode % suggestions.length] || "";
+                      const debugLines = [
+                        "[DEBUG] Multiple Specialized Subject Conflict",
+                        `Section: ${sectionObj ? formatConflictSectionName(sectionObj) : section}`,
+                        "Specialized subjects involved:",
+                      ];
+
+                      specializedEntries.forEach((entry, entryIndex) => {
+                        const subjectLabel = entry?.subjectObj?.subjectName || entry?.subjectObj?.subjectCode || "(unknown subject)";
+                        const teacherLabel = entry?.assignment?.teacherId
+                          ? (facultyById.get(entry.assignment.teacherId)?.name || entry.assignment.teacherId)
+                          : "(none)";
+                        debugLines.push(`  ${entryIndex + 1}. ${subjectLabel}`);
+                        debugLines.push(`     Period: ${entry.label}`);
+                        debugLines.push(`     CellKey: ${entry.cellKey}`);
+                        debugLines.push(`     Assignment: ${entry.assignment ? JSON.stringify(entry.assignment) : "null"}`);
+                        debugLines.push(`     Assigned Teacher: ${teacherLabel}`);
+                      });
+
+                      debugLines.push(`Subject offerings for ${getScheduleTypeLabel(scheduleType)}:`);
+                      if (offeredSubjects.length === 0) {
+                        debugLines.push("  [No subject offerings found for this section and schedule type]");
+                      } else {
+                        offeredSubjects.forEach((subjectItem) => {
+                          debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
+                        });
+                      }
+
+                      debugLines.push("Assigned subjects in this section:");
+                      if (assignedSubjectMap.size === 0) {
+                        debugLines.push("  [No assigned subjects found]");
+                      } else {
+                        Array.from(assignedSubjectMap.values()).forEach((entry) => {
+                          debugLines.push(`  - ${entry.label}`);
+                          debugLines.push(`    Periods: ${entry.periods.join(", ")}`);
+                          debugLines.push(`    CellKeys: ${entry.cellKeys.join(", ")}`);
+                          debugLines.push(`    Teachers: ${entry.teachers.join(", ")}`);
+                        });
+                      }
+
+                      debugLines.push("Missing subjects in this section:");
+                      if (missingSubjects.length === 0) {
+                        debugLines.push("  [No missing subjects]");
+                      } else {
+                        missingSubjects.forEach((subjectItem) => {
+                          debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
+                        });
+                      }
+
+                      debugLines.push(`Current suggested fix shown: ${activeSuggestion}`);
+                      debugInfo = debugLines;
+                    } else {
+                      const subjects = match[2];
+                      suggestions = [
+                        `${section} has more than one specialized subject assigned: ${subjects}. Remove one of these specialized subjects so that only one is assigned to this section.`,
+                        `Review the specialized subjects assigned to ${section} and keep only the most appropriate one.`,
+                        `Consult the curriculum guidelines to determine which specialized subject should remain.`,
+                      ];
+
+                      debugInfo = [
+                        "[DEBUG] Multiple Specialized Subject Conflict",
+                        `Section: ${section}`,
+                        "Specialized subjects involved:",
+                        `  ${subjects}`,
+                        `Current suggested fix shown: ${suggestions[conflictSuggestionMode[index] || 0] || "(none)"}`,
+                      ];
+                    }
                   }
                 } else if (/Invalid assignment reference in (.+)\./i.test(conflict)) {
                   const match = conflict.match(/^Invalid assignment reference in (.*?)\.$/i);
@@ -2728,7 +3924,7 @@ export default function ScheduleMaker({ readOnly = false, hideControls = false }
                         opacity: 1,
                         transition: 'background 0.2s',
                       }}
-                      onClick={handleApplyFixMultipleBooking}
+                      onClick={handleApplyFixConflict}
                       title="Apply this fix"
                     >
                       Apply Fix
