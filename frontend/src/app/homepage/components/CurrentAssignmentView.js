@@ -18,11 +18,22 @@ function pillStyle(isAlt, opts = {}) {
     justifySelf: opts.justifySelf || undefined,
   };
 }
+function formatCleanSubjectName(rawName) {
+  if (!rawName || typeof rawName !== "string") return rawName || "";
+  let name = rawName.trim();
+  const jhsCorePattern = /^(Science|Mathematics|Math|English|Filipino|Araling Panlipunan|Edukasyon sa Pagpapakakatao|EsP|MAPEH|Technology and Livelihood Education|TLE)\s+\d+$/i;
+  if (jhsCorePattern.test(name)) {
+    return name.replace(/\s+\d+$/i, "").trim();
+  }
+  return name;
+}
+
 // Helper to get subject name from subjectId
 function getSubjectName(subjectId, subjectList) {
   if (!subjectId) return '';
-  const found = subjectList.find(s => s.id === subjectId || s.subjectId === subjectId || s.code === subjectId);
-  return found ? (found.name || found.subjectName || found.code || subjectId) : subjectId;
+  const found = subjectList ? subjectList.find(s => s.id === subjectId || s.subjectId === subjectId || s.code === subjectId) : null;
+  const raw = found ? (found.name || found.subjectName || found.code || subjectId) : subjectId;
+  return formatCleanSubjectName(raw);
 }
 // Helper to normalize sections (copied from FinalTimeTables.js)
 function normalizeSections(sectionsRaw, scheduleType = "jhs") {
@@ -63,12 +74,25 @@ function getAllGrades(sectionList) {
 
 function getScheduleDraftAndConfig() {
   try {
-    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
-    let draftArr = draftRaw ? JSON.parse(draftRaw) : null;
-    // Use the first draft object if array, else null
-    const draft = Array.isArray(draftArr) && draftArr.length > 0 ? draftArr[0] : null;
-    const config = draft?.config?.jhs || {};
-    return { draft, config };
+    const publishedRaw = localStorage.getItem("turotugma_published_schedules");
+    if (publishedRaw) {
+      const parsedPub = JSON.parse(publishedRaw);
+      if (parsedPub && typeof parsedPub === "object") {
+        const pubList = Object.values(parsedPub).filter((item) => item && item.assignments && Object.keys(item.assignments).length > 0);
+        if (pubList.length > 0) {
+          pubList.sort((a, b) => new Date(b.publishedAt || b.updatedAt || 0) - new Date(a.publishedAt || a.updatedAt || 0));
+          const latestPub = pubList[0];
+          return {
+            draft: {
+              schedule: latestPub,
+              config: latestPub.config || latestPub.scheduleConfig || {},
+            },
+            config: (latestPub.config || latestPub.scheduleConfig || {})?.jhs || {},
+          };
+        }
+      }
+    }
+    return { draft: null, config: {} };
   } catch {
     return { draft: null, config: {} };
   }
@@ -85,12 +109,25 @@ function getFacultyList() {
   }
 }
 
-
 export default function CurrentAssignmentView() {
   const [searchTerm, setSearchTerm] = useState("");
   const [gradeFilter, setGradeFilter] = useState("all");
-  const { draft, config } = useMemo(getScheduleDraftAndConfig, []);
-  const facultyList = useMemo(getFacultyList, []);
+  const [syncToken, setSyncToken] = useState(0);
+
+  useEffect(() => {
+    const handleSync = () => setSyncToken((prev) => prev + 1);
+    window.addEventListener("storage", handleSync);
+    window.addEventListener("focus", handleSync);
+    window.addEventListener("turotugma:schedule-updated", handleSync);
+    return () => {
+      window.removeEventListener("storage", handleSync);
+      window.removeEventListener("focus", handleSync);
+      window.removeEventListener("turotugma:schedule-updated", handleSync);
+    };
+  }, []);
+
+  const { draft, config } = useMemo(getScheduleDraftAndConfig, [syncToken]);
+  const facultyList = useMemo(getFacultyList, [syncToken]);
   const assignments = draft?.schedule?.assignments || {};
   // Get sections from localStorage and normalize
   const sectionsRaw = useMemo(() => {
@@ -159,36 +196,69 @@ export default function CurrentAssignmentView() {
 
   // Build a list of assignments for the selected or current period, filtered by search and grade
   const currentAssignments = useMemo(() => {
-    if (effectivePeriodIdx === -1 || !effectivePeriodLabel) return [];
-    let rows = Object.entries(assignments)
-      .filter(([key]) => key.endsWith("|" + effectivePeriodLabel))
-      .map(([key, assignment]) => {
-        const [sectionId] = key.split("|");
-        const teacher = facultyList.find(f => f.id === assignment.teacherId);
-        const section = sectionList.find(s => s.id === sectionId);
-        // Try to get subject name from assignment, else lookup by subjectId/code
+    if (effectivePeriodIdx === -1 || !effectivePeriodLabel || !draft?.schedule) return [];
+    const targetPeriod = effectivePeriodIdx + 1;
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const todayName = dayNames[new Date().getDay()];
+    const activeDay = (todayName === "Saturday" || todayName === "Sunday") ? "Monday" : todayName;
+
+    const sched = draft.schedule;
+    const assign = sched.assignments || {};
+    const slotList = Array.isArray(sched.slots) ? sched.slots : [];
+    const sById = new Map(slotList.map((s) => [s.id, s]));
+
+    const matched = [];
+    Object.entries(assign).forEach(([key, assignment]) => {
+      if (!assignment) return;
+      const parts = key.split("|");
+      if (parts.length < 2) return;
+      const sectionId = parts[0];
+      const slotId = parts[1];
+
+      let slot = sById.get(slotId);
+      let day = slot?.day;
+      let period = slot?.period ? Number(slot.period) : null;
+
+      if (!day || !period) {
+        const lowerSlot = slotId.toLowerCase();
+        if (lowerSlot.includes("mon")) day = "Monday";
+        else if (lowerSlot.includes("tue")) day = "Tuesday";
+        else if (lowerSlot.includes("wed")) day = "Wednesday";
+        else if (lowerSlot.includes("thu")) day = "Thursday";
+        else if (lowerSlot.includes("fri")) day = "Friday";
+
+        const numMatch = slotId.match(/(\d+)/);
+        if (numMatch) period = parseInt(numMatch[1], 10);
+      }
+
+      if (period === targetPeriod && (!day || day === activeDay || slotId.includes(`P${targetPeriod}`))) {
+        const teacher = facultyList.find(f => f.id === assignment.teacherId || f.employeeId === assignment.teacherId);
+        const section = sectionList.find(s => s.id === sectionId || s.name === sectionId);
+
         let subject = assignment.subjectName || assignment.subject || assignment.subjectCode || "";
         if (!subject && assignment.subjectId) {
           subject = getSubjectName(assignment.subjectId, subjectList);
         } else if (!subject && assignment.subjectCode) {
           subject = getSubjectName(assignment.subjectCode, subjectList);
-        } else if (!subject && assignment.subject) {
-          subject = getSubjectName(assignment.subject, subjectList);
         }
-        return {
-          teacherName: teacher ? teacher.name : "Unassigned",
-          teacherId: teacher ? teacher.employeeId : "",
-          sectionName: section ? section.name : sectionId,
+
+        matched.push({
+          teacherName: teacher ? (teacher.teacherName || teacher.name) : "Unassigned",
+          teacherId: teacher ? (teacher.employeeId || teacher.id) : "",
+          sectionName: section ? (section.name || section.sectionName) : sectionId,
           sectionGrade: section ? section.grade : undefined,
           period: effectivePeriodLabel,
-          subject,
-        };
-      });
+          subject: subject || "Assigned Subject",
+        });
+      }
+    });
+
+    let rows = matched;
     // Filter by grade
     if (gradeFilter !== "all") {
       rows = rows.filter(row => String(row.sectionGrade) === String(gradeFilter));
     }
-    // Filter by search term (teacher name, teacherId, section name)
+    // Filter by search term
     if (searchTerm.trim()) {
       const lower = searchTerm.trim().toLowerCase();
       rows = rows.filter(row =>
@@ -198,7 +268,7 @@ export default function CurrentAssignmentView() {
       );
     }
     return rows;
-  }, [assignments, facultyList, sectionList, subjectList, periods, effectivePeriodIdx, effectivePeriodLabel, gradeFilter, searchTerm]);
+  }, [draft, assignments, facultyList, sectionList, subjectList, periods, effectivePeriodIdx, effectivePeriodLabel, gradeFilter, searchTerm]);
 
   // Uniform page title and description styling
   return (

@@ -1,67 +1,164 @@
-// --- BEGIN: Copied from FacultyManagement.js for consistent teacher load calculation ---
-function getScheduleDraftAndConfig() {
-  try {
-    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
-    const configRaw = localStorage.getItem("turotugma_schedule_configurations");
-    let draftArr = draftRaw ? JSON.parse(draftRaw) : null;
-    const draft = Array.isArray(draftArr) && draftArr.length > 0 ? draftArr[0] : null;
-    const config = configRaw ? JSON.parse(configRaw) : null;
-    const activeConfig = draft?.config?.jhs || config || {};
-    return { draft, config: activeConfig };
-  } catch {
-    return { draft: null, config: {} };
+// --- BEGIN: Helper functions for consistent teacher load calculation ---
+function getActiveScheduleAssignments() {
+  if (typeof window === "undefined") {
+    return [];
   }
+
+  const allAssignments = [];
+
+  const processSchedule = (sched) => {
+    if (!sched || !sched.assignments || typeof sched.assignments !== "object") return;
+    Object.entries(sched.assignments).forEach(([cellKey, asgn]) => {
+      if (!asgn || !asgn.teacherId) return;
+      const parts = String(cellKey || "").split("|");
+      allAssignments.push({
+        ...asgn,
+        cellKey,
+        sectionId: asgn.sectionId || parts[0] || "",
+        slotId: asgn.slotId || parts[1] || "",
+        scheduleType: sched.scheduleType || "",
+      });
+    });
+  };
+
+  try {
+    // 1. Check Published Schedules
+    const publishedRaw = localStorage.getItem("turotugma_published_schedules");
+    if (publishedRaw) {
+      const publishedMap = JSON.parse(publishedRaw);
+      if (publishedMap && typeof publishedMap === "object") {
+        Object.values(publishedMap).forEach((sched) => {
+          processSchedule(sched);
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Error reading published schedules:", e);
+  }
+
+  // If published schedules had assignments, return them
+  if (allAssignments.length > 0) {
+    return allAssignments;
+  }
+
+  try {
+    // 2. Fallback to Draft Schedules if no published schedules exist.
+    // Deduplicate by taking the most recent draft per scheduleType so multiple versions don't multiply count.
+    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
+    if (draftRaw) {
+      const draftArr = JSON.parse(draftRaw);
+      if (Array.isArray(draftArr) && draftArr.length > 0) {
+        const latestByLevel = {};
+        draftArr.forEach((draftItem) => {
+          const sched = draftItem?.schedule || draftItem;
+          const level = sched?.scheduleType || draftItem?.scheduleType || "default";
+          const updated = new Date(draftItem?.updatedAt || sched?.updatedAt || 0).getTime();
+          if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
+            latestByLevel[level] = { sched, updated };
+          }
+        });
+        Object.values(latestByLevel).forEach(({ sched }) => {
+          processSchedule(sched);
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Error reading schedule drafts:", e);
+  }
+
+  return allAssignments;
 }
 
-function calculateTeacherLoads(facultyList) {
-  const { draft, config } = getScheduleDraftAndConfig();
-  if (!draft || !draft.schedule || !draft.schedule.assignments) return facultyList.map(f => ({ ...f, assignedLoadPercent: 0 }));
-
-  const periodsPerDay = Math.max(
-    Number(config.periods?.regular || 0),
-    Number(config.periods?.special || 0)
-  );
-  const regularDays = config.regularDays || [];
-  const shortenedDays = config.shortenedDays || [];
-  const periodMinutes = config.periodMinutes || { regular: 50, shortened: 45 };
-
-  const minBalanced = (4 * regularDays.length * periodMinutes.regular) + (4 * shortenedDays.length * periodMinutes.shortened);
-  const maxBalanced = (6 * regularDays.length * periodMinutes.regular) + (6 * shortenedDays.length * periodMinutes.shortened);
-
-  const teacherMinutes = {};
-  facultyList.forEach(faculty => {
-    let assignedPeriods = new Set();
-    if (draft.schedule && draft.schedule.assignments) {
-      Object.entries(draft.schedule.assignments).forEach(([key, assignment]) => {
-        if (assignment.teacherId !== faculty.id) return;
-        const periodMatch = key.match(/\|JHS-P(\d+)/);
-        if (periodMatch) {
-          assignedPeriods.add(periodMatch[0]);
-        }
-      });
+function getScheduleConfigPeriodMinutes() {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem("turotugma_schedule_configurations") : null;
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      const regMin = Number(cfg?.jhs?.sessions?.regular?.duration || cfg?.jhs?.periodMinutes?.regular);
+      if (regMin > 0) return regMin;
     }
-    const periodCount = assignedPeriods.size;
-    const totalMinutes = (periodCount * regularDays.length * periodMinutes.regular) + (periodCount * shortenedDays.length * periodMinutes.shortened);
-    teacherMinutes[faculty.id] = totalMinutes;
+  } catch (e) {}
+  return 60; // Diadi NHS standard is 60 mins per period
+}
+
+// Calculate teacher loads aligned with DepEd DO 005, s. 2024 & RA 4670 (Magna Carta)
+// Statuses:
+// - "Unassigned": 0 contact hours assigned
+// - "Underload": below optimal balanced load (< 20 hrs/wk for regular, < 16 hrs/wk for class adviser)
+// - "Balanced": optimal healthy teaching load (20 - 30 hrs/wk for regular, 16 - 25 hrs/wk for adviser)
+// - "Overload": exceeds statutory ceiling (> 30 hrs/wk for regular, > 25 hrs/wk for adviser)
+function calculateTeacherLoads(facultyList) {
+  if (!Array.isArray(facultyList)) {
+    return [];
+  }
+
+  const assignments = getActiveScheduleAssignments();
+  const periodMinutes = getScheduleConfigPeriodMinutes();
+
+  const teacherPeriodCounts = {};
+  assignments.forEach((asgn) => {
+    const tid = asgn.teacherId;
+    if (tid) {
+      teacherPeriodCounts[tid] = (teacherPeriodCounts[tid] || 0) + 1;
+    }
   });
 
-  return facultyList.map(faculty => {
-    const minutes = teacherMinutes[faculty.id] || 0;
-    let percent = 0;
-    if (minutes > 0 && maxBalanced > 0) {
-      percent = Math.round((minutes / maxBalanced) * 100);
+  return facultyList.map((faculty) => {
+    const periodCount = teacherPeriodCounts[faculty.id] || 0;
+    const totalMinutes = periodCount * periodMinutes;
+    const totalHours = Math.round((totalMinutes / 60) * 10) / 10;
+    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
+
+    const isClassAdviser = Boolean(
+      faculty.isClassAdviser ||
+      (Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+    );
+
+    const empStatus = String(faculty.employmentStatus || "").toLowerCase();
+    const isPartTime = empStatus.includes("part-time") || empStatus.includes("parttime");
+
+    // Magna Carta & DepEd DO 005, s. 2024:
+    // Statutory maximum classroom teaching is 30 contact hours/week (6 hrs/day).
+    // Class Advisers receive a 1-load credit (5 hours/week), capping classroom teaching at 25 hrs/week.
+    // Minimum balanced teaching load: 20h for regular, 16h for class adviser, 12h for part-time.
+    const ancillaryCreditHours = isClassAdviser ? 5 : (Number(faculty.ancillaryCreditHours) || 0);
+    const maxTeachingContactHours = isPartTime ? 20 : (isClassAdviser ? 25 : 30);
+    const minBalancedHours = isPartTime ? 12 : (isClassAdviser ? 16 : 20);
+
+    const percent = Math.round((totalHours / maxTeachingContactHours) * 100);
+
+    let status = "Unassigned";
+    if (periodCount === 0) {
+      status = "Unassigned";
+    } else if (totalHours < minBalancedHours) {
+      status = "Underload";
+    } else if (totalHours <= maxTeachingContactHours) {
+      status = "Balanced";
+    } else {
+      status = "Overload";
     }
+
+    const statutoryTier = totalHours === 0 ? "Unassigned" : (totalHours >= (isClassAdviser ? 25 : 30) ? "Full load" : "Part load");
+
     return {
       ...faculty,
+      isClassAdviser,
+      ancillaryCreditHours,
+      maxTeachingContactHours,
+      minBalancedHours,
+      assignedPeriods: periodCount,
+      assignedLoadMinutes: totalMinutes,
+      assignedLoadHours: totalHours,
+      dailyContactHours: dailyHours,
       assignedLoadPercent: percent,
-      assignedLoadMinutes: minutes,
-      assignedLoadStatus: minutes === 0 ? "Unassigned" : (minutes < minBalanced ? "Underload" : (minutes <= maxBalanced ? "Balanced" : "Overload")),
+      assignedLoadStatus: status,
+      statutoryTier,
     };
   });
 }
-// --- END: Copied from FacultyManagement.js ---
+// --- END: Helper functions for consistent teacher load calculation ---
 
-import ScheduleMaker from "./components/ScheduleMaker";
+import ScheduleGenerator from "./components/ScheduleGenerator";
 import { useMemo } from "react";
 
 // Helper: Get most recent schedule (draft or published) for a given level
@@ -281,6 +378,45 @@ function getTeacherAssignmentBreakdown(teachers, debugLabel = '') {
   return counts;
 }
 
+function getEmploymentStatusBreakdown(teachers) {
+  const MINUTES_PER_PERIOD = 60;
+  const teacherLoads = calculateTeacherLoads(teachers);
+  const result = {
+    regular: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+    probationary: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+    partTime: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+  };
+
+  teacherLoads.forEach((teacher) => {
+    const rawStatus = String(teacher.employmentStatus || "").toLowerCase();
+
+    let category = "regular";
+    if (rawStatus.includes("probationary")) {
+      category = "probationary";
+    } else if (rawStatus.includes("part-time") || rawStatus.includes("parttime")) {
+      category = "partTime";
+    }
+
+    const periods = Math.round((teacher.assignedLoadMinutes || 0) / MINUTES_PER_PERIOD);
+    const loadStatus = teacher.assignedLoadStatus || "Unassigned";
+
+    result[category].count += 1;
+    result[category].totalPeriods += periods;
+
+    if (loadStatus === "Overload") {
+      result[category].overload += 1;
+    } else if (loadStatus === "Balanced" || loadStatus === "Full load") {
+      result[category].balanced += 1;
+    } else if (loadStatus === "Underload" || loadStatus === "Part load") {
+      result[category].underload += 1;
+    } else {
+      result[category].unassigned += 1;
+    }
+  });
+
+  return result;
+}
+
 function getSubjectBreakdown(subjectsList) {
   const trackKeys = ["STEM", "HUMSS", "ABM", "TVL", "GAS"];
   const initialTracks = trackKeys.reduce((accumulator, key) => {
@@ -371,14 +507,19 @@ export function getSystemSnapshot() {
   let assignmentBreakdown = profiledAssignmentBreakdown;
 
   // --- Use the same load calculation as FacultyManagement.js for dashboard chart ---
-  let loadDistribution = { unassigned: 0, balanced: 0, underload: 0, overload: 0 };
+  let loadDistribution = { unassigned: 0, underload: 0, balanced: 0, overload: 0 };
   const teacherLoads = calculateTeacherLoads(activeTeachers);
   teacherLoads.forEach((teacher) => {
     const status = teacher.assignedLoadStatus || "Unassigned";
-    if (status === "Unassigned") loadDistribution.unassigned += 1;
-    else if (status === "Underload") loadDistribution.underload += 1;
-    else if (status === "Balanced") loadDistribution.balanced += 1;
-    else if (status === "Overload") loadDistribution.overload += 1;
+    if (status === "Unassigned") {
+      loadDistribution.unassigned += 1;
+    } else if (status === "Underload") {
+      loadDistribution.underload += 1;
+    } else if (status === "Balanced") {
+      loadDistribution.balanced += 1;
+    } else if (status === "Overload") {
+      loadDistribution.overload += 1;
+    }
   });
   if (latestSchedule) {
     // Use assignments and teacher loads from latest schedule if available
@@ -394,6 +535,8 @@ export function getSystemSnapshot() {
     // Use teacherLoadPercent for load distribution if available
     // (No longer needed: teacherLoadPercent percent-based logic is replaced by config-driven minute-based logic above)
   }
+
+  let employmentStatusBreakdown = getEmploymentStatusBreakdown(activeTeachers);
 
   return {
     // Always show total profiled/created values, not filtered by schedule
@@ -411,6 +554,7 @@ export function getSystemSnapshot() {
     shsSubjects,
     unresolvedConflicts: loadDistribution.overload,
     loadDistribution,
+    employmentStatusBreakdown,
     assignmentBreakdown, // active (filtered) breakdown
     profiledAssignmentBreakdown, // always full list breakdown
   };
@@ -528,7 +672,7 @@ export function getDashboardAnalyticsPayload() {
       labels: ["W1", "W2", "W3", "W4", "W5", "W6"],
     },
     teacherLoadDistribution: {
-      labels: ["Unassigned", "Underload", "Balanced", "Overload"],
+      labels: ["Unassigned (0h)", "Underload (< 20h)", "Balanced (Target Load)", "Overload (> Limit)"],
       values: [
         snapshot.loadDistribution.unassigned,
         snapshot.loadDistribution.underload,
@@ -545,6 +689,7 @@ export function getDashboardAnalyticsPayload() {
       `${snapshot.totalSubjects} subjects currently saved`,
       `${snapshot.activeTeachers} active teachers currently available`,
     ],
+    employmentStatusBreakdown: snapshot.employmentStatusBreakdown,
     conflicts:
       unresolvedConflictsCount > 0
         ? actualConflicts.map((c, i) => typeof c === "string" ? c : `Conflict ${i + 1}`)
@@ -581,13 +726,18 @@ export function toDashboardViewModel(payload) {
     ],
     activity: payload.activity,
     conflicts: payload.conflicts,
+    employmentBreakdown: payload.employmentStatusBreakdown || {
+      regular: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+      probationary: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+      partTime: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
+    },
     charts: {
       teacherLoad: {
         labels: payload.teacherLoadDistribution.labels,
         datasets: [
           {
             data: payload.teacherLoadDistribution.values,
-            backgroundColor: ["#c3c9de", "#8893d9", "#3B4197", "#e53935"],
+            backgroundColor: ["#cbd5e1", "#818cf8", "#3B4197", "#ef4444"],
             borderColor: "#ffffff",
             borderWidth: 2,
           },
@@ -601,6 +751,76 @@ export function toDashboardViewModel(payload) {
             data: payload.scheduleCompletionByLevel.percentages,
             backgroundColor: ["#3B4197", "#5663bd", "#7a87dd"],
             borderRadius: 6,
+          },
+        ],
+      },
+      employmentLoad: {
+        labels: ["Regular / Permanent", "Probationary", "Part-Time"],
+        datasets: [
+          {
+            label: "Faculty Count",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.count || 0,
+              payload.employmentStatusBreakdown?.probationary?.count || 0,
+              payload.employmentStatusBreakdown?.partTime?.count || 0,
+            ],
+            backgroundColor: "#3B4197",
+            borderRadius: 6,
+          },
+          {
+            label: "Total Assigned Periods",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.totalPeriods || 0,
+              payload.employmentStatusBreakdown?.probationary?.totalPeriods || 0,
+              payload.employmentStatusBreakdown?.partTime?.totalPeriods || 0,
+            ],
+            backgroundColor: "#818cf8",
+            borderRadius: 6,
+          },
+        ],
+      },
+      fusionAnalytics: {
+        labels: ["Regular / Permanent", "Probationary", "Part-Time"],
+        datasets: [
+          {
+            label: "Balanced (Target Load)",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.balanced || 0,
+              payload.employmentStatusBreakdown?.probationary?.balanced || 0,
+              payload.employmentStatusBreakdown?.partTime?.balanced || 0,
+            ],
+            backgroundColor: "#3B4197",
+            borderRadius: 4,
+          },
+          {
+            label: "Underload (Needs More Load)",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.underload || 0,
+              payload.employmentStatusBreakdown?.probationary?.underload || 0,
+              payload.employmentStatusBreakdown?.partTime?.underload || 0,
+            ],
+            backgroundColor: "#818cf8",
+            borderRadius: 4,
+          },
+          {
+            label: "Overload (Exceeds Limit)",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.overload || 0,
+              payload.employmentStatusBreakdown?.probationary?.overload || 0,
+              payload.employmentStatusBreakdown?.partTime?.overload || 0,
+            ],
+            backgroundColor: "#ef4444",
+            borderRadius: 4,
+          },
+          {
+            label: "Unassigned (0h)",
+            data: [
+              payload.employmentStatusBreakdown?.regular?.unassigned || 0,
+              payload.employmentStatusBreakdown?.probationary?.unassigned || 0,
+              payload.employmentStatusBreakdown?.partTime?.unassigned || 0,
+            ],
+            backgroundColor: "#cbd5e1",
+            borderRadius: 4,
           },
         ],
       },

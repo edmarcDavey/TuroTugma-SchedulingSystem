@@ -255,3 +255,26 @@ AC-07 Section and subject data integrity
 
 AC-08 Configuration-driven grid
 - Changing schedule target/configuration updates grid structure and metrics accordingly.
+
+AC-09 Conflict Detection & Automated Resolution Engine
+- Master documentation is available in USER_MANUAL.md.
+- The engine actively monitors 11 constraints:
+   1. Teacher Double-Booking (multiple sections in same slot).
+   2. Under-Scheduled Subject Quota (fewer periods than classesPerWeek).
+   3. Same-Day Duplicate Subject (violating the max 1 session per day rule).
+   4. Weekly Quota Exceeded (over-scheduled classes).
+   5. Teacher Restricted or Unavailable Periods.
+   6. Subject Period Restrictions.
+   7. Teacher Subject Expertise or Grade Level Mismatch.
+   8. Placement Rule / Advisory Priority Lock Violations (e.g. HGP Monday Period 1).
+   9. Non-Consecutive Double Period Blocks.
+   10. Specialized Subject Limits per Curriculum Track.
+   11. Inactive Period or Day Assignments.
+- Auto-Fix performs actual schedule data mutations (schedule.assignments) via 7 multi-pass strategies:
+   - Strategy 0: Direct empty slot placement, intra-section relocation, and excess-quota replacement for under-scheduled subjects.
+   - Strategy 1 & 6: Cross-day swapping for duplicate same-day sessions.
+   - Strategy 2: Alternate qualified teacher reassignment and intra-section period swaps for double-booked faculty.
+   - Strategy 3: Substitute teacher matching for restricted/unavailable periods.
+   - Strategy 4: Curriculum track specialized subject reconciliation.
+   - Strategy 5: Conflict-minimizing intra-section permutations and contiguous double-period reordering.
+- Structural capacity limits (e.g., section weekly workload exceeding available weekly periods) are honestly reported to administrators with actionable guidance.

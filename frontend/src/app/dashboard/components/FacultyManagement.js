@@ -1,73 +1,342 @@
-// Utility to get schedule draft and config from localStorage
-function getScheduleDraftAndConfig() {
+// Utility to get all created sections as a Map(sectionId => section)
+function getAllSectionsMap() {
+  const map = new Map();
+  if (typeof window === "undefined") return map;
   try {
-    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
-    const configRaw = localStorage.getItem("turotugma_schedule_configurations");
-    let draftArr = draftRaw ? JSON.parse(draftRaw) : null;
-    // Use the first draft object if array, else null
-    const draft = Array.isArray(draftArr) && draftArr.length > 0 ? draftArr[0] : null;
-    const config = configRaw ? JSON.parse(configRaw) : null;
-    // Prefer config from draft if available
-    const activeConfig = draft?.config?.jhs || config || {};
-    return { draft, config: activeConfig };
-  } catch {
-    return { draft: null, config: {} };
+    const raw = localStorage.getItem("turotugma_sections_created");
+    if (!raw) return map;
+    const parsed = JSON.parse(raw);
+    for (const level of ["jhs", "shs"]) {
+      if (parsed && parsed[level] && typeof parsed[level] === "object") {
+        for (const gradeKey of Object.keys(parsed[level])) {
+          const gradeObj = parsed[level][gradeKey];
+          const gradeNum = parseInt(String(gradeKey).replace(/\D/g, ""), 10);
+          const sections = Array.isArray(gradeObj?.sections) ? gradeObj.sections : (Array.isArray(gradeObj) ? gradeObj : []);
+          sections.forEach((sec, index) => {
+            if (sec) {
+              const secName = typeof sec === "string" ? sec : (sec.name || "");
+              const sectionEntry = {
+                ...(typeof sec === "object" ? sec : {}),
+                id: sec.id || `${level}-${gradeNum}-${index}`,
+                name: secName,
+                grade: sec.grade || gradeNum || gradeKey,
+                level: sec.level || level,
+              };
+
+              // Map under all possible lookup formats from drafts and algorithms
+              map.set(`${level}-${gradeNum}-${index}`, sectionEntry);
+              map.set(`sec-${gradeNum}-${index}`, sectionEntry);
+              map.set(`${gradeNum}-${index}`, sectionEntry);
+              if (sec.id) map.set(sec.id, sectionEntry);
+              if (secName) {
+                map.set(secName, sectionEntry);
+                map.set(secName.toLowerCase(), sectionEntry);
+              }
+            }
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Error reading sections map:", e);
   }
+  return map;
 }
 
-// Calculate teacher loads in minutes and percent
-function calculateTeacherLoads(facultyList) {
-  const { draft, config } = getScheduleDraftAndConfig();
-  if (!draft || !draft.schedule || !draft.schedule.assignments) return facultyList.map(f => ({ ...f, assignedLoadPercent: 0 }));
-
-  // Get periods per day (use the larger value)
-  const periodsPerDay = Math.max(
-    Number(config.periods?.regular || 0),
-    Number(config.periods?.special || 0)
-  );
-  // Get days of week
-  const regularDays = config.regularDays || [];
-  const shortenedDays = config.shortenedDays || [];
-  const periodMinutes = config.periodMinutes || { regular: 50, shortened: 45 };
-
-  // Calculate balanced min/max using fixed values (4 and 6) as per user formula
-  const minBalanced = (4 * regularDays.length * periodMinutes.regular) + (4 * shortenedDays.length * periodMinutes.shortened);
-  const maxBalanced = (6 * regularDays.length * periodMinutes.regular) + (6 * shortenedDays.length * periodMinutes.shortened);
-
-  // Improved calculation: count assigned classes per regular and shortened day, multiply by day count and interval, then sum
-  const teacherMinutes = {};
-  // Build a mapping of teacherId to assigned classes per day type
-  facultyList.forEach(faculty => {
-    // Count unique periods assigned to this teacher (e.g., all JHS-Px for this teacherId)
-    let assignedPeriods = new Set();
-    if (draft.schedule && draft.schedule.assignments) {
-      Object.entries(draft.schedule.assignments).forEach(([key, assignment]) => {
-        if (assignment.teacherId !== faculty.id) return;
-        // Only count JHS-Px periods
-        const periodMatch = key.match(/\|JHS-P(\d+)/);
-        if (periodMatch) {
-          assignedPeriods.add(periodMatch[0]);
+// Utility to get all subjects as a Map(subjectId => subject)
+function getAllSubjectsMap() {
+  const map = new Map();
+  if (typeof window === "undefined") return map;
+  try {
+    const raw = localStorage.getItem("turotugma_subjects");
+    if (!raw) return map;
+    const list = JSON.parse(raw);
+    if (Array.isArray(list)) {
+      list.forEach((sub) => {
+        if (sub && sub.id) {
+          map.set(sub.id, sub);
         }
       });
     }
-    const periodCount = assignedPeriods.size;
-    // Calculate total minutes for the week
-    const totalMinutes = (periodCount * regularDays.length * periodMinutes.regular) + (periodCount * shortenedDays.length * periodMinutes.shortened);
-    teacherMinutes[faculty.id] = totalMinutes;
+  } catch (e) {
+    console.error("Error reading subjects map:", e);
+  }
+  return map;
+}
+
+// Utility to get active schedule assignments from localStorage (published or drafts)
+function getActiveScheduleAssignments() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const allAssignments = [];
+
+  const processSchedule = (sched) => {
+    if (!sched || !sched.assignments || typeof sched.assignments !== "object") return;
+    Object.entries(sched.assignments).forEach(([cellKey, asgn]) => {
+      if (!asgn || !asgn.teacherId) return;
+      const parts = String(cellKey || "").split("|");
+      allAssignments.push({
+        ...asgn,
+        cellKey,
+        sectionId: asgn.sectionId || parts[0] || "",
+        slotId: asgn.slotId || parts[1] || "",
+        scheduleType: sched.scheduleType || "",
+      });
+    });
+  };
+
+  try {
+    // 1. Check Published Schedules
+    const publishedRaw = localStorage.getItem("turotugma_published_schedules");
+    if (publishedRaw) {
+      const publishedMap = JSON.parse(publishedRaw);
+      if (publishedMap && typeof publishedMap === "object") {
+        Object.values(publishedMap).forEach((sched) => {
+          processSchedule(sched);
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Error reading published schedules:", e);
+  }
+
+  // If published schedules had assignments, return them
+  if (allAssignments.length > 0) {
+    return allAssignments;
+  }
+
+  try {
+    // 2. Fallback to Draft Schedules if no published schedules exist.
+    // Deduplicate by taking the most recent draft per scheduleType so multiple versions don't multiply count.
+    const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
+    if (draftRaw) {
+      const draftArr = JSON.parse(draftRaw);
+      if (Array.isArray(draftArr) && draftArr.length > 0) {
+        const latestByLevel = {};
+        draftArr.forEach((draftItem) => {
+          const sched = draftItem?.schedule || draftItem;
+          const level = sched?.scheduleType || draftItem?.scheduleType || "default";
+          const updated = new Date(draftItem?.updatedAt || sched?.updatedAt || 0).getTime();
+          if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
+            latestByLevel[level] = { sched, updated };
+          }
+        });
+        Object.values(latestByLevel).forEach(({ sched }) => {
+          processSchedule(sched);
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Error reading schedule drafts:", e);
+  }
+
+  return allAssignments;
+}
+
+function getScheduleConfigPeriodMinutes() {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem("turotugma_schedule_configurations") : null;
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      const regMin = Number(cfg?.jhs?.sessions?.regular?.duration || cfg?.jhs?.periodMinutes?.regular);
+      if (regMin > 0) return regMin;
+    }
+  } catch (e) {}
+  return 60; // Diadi NHS standard is 60 mins per period
+}
+
+// Calculate teacher loads aligned with DepEd DO 005, s. 2024 & RA 4670 (Magna Carta)
+// Actual classroom contact hours only (30.0 contact hours/week standard). Advisory, ARAL, remediation, prep counted separately.
+function calculateTeacherLoads(facultyList) {
+  if (!Array.isArray(facultyList)) {
+    return [];
+  }
+
+  const assignments = getActiveScheduleAssignments();
+  const periodMinutes = getScheduleConfigPeriodMinutes();
+  const sectionsMap = getAllSectionsMap();
+  const subjectsMap = getAllSubjectsMap();
+
+  const facultyById = new Map(facultyList.map((f) => [f.id, f]));
+
+  // Count assigned periods and collect assigned sections / subjects per teacher
+  const teacherPeriodCounts = {};
+  const teacherSectionsMap = {};
+  const teacherSubjectsMap = {};
+  const teacherDistinctPrepsMap = {};
+  const adviserHGPCount = {};
+  const teacherAbsorbedHGPMap = {};
+
+  assignments.forEach((asgn) => {
+    const tid = asgn.teacherId;
+    if (tid) {
+      const faculty = facultyById.get(tid);
+      const isClassAdviser = Boolean(
+        faculty?.isClassAdviser ||
+        (Array.isArray(faculty?.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+      );
+
+      const sub = asgn.subjectId ? subjectsMap.get(asgn.subjectId) : null;
+      const subCode = String(sub?.subjectCode || sub?.code || "").toUpperCase();
+      const subName = String(sub?.subjectName || sub?.name || asgn.subjectId || "").toLowerCase();
+      const isHGP =
+        subCode === "HGP" ||
+        subCode === "HRG" ||
+        subCode === "ADV" ||
+        subName.includes("homeroom") ||
+        subName.includes("guidance program") ||
+        subName.includes("advisory");
+
+      // DepEd DO 005, s. 2024: Class Adviser's advisory section HGP period (1 period/wk)
+      // is an integral duty covered under their 5.0h advising credit.
+      // It is absorbed so it does not count as classroom contact overload.
+      let isAdvisoryHGPAbsorbed = false;
+      if (isClassAdviser && isHGP) {
+        const count = adviserHGPCount[tid] || 0;
+        if (count === 0) {
+          isAdvisoryHGPAbsorbed = true;
+          adviserHGPCount[tid] = 1;
+          teacherAbsorbedHGPMap[tid] = true;
+        }
+      }
+
+      if (!isAdvisoryHGPAbsorbed) {
+        teacherPeriodCounts[tid] = (teacherPeriodCounts[tid] || 0) + 1;
+      }
+
+      if (!teacherSectionsMap[tid]) teacherSectionsMap[tid] = new Map();
+      if (asgn.sectionId) {
+        const sec = sectionsMap.get(asgn.sectionId);
+        const secName = sec?.name || asgn.sectionId;
+        const rawGrade = sec?.grade ? String(sec.grade).replace(/^Grade\s*/i, "").replace(/^G/i, "").trim() : "";
+        const gradeText = rawGrade ? `Grade ${rawGrade}` : "";
+        const label = gradeText && !secName.toLowerCase().includes(gradeText.toLowerCase())
+          ? `${gradeText} - ${secName}`
+          : secName;
+        teacherSectionsMap[tid].set(asgn.sectionId, {
+          id: asgn.sectionId,
+          name: secName,
+          grade: sec?.grade || "",
+          label,
+        });
+      }
+
+      if (!teacherSubjectsMap[tid]) teacherSubjectsMap[tid] = new Map();
+      if (asgn.subjectId) {
+        const displayName = sub?.subjectName || sub?.name || sub?.subjectCode || asgn.subjectId;
+        teacherSubjectsMap[tid].set(asgn.subjectId, {
+          id: asgn.subjectId,
+          name: displayName,
+          code: sub?.subjectCode || sub?.code || displayName,
+        });
+      }
+
+      // Track distinct academic subject preparations (excluding advisory HGP)
+      if (!isHGP && asgn.subjectId) {
+        const sec = asgn.sectionId ? sectionsMap.get(asgn.sectionId) : null;
+        let prepLabel = String(sub?.subjectName || sub?.name || sub?.subjectCode || asgn.subjectId).trim();
+        if (!/\b(?:7|8|9|10|11|12)\b/.test(prepLabel)) {
+          const grade = sec?.grade || sub?.gradeLevel;
+          if (grade && String(grade) !== "7-10") {
+            prepLabel = `${prepLabel} ${grade}`;
+          }
+        }
+        if (!teacherDistinctPrepsMap[tid]) teacherDistinctPrepsMap[tid] = new Set();
+        teacherDistinctPrepsMap[tid].add(prepLabel);
+      }
+    }
   });
 
-  // Calculate percent for each teacher
-  return facultyList.map(faculty => {
-    const minutes = teacherMinutes[faculty.id] || 0;
-    let percent = 0;
-    if (minutes > 0 && maxBalanced > 0) {
-      percent = Math.round((minutes / maxBalanced) * 100);
+  return facultyList.map((faculty) => {
+    const periodCount = teacherPeriodCounts[faculty.id] || 0;
+    const totalMinutes = periodCount * periodMinutes;
+    const totalHours = Math.round((totalMinutes / 60) * 10) / 10;
+    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
+
+    const isClassAdviser = Boolean(
+      faculty.isClassAdviser ||
+      (Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+    );
+
+    const rawAppt = faculty.appointmentStatus || faculty.employmentStatus || "Permanent";
+    let appointmentStatus = "Permanent";
+    const lowAppt = String(rawAppt).toLowerCase();
+    if (lowAppt.includes("prov") || lowAppt.includes("prob")) {
+      appointmentStatus = "Provisional";
+    } else if (lowAppt.includes("cont")) {
+      appointmentStatus = "Contractual";
+    } else if (lowAppt.includes("sub")) {
+      appointmentStatus = "Substitute";
+    } else if (lowAppt.includes("part")) {
+      appointmentStatus = "Permanent";
     }
+
+    const rawArrangement = faculty.workingArrangement || (String(faculty.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time");
+    const workingArrangement = String(rawArrangement).toLowerCase().includes("part") ? "Part-Time" : "Full-Time";
+    const isPartTime = workingArrangement === "Part-Time";
+
+    // Magna Carta & DepEd DO 005, s. 2024:
+    // Statutory maximum classroom teaching is 30 contact hours/week (6 hrs/day).
+    // Class Advisers receive a 1-load credit (5 hours/week ancillary credit), capping contact teaching at 25 hrs/week.
+    // Operational Workload Categories:
+    // - Unassigned: 0 contact hours assigned
+    // - Underload: < 20h for regular, < 16h for class adviser, < 12h for part-time (needs more classes assigned)
+    // - Balanced: 20 - 30h for regular, 16 - 25h for class adviser, 12 - 20h for part-time (optimal target load)
+    // - Overload: > 30h for regular, > 25h for adviser (exceeds teaching ceiling)
+    const ancillaryCreditHours = isClassAdviser ? 5 : (Number(faculty.ancillaryCreditHours) || 0);
+    const maxTeachingContactHours = isPartTime ? 20 : (isClassAdviser ? 25 : 30);
+    const minBalancedHours = isPartTime ? 12 : (isClassAdviser ? 16 : 20);
+
+    const percent = Math.round((totalHours / maxTeachingContactHours) * 100);
+
+    let status = "Unassigned";
+    if (periodCount === 0) {
+      status = "Unassigned";
+    } else if (totalHours < minBalancedHours) {
+      status = "Underload";
+    } else if (totalHours <= maxTeachingContactHours) {
+      status = "Balanced";
+    } else {
+      status = "Overload";
+    }
+
+    const statutoryTier = totalHours === 0 ? "Unassigned" : (totalHours >= (isClassAdviser ? 25 : 30) ? "Full load" : "Part load");
+
+    const assignedSectionsList = teacherSectionsMap[faculty.id] ? Array.from(teacherSectionsMap[faculty.id].values()) : [];
+    const assignedSubjectsList = teacherSubjectsMap[faculty.id] ? Array.from(teacherSubjectsMap[faculty.id].values()) : [];
+
+    const prepsSet = teacherDistinctPrepsMap[faculty.id] || new Set();
+    const distinctPrepsList = Array.from(prepsSet);
+    const distinctPrepsCount = distinctPrepsList.length;
+    const distinctPrepsSummary = distinctPrepsList.join(", ") || "None";
+    const hasAdvisoryHGP = Boolean(teacherAbsorbedHGPMap[faculty.id]);
+
     return {
       ...faculty,
+      isClassAdviser,
+      appointmentStatus,
+      workingArrangement,
+      isPartTime,
+      distinctPrepsCount,
+      distinctPrepsList,
+      distinctPrepsSummary,
+      hasAdvisoryHGP,
+      ancillaryCreditHours,
+      maxTeachingContactHours,
+      minBalancedHours,
+      assignedPeriods: periodCount,
+      assignedLoadMinutes: totalMinutes,
+      assignedLoadHours: totalHours,
+      dailyContactHours: dailyHours,
       assignedLoadPercent: percent,
-      assignedLoadMinutes: minutes,
-      assignedLoadStatus: minutes === 0 ? "Unassigned" : (minutes < minBalanced ? "Underload" : (minutes <= maxBalanced ? "Balanced" : "Overload")),
+      assignedLoadStatus: status, // "Unassigned" | "Underload" | "Balanced" | "Overload"
+      statutoryTier, // Informational DepEd statutory tier ("Full load" vs "Part load")
+      assignedSections: assignedSectionsList,
+      assignedSectionsSummary: assignedSectionsList.map((s) => s.label).join(", ") || "",
+      assignedSubjects: assignedSubjectsList,
+      assignedSubjectsSummary: assignedSubjectsList.map((s) => s.code || s.name).join(", ") || "",
     };
   });
 }
@@ -79,7 +348,9 @@ const SUBJECTS_STORAGE_KEY = "turotugma_subjects";
 const SCHEDULE_PERIODS_KEY = "turotugma_schedule_unavailable_periods";
 
 const SEX_OPTIONS = ["Male", "Female", "Prefer not to say", "Other"];
-const EMPLOYMENT_STATUS_OPTIONS = ["Regular", "Probationary", "Part-Time"];
+const APPOINTMENT_STATUS_OPTIONS = ["Permanent", "Provisional", "Contractual", "Substitute"];
+const WORKING_ARRANGEMENT_OPTIONS = ["Full-Time", "Part-Time"];
+const EMPLOYMENT_STATUS_OPTIONS = ["Permanent", "Provisional", "Contractual", "Substitute"];
 const DEPED_DESIGNATION_OPTIONS = [
   "Teacher I",
   "Teacher II",
@@ -102,6 +373,7 @@ const DEGREE_SUGGESTIONS = ["BSEd", "BEEd", "BS Math", "BS English", "BS Biology
 const MAJOR_SUGGESTIONS = ["Mathematics", "English", "Filipino", "Science", "Araling Panlipunan", "TLE", "ICT", "HUMSS", "ABM", "STEM"];
 const MINOR_SUGGESTIONS = ["Mathematics", "English", "Filipino", "Science", "Values Education", "MAPEH", "Computer", "None"];
 const ANCILLARY_POOL = [
+  "Class Adviser",
   "Sports Development Office Adviser",
   "Campus Journalism Coach",
   "Science Club Moderator",
@@ -119,12 +391,16 @@ const EMPTY_FORM = {
   sex: "",
   employeeId: "",
   position: "",
-  employmentStatus: "Regular",
+  appointmentStatus: "Permanent",
+  workingArrangement: "Full-Time",
+  employmentStatus: "Permanent",
   email: "",
   contact: "",
   degree: "",
   major: "",
   minor: "",
+  isClassAdviser: false,
+  advisorySection: "",
   ancillaryAssignments: [],
   ancillaryInput: "",
   unavailablePeriods: [],
@@ -136,6 +412,8 @@ export default function FacultyManagement() {
   const [facultyMembers, setFacultyMembers] = useState(() => getInitialFaculty());
   const [formState, setFormState] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [viewMode, setViewMode] = useState("grid");
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("success");
   const [touched, setTouched] = useState({});
@@ -150,28 +428,249 @@ export default function FacultyManagement() {
   const [positionFilters, setPositionFilters] = useState([]);
   const [workloadFilter, setWorkloadFilter] = useState("all");
   const [subjectFilters, setSubjectFilters] = useState([]);
+  const [confirmModal, setConfirmModal] = useState({ open: false, title: "", message: "", confirmLabel: "Confirm", onConfirm: null, onCancel: null });
   const noticeTimerRef = useRef(null);
   const formCardRef = useRef(null);
+  const drawerBodyRef = useRef(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleClickOutside = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [exportMenuOpen]);
 
   const subjectOptions = useMemo(() => getSubjectOptions(), []);
   const unavailablePeriodOptions = useMemo(() => getUnavailablePeriodOptions(), []);
-    const [facultyWithLoad, setFacultyWithLoad] = useState([]);
+  const [facultyWithLoad, setFacultyWithLoad] = useState([]);
 
-    // Whenever faculty list, schedule, or config changes, recalculate loads
-    useEffect(() => {
-      function recalcLoads() {
-        const loaded = calculateTeacherLoads(facultyMembers);
-        setFacultyWithLoad(loaded);
-        // Do NOT persist to localStorage here; handled by persistFaculty
+  // Summary KPI statistics: Balanced vs Underload vs Overload vs Unassigned
+  const loadKpis = useMemo(() => {
+    let balanced = 0;
+    let underload = 0;
+    let overload = 0;
+    let unassigned = 0;
+    let full = 0;
+    let part = 0;
+    let totalContactHours = 0;
+
+    facultyWithLoad.forEach((m) => {
+      const status = m.assignedLoadStatus || "Unassigned";
+      if (status === "Balanced") balanced += 1;
+      else if (status === "Underload") underload += 1;
+      else if (status === "Overload") overload += 1;
+      else unassigned += 1;
+
+      if (m.statutoryTier === "Full load" || status === "Full load") full += 1;
+      else if (m.statutoryTier === "Part load" || status === "Part load") part += 1;
+
+      totalContactHours += Number(m.assignedLoadHours) || 0;
+    });
+
+    const activeFacultyCount = facultyWithLoad.filter((m) => m.active !== false).length;
+    const avgHours = activeFacultyCount > 0 ? (totalContactHours / activeFacultyCount).toFixed(1) : "0.0";
+
+    return { balanced, underload, overload, unassigned, full, part, avgHours, total: facultyWithLoad.length };
+  }, [facultyWithLoad]);
+
+  // Helper to reliably trigger file download across Chromium, Edge, and Firefox
+  const triggerDownloadFile = (content, filename, mimeType) => {
+    try {
+      const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
+
+      if (typeof window.navigator !== "undefined" && window.navigator.msSaveBlob) {
+        window.navigator.msSaveBlob(blob, filename);
+        return;
       }
-      recalcLoads();
-      window.addEventListener("turotugma:faculty-updated", recalcLoads);
-      window.addEventListener("storage", recalcLoads);
-      return () => {
-        window.removeEventListener("turotugma:faculty-updated", recalcLoads);
-        window.removeEventListener("storage", recalcLoads);
-      };
-    }, [facultyMembers]);
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.style.display = "none";
+      link.href = url;
+      link.download = filename;
+      link.setAttribute("download", filename);
+      link.rel = "noopener";
+      document.body.appendChild(link);
+
+      try {
+        const mouseEvent = new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        });
+        link.dispatchEvent(mouseEvent);
+      } catch (e) {
+        link.click();
+      }
+
+      // Retain blob URL for 60s so browser download manager finishes saving with custom filename
+      setTimeout(() => {
+        try {
+          if (link.parentNode) {
+            document.body.removeChild(link);
+          }
+          window.URL.revokeObjectURL(url);
+        } catch (_) {}
+      }, 60000);
+    } catch (err) {
+      console.error("Download trigger failed:", err);
+      throw err;
+    }
+  };
+
+  // Send to server-side endpoint with official Content-Disposition & Content-Type headers
+  const triggerServerDownload = (filename, contentType, content, base64) => {
+    try {
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = "http://127.0.0.1:8000/export.php";
+      form.style.display = "none";
+
+      const fileInput = document.createElement("input");
+      fileInput.type = "hidden";
+      fileInput.name = "filename";
+      fileInput.value = filename;
+      form.appendChild(fileInput);
+
+      const typeInput = document.createElement("input");
+      typeInput.type = "hidden";
+      typeInput.name = "contentType";
+      typeInput.value = contentType;
+      form.appendChild(typeInput);
+
+      if (base64) {
+        const b64Input = document.createElement("input");
+        b64Input.type = "hidden";
+        b64Input.name = "base64";
+        b64Input.value = base64;
+        form.appendChild(b64Input);
+      } else if (content) {
+        const contentInput = document.createElement("input");
+        contentInput.type = "hidden";
+        contentInput.name = "content";
+        contentInput.value = content;
+        form.appendChild(contentInput);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+      setTimeout(() => {
+        if (form.parentNode) document.body.removeChild(form);
+      }, 3000);
+      return true;
+    } catch (err) {
+      console.warn("Server download submission failed:", err);
+      return false;
+    }
+  };
+
+  // Export DepEd Teacher Load Tracker spreadsheet (Excel or CSV)
+  const handleExportRoster = (format = "xlsx") => {
+    try {
+      const rowsToExport = filteredFacultyMembers.map((member) => ({
+        "Teacher Name": member.name,
+        "Employee ID": member.employeeId,
+        "Position / Designation": member.position,
+        "Appointment Category": member.appointmentStatus || member.employmentStatus || "Permanent",
+        "Working Arrangement": member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time"),
+        "Active Status": member.active ? "Active" : "Inactive",
+        "Distinct Preparations Count": member.distinctPrepsCount || 0,
+        "Distinct Preparations": member.distinctPrepsSummary || "None",
+        "Subject Expertise": Array.isArray(member.subjectExpertise) ? member.subjectExpertise.join(", ") : "",
+        "Degree / Major": member.major ? `${member.degree || "BSED"} - ${member.major}` : (member.degree || ""),
+        "Grade / Sections Assigned": member.assignedSectionsSummary || "None assigned",
+        "Assigned Subjects": member.assignedSubjectsSummary || "None assigned",
+        "Daily Contact Hours": `${member.dailyContactHours || 0} hrs/day`,
+        "Weekly Contact Hours": `${member.assignedLoadHours || 0} hrs/wk`,
+        "Weekly Periods (60 min)": member.assignedPeriods || 0,
+        "Workload Status": member.assignedLoadStatus || "Unassigned",
+        "Balanced Target Range": `${member.minBalancedHours || 20} - ${member.maxTeachingContactHours || 30} hrs/wk`,
+        "Statutory Standard": "30.0 contact hrs/wk (6.0 hrs/day)",
+        "Statutory Tier": member.statutoryTier || "Unassigned",
+        "Class Adviser": member.isClassAdviser ? "Class Adviser (5h ancillary credit)" : "No",
+        "Advisory HGP Credit": member.hasAdvisoryHGP ? "Absorbed in 5.0h advising credit" : "N/A",
+        "Ancillary Duties": Array.isArray(member.ancillaryAssignments) ? member.ancillaryAssignments.join(", ") : "None",
+      }));
+
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const baseName = `DepEd_Teacher_Load_Tracker_${dateStr}`;
+      const ws = XLSX.utils.json_to_sheet(rowsToExport);
+
+      if (format === "csv") {
+        const csvContent = XLSX.utils.sheet_to_csv(ws);
+        const filename = `${baseName}.csv`;
+        const contentType = "text/csv;charset=utf-8;";
+        const submitted = triggerServerDownload(filename, contentType, "\uFEFF" + csvContent, null);
+
+        if (!submitted) {
+          const encodedUri = "data:text/csv;charset=utf-8," + encodeURIComponent("\uFEFF" + csvContent);
+          const link = document.createElement("a");
+          link.style.display = "none";
+          link.href = encodedUri;
+          link.download = filename;
+          link.setAttribute("download", filename);
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            if (link.parentNode) link.parentNode.removeChild(link);
+          }, 2000);
+        }
+        showNotice("DepEd Teacher Load Tracker CSV (.csv) exported successfully!", "success");
+        return;
+      }
+
+      // Default: Excel .xlsx
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Teacher Load Tracker");
+      const base64Data = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
+      const filename = `${baseName}.xlsx`;
+      const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      const submitted = triggerServerDownload(filename, contentType, null, base64Data);
+
+      if (!submitted) {
+        const dataUri = `data:${contentType};base64,` + base64Data;
+        const link = document.createElement("a");
+        link.style.display = "none";
+        link.href = dataUri;
+        link.download = filename;
+        link.setAttribute("download", filename);
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          if (link.parentNode) link.parentNode.removeChild(link);
+        }, 2000);
+      }
+      showNotice("DepEd Teacher Load Tracker spreadsheet (.xlsx) exported successfully!", "success");
+    } catch (e) {
+      console.error("Export error:", e);
+      showNotice("Failed to export faculty roster", "error");
+    }
+  };
+
+  const handleExportLoadTracker = handleExportRoster;
+
+  // Whenever faculty list, schedule, or config changes, recalculate loads
+  useEffect(() => {
+    function recalcLoads() {
+      const loaded = calculateTeacherLoads(facultyMembers);
+      setFacultyWithLoad(loaded);
+    }
+    recalcLoads();
+    window.addEventListener("turotugma:faculty-updated", recalcLoads);
+    window.addEventListener("turotugma:schedule-updated", recalcLoads);
+    window.addEventListener("storage", recalcLoads);
+    return () => {
+      window.removeEventListener("turotugma:faculty-updated", recalcLoads);
+      window.removeEventListener("turotugma:schedule-updated", recalcLoads);
+      window.removeEventListener("storage", recalcLoads);
+    };
+  }, [facultyMembers]);
 
   const validationErrors = useMemo(
     () => validateFacultyForm(formState, facultyMembers, editingId),
@@ -410,6 +909,37 @@ export default function FacultyManagement() {
     showNotice(`Imported ${newFaculty.length} teacher(s) successfully.`, "success");
   };
 
+  const handleLoad80Dataset = async () => {
+    try {
+      const res = await fetch("/faculty_100_profiles.csv");
+      if (!res.ok) throw new Error("Dataset file not found");
+      const text = await res.text();
+      const workbook = XLSX.read(text, { type: "string" });
+      const sheetName = workbook.SheetNames[0];
+      const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+      const mapped = rawRows.map((row) => mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions));
+      persistFaculty(mapped);
+      showNotice(`Successfully loaded 80 DepEd Faculty Profiles (64 JHS Only, 8 SHS Only, 8 Both JHS & SHS)!`, "success");
+    } catch {
+      showNotice("Failed to load 80 faculty dataset.", "error");
+    }
+  };
+
+  const handleClearAllFaculty = () => {
+    setConfirmModal({
+      open: true,
+      title: "Clear All Faculty",
+      message: "Are you sure you want to clear ALL faculty members? This action cannot be undone.",
+      confirmLabel: "Clear All",
+      onConfirm: () => {
+        persistFaculty([]);
+        showNotice("All faculty members cleared.", "success");
+        setConfirmModal({ open: false });
+      },
+      onCancel: () => setConfirmModal({ open: false }),
+    });
+  };
+
   const handleSaveFaculty = () => {
     const liveValidationErrors = validateFacultyForm(formState, facultyMembers, editingId);
     const hasErrors = Object.keys(liveValidationErrors).length > 0;
@@ -441,6 +971,7 @@ export default function FacultyManagement() {
       const unchanged = JSON.stringify(stripAuditFields(existing)) === JSON.stringify(stripAuditFields(normalized));
       if (unchanged) {
         showNotice("No changes to save.", "error");
+        setIsDrawerOpen(false);
         return;
       }
 
@@ -460,6 +991,7 @@ export default function FacultyManagement() {
       setEditingId(null);
       setFormState(EMPTY_FORM);
       setTouched({});
+      setIsDrawerOpen(false);
       showNotice("Faculty record updated.", "success");
       return;
     }
@@ -467,7 +999,25 @@ export default function FacultyManagement() {
     persistFaculty([...facultyMembers, normalized]);
     setFormState(EMPTY_FORM);
     setTouched({});
+    setIsDrawerOpen(false);
     showNotice("Faculty record added.", "success");
+  };
+
+  const handleAddNewFaculty = () => {
+    setEditingId(null);
+    setFormState(EMPTY_FORM);
+    setTouched({});
+    setIsDrawerOpen(true);
+    if (drawerBodyRef.current) {
+      drawerBodyRef.current.scrollTop = 0;
+    }
+  };
+
+  const handleCloseDrawer = () => {
+    setIsDrawerOpen(false);
+    setEditingId(null);
+    setFormState(EMPTY_FORM);
+    setTouched({});
   };
 
   const handleEditFaculty = (member) => {
@@ -476,46 +1026,84 @@ export default function FacultyManagement() {
       name: member.name,
       sex: member.sex,
       employeeId: member.employeeId,
-      position: member.position,
-      employmentStatus: member.employmentStatus,
+      position: member.position || "Teacher I",
+      appointmentStatus: member.appointmentStatus || member.employmentStatus || "Permanent",
+      workingArrangement: member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time"),
+      employmentStatus: member.appointmentStatus || member.employmentStatus || "Permanent",
       email: member.email,
       contact: member.contact,
       degree: member.degree,
       major: member.major,
       minor: member.minor,
-      ancillaryAssignments: member.ancillaryAssignments,
+      isClassAdviser: Boolean(member.isClassAdviser || member.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))),
+      advisorySection: member.advisorySection || "",
+      ancillaryAssignments: member.ancillaryAssignments || [],
       ancillaryInput: "",
-      unavailablePeriods: member.unavailablePeriods,
-      subjectExpertise: member.subjectExpertise,
-      gradeLevelAssignments: member.gradeLevelAssignments,
+      unavailablePeriods: member.unavailablePeriods || [],
+      subjectExpertise: member.subjectExpertise || member.primaryExpertise || [],
+      primaryExpertise: member.primaryExpertise || member.subjectExpertise || [],
+      secondaryExpertise: member.secondaryExpertise || [],
+      gradeLevelAssignments: member.gradeLevelAssignments || [],
     });
     setTouched({});
+    setIsDrawerOpen(true);
 
-    window.requestAnimationFrame(() => {
-      formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-
+    if (drawerBodyRef.current) {
+      drawerBodyRef.current.scrollTop = 0;
+    }
     showNotice("Edit mode enabled.", "success");
   };
 
   const handleCancelEdit = () => {
-    setEditingId(null);
-    setFormState(EMPTY_FORM);
-    setTouched({});
+    handleCloseDrawer();
     showNotice("Edit cancelled.", "success");
   };
 
+  // Close drawer on Escape key and lock background scroll
+  useEffect(() => {
+    if (!isDrawerOpen) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        handleCloseDrawer();
+      }
+    };
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDrawerOpen]);
+
   const handleDeleteFaculty = (memberId) => {
-    const nextFaculty = facultyMembers.filter((member) => member.id !== memberId);
-    persistFaculty(nextFaculty);
+    const targetMember = facultyMembers.find((m) => m.id === memberId);
+    const memberName = targetMember?.name || "this faculty member";
 
-    if (editingId === memberId) {
-      setEditingId(null);
-      setFormState(EMPTY_FORM);
-      setTouched({});
-    }
+    setConfirmModal({
+      open: true,
+      title: "Delete Faculty Member",
+      message: `Are you sure you want to delete "${memberName}"?`,
+      confirmLabel: "Delete",
+      onConfirm: () => {
+        const nextFaculty = facultyMembers.filter((member) => member.id !== memberId);
+        persistFaculty(nextFaculty);
 
-    showNotice("Faculty record deleted.", "success");
+        if (editingId === memberId) {
+          setEditingId(null);
+          setFormState(EMPTY_FORM);
+          setTouched({});
+          setIsDrawerOpen(false);
+        }
+
+        showNotice("Faculty record deleted.", "success");
+        setConfirmModal({ open: false });
+      },
+      onCancel: () => setConfirmModal({ open: false }),
+    });
   };
 
   const handleToggleRetired = (memberId) => {
@@ -604,9 +1192,21 @@ export default function FacultyManagement() {
       }
 
       if (workloadFilter !== "all") {
-        // Use assignedLoadStatus for filtering
         const memberLoadStatus = (member.assignedLoadStatus || "Unassigned").toLowerCase();
-        if (memberLoadStatus !== workloadFilter) {
+        const target = workloadFilter.toLowerCase();
+        if (target === "balanced") {
+          if (memberLoadStatus !== "balanced") return false;
+        } else if (target === "underload") {
+          if (memberLoadStatus !== "underload") return false;
+        } else if (target === "overload") {
+          if (memberLoadStatus !== "overload") return false;
+        } else if (target === "unassigned") {
+          if (memberLoadStatus !== "unassigned") return false;
+        } else if (target === "full load") {
+          if (memberLoadStatus !== "balanced" && member.statutoryTier !== "Full load") return false;
+        } else if (target === "part load") {
+          if (memberLoadStatus !== "underload" && member.statutoryTier !== "Part load") return false;
+        } else if (memberLoadStatus !== target) {
           return false;
         }
       }
@@ -630,7 +1230,16 @@ export default function FacultyManagement() {
         return true;
       }
 
-      const searchable = [member.name, member.employeeId, member.email].map((item) => String(item || "").toLowerCase()).join(" ");
+      const searchable = [
+        member.name,
+        member.employeeId,
+        member.email,
+        member.position,
+        member.degree,
+        member.major,
+        member.assignedSectionsSummary,
+        member.assignedSubjectsSummary,
+      ].map((item) => String(item || "").toLowerCase()).join(" ");
       return searchable.includes(normalizedSearch);
     });
   }, [sortedFacultyMembers, searchQuery, statusFilter, gradeFilters, positionFilters, workloadFilter, subjectFilters]);
@@ -650,11 +1259,20 @@ export default function FacultyManagement() {
       setPositionFilters((prev) => prev.filter((item) => item !== value));
     }
   };
+  const maxLoadMinutes = useMemo(() => {
+    if (!facultyWithLoad || facultyWithLoad.length === 0) return 0;
+    return Math.max(...facultyWithLoad.map((m) => m.assignedLoadMinutes || 0), 0);
+  }, [facultyWithLoad]);
+
   return (
     <>
       <style>
         {`
           .faculty-scroll-list::-webkit-scrollbar { display: none; }
+          .faculty-drawer-scroll::-webkit-scrollbar { width: 6px; }
+          .faculty-drawer-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+          .faculty-drawer-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+          .faculty-drawer-scroll::-webkit-scrollbar-track { background: transparent; }
 
           @media (max-width: 1280px) {
             .faculty-header {
@@ -667,10 +1285,6 @@ export default function FacultyManagement() {
               align-items: flex-start;
             }
 
-            .faculty-main-grid {
-              grid-template-columns: 1fr !important;
-            }
-
             .faculty-filter-row-primary,
             .faculty-filter-row-secondary {
               grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -681,7 +1295,7 @@ export default function FacultyManagement() {
             }
 
             .faculty-scroll-list {
-              max-height: 520px !important;
+              max-height: 600px !important;
             }
           }
 
@@ -692,7 +1306,7 @@ export default function FacultyManagement() {
             }
 
             .faculty-scroll-list {
-              max-height: 460px !important;
+              max-height: 520px !important;
             }
           }
         `}
@@ -715,18 +1329,139 @@ export default function FacultyManagement() {
 
       <div className="faculty-header" style={{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
         <div>
-          <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Faculty</h1>
-          <p style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14 }}>
-            Manage teacher profiles, assignments, availability, expertise, and active or inactive status.
+          <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>Faculty Management</h1>
+          <p style={{ margin: "6px 0 0", color: "#5b6787", fontSize: 13.5 }}>
+            Manage teacher profiles, DepEd contact hours, subject expertise, and section assignments.
           </p>
-          <p style={{ margin: "6px 0 0", color: "#5b6787", fontSize: 12 }}>
-            Total Faculty: {facultyMembers.length} • Active: {activeCount}
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, fontSize: 12, color: "#64748b", flexWrap: "wrap" }}>
+            <span>Total Profiled: <strong style={{ color: "#1f2c6f" }}>{facultyMembers.length}</strong></span>
+            <span>•</span>
+            <span>Active: <strong style={{ color: "#047857" }}>{activeCount}</strong></span>
+            <span>•</span>
+            <span>Benchmark: <strong style={{ color: "#1f2c6f" }}>30.0 contact hrs/wk</strong> (DepEd DO 005, s. 2024 &amp; RA 4670)</span>
+          </div>
         </div>
 
-        <div className="faculty-header-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+        <div className="faculty-header-actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleAddNewFaculty}
+            style={{
+              ...primaryActionStyle(),
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontWeight: 700,
+            }}
+          >
+            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
+            <span>Add Faculty</span>
+          </button>
+          <div style={{ position: "relative" }} ref={exportMenuRef}>
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen((prev) => !prev)}
+              style={{
+                ...secondaryActionStyle(),
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span>Export Roster</span>
+              <span style={{ fontSize: 10 }}>▾</span>
+            </button>
+            {exportMenuOpen && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: 4,
+                  background: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 8,
+                  boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)",
+                  zIndex: 100,
+                  minWidth: 200,
+                  padding: "4px 0",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    handleExportRoster("xlsx");
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "9px 14px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: "#1e293b",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  <span>Excel Spreadsheet</span>
+                  <span style={{ fontSize: 11, color: "#3B4197", fontWeight: 700, background: "#eef2ff", padding: "2px 6px", borderRadius: 4 }}>.xlsx</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    handleExportRoster("csv");
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "9px 14px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: "#1e293b",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  <span>CSV Document</span>
+                  <span style={{ fontSize: 11, color: "#475569", fontWeight: 700, background: "#f1f5f9", padding: "2px 6px", borderRadius: 4 }}>.csv</span>
+                </button>
+              </div>
+            )}
+          </div>
           <button type="button" onClick={() => setShowImportPanel((prev) => !prev)} style={secondaryActionStyle()}>
-            {showImportPanel ? "Hide Teacher Import" : "Import Teachers"}
+            {showImportPanel ? "Hide Import" : "Import Teachers"}
+          </button>
+          <button
+            type="button"
+            onClick={handleLoad80Dataset}
+            style={{
+              ...secondaryActionStyle(),
+              color: "#3B4197",
+              borderColor: "#c7d2fe",
+              background: "#eef2ff",
+              fontWeight: 700,
+            }}
+            title="Load 80 DepEd Faculty Profiles dataset"
+          >
+            Load 80 Teachers
+          </button>
+          <button type="button" onClick={handleClearAllFaculty} style={dangerActionStyle()}>
+            Clear All Faculty
           </button>
 
           {notice ? (
@@ -734,17 +1469,40 @@ export default function FacultyManagement() {
               role="status"
               aria-live="polite"
               style={{
-                background: noticeType === "error" ? "#b53f4e" : "#2f5f3a",
+                position: "fixed",
+                top: 24,
+                right: 24,
+                zIndex: 100000,
+                background: noticeType === "error" ? "#dc2626" : "#3B4197",
                 color: "#ffffff",
                 borderRadius: 10,
-                padding: "10px 14px",
+                padding: "12px 18px",
                 fontSize: 13,
                 fontWeight: 600,
-                boxShadow: "0 10px 24px rgba(15, 27, 45, 0.2)",
-                maxWidth: 360,
+                boxShadow: "0 10px 30px rgba(15, 23, 42, 0.25)",
+                maxWidth: 420,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                pointerEvents: "none",
               }}
             >
-              {notice}
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 20,
+                  height: 20,
+                  borderRadius: "50%",
+                  background: "rgba(255,255,255,0.2)",
+                  fontSize: 11,
+                  fontWeight: 800,
+                }}
+              >
+                {noticeType === "error" ? "!" : "i"}
+              </span>
+              <span>{notice}</span>
             </div>
           ) : null}
         </div>
@@ -762,6 +1520,20 @@ export default function FacultyManagement() {
             <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFacultyImportFileChange} style={{ ...inputStyle(), paddingTop: 7, height: 38 }} />
             <button type="button" onClick={handleImportFacultyRows} style={primaryActionStyle()} disabled={!importPreviewRows.length || isParsingImport}>
               Import Valid Rows
+            </button>
+            <button
+              type="button"
+              onClick={handleLoad80Dataset}
+              style={{
+                ...secondaryActionStyle(),
+                color: "#3B4197",
+                borderColor: "#c7d2fe",
+                background: "#eef2ff",
+                fontWeight: 700,
+              }}
+              title="Load 80 DepEd Faculty Profiles dataset"
+            >
+              Load 80 Teachers Dataset
             </button>
             {isParsingImport ? <span style={{ color: "#5a678d", fontSize: 12 }}>Parsing file...</span> : null}
           </div>
@@ -815,170 +1587,557 @@ export default function FacultyManagement() {
         </div>
       ) : null}
 
-      <div className="faculty-main-grid" style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16 }}>
-        <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
-          <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>Faculty List</h2>
-          <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13 }}>Includes Name, Employee ID, status, and quick actions.</p>
-
-          <div className="faculty-filter-row-primary" style={{ marginTop: 10, display: "grid", gridTemplateColumns: "minmax(0, 2fr) repeat(2, minmax(0, 1fr)) auto", gap: 8, alignItems: "end" }}>
-            <Field label="Search">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => {
-                  setSearchQuery(event.target.value);
-                }}
-                placeholder="Search name, ID, email"
-                style={inputStyle(false)}
-              />
-            </Field>
-
-            <Field label="Status">
-              <select
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value);
-                }}
-                style={selectStyle(false)}
-              >
-                <option value="all">All</option>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-              </select>
-            </Field>
-
-            <Field label="Workload">
-              <select
-                value={workloadFilter}
-                onChange={(event) => {
-                  setWorkloadFilter(event.target.value);
-                }}
-                style={selectStyle(false)}
-              >
-                <option value="all">All Workloads</option>
-                <option value="unassigned">Unassigned</option>
-                <option value="balanced">Balanced</option>
-                <option value="underload">Underload</option>
-                <option value="overload">Overload</option>
-              </select>
-            </Field>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery("");
-                setStatusFilter("all");
-                setGradeFilters([]);
-                setPositionFilters([]);
-                setWorkloadFilter("all");
-                setSubjectFilters([]);
-              }}
-              style={{ ...secondaryActionStyle(), height: 36 }}
-            >
-              Reset
-            </button>
+      {/* Executive Workload Distribution Ribbon & Quick-Filter Strip */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        {/* Card 1: Total Profiled */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWorkloadFilter("all")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWorkloadFilter("all"); } }}
+          style={{
+            background: workloadFilter === "all" ? "#f0f4ff" : "#ffffff",
+            border: workloadFilter === "all" ? "2px solid #3B4197" : "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s ease",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.03)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Total Faculty
           </div>
-
-          <div className="faculty-filter-row-secondary" style={{ marginTop: 8, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
-            <Field label="Position">
-              <SearchableMultiSelectChips
-                options={positionFilterOptions}
-                selected={positionFilters}
-                onToggle={(option) => {
-                  setPositionFilters((prev) =>
-                    prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]
-                  );
-                }}
-                emptyLabel="No position options available."
-                placeholder="Search and select positions"
-                showSelectedChips={false}
-                showEmptySelectionText={false}
-              />
-            </Field>
-
-            <Field label="Subjects">
-              <SearchableMultiSelectChips
-                options={subjectFilterOptions}
-                selected={subjectFilters}
-                onToggle={(option) => {
-                  setSubjectFilters((prev) =>
-                    prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]
-                  );
-                }}
-                emptyLabel="No subject options available."
-                placeholder="Search and select subject filters"
-                showSelectedChips={false}
-                showEmptySelectionText={false}
-              />
-            </Field>
-
-            <Field label="Grade Level">
-              <SearchableMultiSelectChips
-                options={GRADE_LEVEL_OPTIONS}
-                selected={gradeFilters}
-                onToggle={(option) => {
-                  setGradeFilters((prev) => (prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]));
-                }}
-                emptyLabel="No grade level options available."
-                placeholder="Search and select grade levels"
-                showSelectedChips={false}
-                showEmptySelectionText={false}
-              />
-            </Field>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: "#1f2c6f", lineHeight: 1 }}>{facultyWithLoad.length}</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>profiled</span>
           </div>
-
-          {selectedMultiFilterChips.length ? (
-            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {selectedMultiFilterChips.map((chip) => (
-                <span key={chip.key} style={chipStyle()}>
-                  {chip.label}
-                  <button type="button" onClick={() => removeSelectedMultiFilterChip(chip.type, chip.value)} style={chipRemoveStyle()}>
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : null}
-
-          <p style={{ margin: "10px 0 0", color: "#5d698d", fontSize: 12 }}>
-            Showing {filteredFacultyMembers.length} of {facultyMembers.length} teacher{facultyMembers.length === 1 ? "" : "s"}
-          </p>
-
-          {facultyMembers.length === 0 ? (
-            <p style={{ margin: "14px 0 0", color: "#7a86a7", fontSize: 13 }}>No faculty records added yet.</p>
-          ) : filteredFacultyMembers.length === 0 ? (
-            <p style={{ margin: "14px 0 0", color: "#7a86a7", fontSize: 13 }}>No teachers match the current search or filters.</p>
-          ) : (
-            <>
-              <div
-                className="faculty-scroll-list"
-                style={{
-                  marginTop: 12,
-                  display: "grid",
-                  gap: 8,
-                  maxHeight: 620,
-                  overflowY: "auto",
-                  scrollbarWidth: "none",
-                  msOverflowStyle: "none",
-                }}
-              >
-                {filteredFacultyMembers.map((member) => (
-                  <FacultyListRow
-                    key={member.id}
-                    member={member}
-                    isEditing={editingId === member.id}
-                    onEdit={handleEditFaculty}
-                  />
-                ))}
-              </div>
-            </>
-          )}
+          <div style={{ fontSize: 11, color: "#047857", marginTop: 4, fontWeight: 600 }}>
+            {activeCount} active · avg {loadKpis.avgHours}h/wk
+          </div>
         </div>
 
-        <div ref={formCardRef} style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
-          <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>{editingId ? "Edit Faculty" : "Add Faculty"}</h2>
+        {/* Card 2: Balanced Target Load */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWorkloadFilter("balanced")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWorkloadFilter("balanced"); } }}
+          style={{
+            background: workloadFilter === "balanced" ? "#f0f4ff" : "#ffffff",
+            border: workloadFilter === "balanced" ? "2px solid #3B4197" : "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s ease",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.03)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#3B4197", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Balanced (Target Load)
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: "#3B4197", lineHeight: 1 }}>{loadKpis.balanced}</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>
+            20–30 contact hrs/wk
+          </div>
+        </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
+        {/* Card 3: Underload */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWorkloadFilter("underload")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWorkloadFilter("underload"); } }}
+          style={{
+            background: workloadFilter === "underload" ? "#f0f4ff" : "#ffffff",
+            border: workloadFilter === "underload" ? "2px solid #3B4197" : "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s ease",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.03)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#4f46e5", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Underload
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: "#4f46e5", lineHeight: 1 }}>{loadKpis.underload}</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>
+            Needs assignment (&lt; 20h)
+          </div>
+        </div>
+
+        {/* Card 4: Overload */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWorkloadFilter("overload")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWorkloadFilter("overload"); } }}
+          style={{
+            background: workloadFilter === "overload" ? "#fef2f2" : "#ffffff",
+            border: workloadFilter === "overload" ? "2px solid #dc2626" : "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s ease",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.03)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#dc2626", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Overload
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: "#dc2626", lineHeight: 1 }}>{loadKpis.overload}</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4, fontWeight: 600 }}>
+            Exceeds DepEd limit (&gt; 30h)
+          </div>
+        </div>
+
+        {/* Card 5: Unassigned */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setWorkloadFilter("unassigned")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setWorkloadFilter("unassigned"); } }}
+          style={{
+            background: workloadFilter === "unassigned" ? "#f8fafc" : "#ffffff",
+            border: workloadFilter === "unassigned" ? "2px solid #64748b" : "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s ease",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.03)",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Unassigned
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: "#64748b", lineHeight: 1 }}>{loadKpis.unassigned}</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+            0 contact hrs scheduled
+          </div>
+        </div>
+      </div>
+
+      {/* Faculty Directory Main Container (Full Width) */}
+      <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: "20px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 20, fontWeight: 700 }}>Faculty Directory</h2>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#3B4197", background: "#f0f4ff", padding: "3px 12px", borderRadius: 99, border: "1px solid #dce4f8" }}>
+                {filteredFacultyMembers.length} of {facultyMembers.length} teachers
+              </span>
+            </div>
+            <p style={{ margin: "4px 0 0", color: "#5d698d", fontSize: 13 }}>
+              Identity, weekly contact hours, sections &amp; assignments.
+            </p>
+          </div>
+          {/* Grid / List View Switcher */}
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              background: "#f1f5f9",
+              borderRadius: 8,
+              padding: 3,
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 6,
+                border: "none",
+                background: viewMode === "grid" ? "#ffffff" : "transparent",
+                color: viewMode === "grid" ? "#1f2c6f" : "#64748b",
+                fontWeight: viewMode === "grid" ? 700 : 500,
+                fontSize: 12.5,
+                cursor: "pointer",
+                boxShadow: viewMode === "grid" ? "0 1px 3px rgba(15,23,42,0.08)" : "none",
+                transition: "all 0.15s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1" y="1" width="6" height="6" rx="1.5" />
+                <rect x="9" y="1" width="6" height="6" rx="1.5" />
+                <rect x="1" y="9" width="6" height="6" rx="1.5" />
+                <rect x="9" y="9" width="6" height="6" rx="1.5" />
+              </svg>
+              <span>Grid View</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 6,
+                border: "none",
+                background: viewMode === "list" ? "#ffffff" : "transparent",
+                color: viewMode === "list" ? "#1f2c6f" : "#64748b",
+                fontWeight: viewMode === "list" ? 700 : 500,
+                fontSize: 12.5,
+                cursor: "pointer",
+                boxShadow: viewMode === "list" ? "0 1px 3px rgba(15,23,42,0.08)" : "none",
+                transition: "all 0.15s ease",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="1.5" y="2" width="13" height="3" rx="1" />
+                <rect x="1.5" y="6.5" width="13" height="3" rx="1" />
+                <rect x="1.5" y="11" width="13" height="3" rx="1" />
+              </svg>
+              <span>List View</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="faculty-filter-row-primary" style={{ marginTop: 12, display: "grid", gridTemplateColumns: "minmax(0, 2fr) repeat(2, minmax(0, 1fr)) auto", gap: 8, alignItems: "end" }}>
+          <Field label="Search">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+              }}
+              placeholder="Search name, ID, email"
+              style={inputStyle(false)}
+            />
+          </Field>
+
+          <Field label="Status">
+            <select
+              value={statusFilter}
+              onChange={(event) => {
+                setStatusFilter(event.target.value);
+              }}
+              style={selectStyle(false)}
+            >
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </Field>
+
+          <Field label="Workload">
+            <select
+              value={workloadFilter}
+              onChange={(event) => {
+                setWorkloadFilter(event.target.value);
+              }}
+              style={selectStyle(false)}
+            >
+              <option value="all">All Workloads</option>
+              <option value="balanced">Balanced (Target Load)</option>
+              <option value="underload">Underload (Needs More Load)</option>
+              <option value="overload">Overload (Exceeds Limit)</option>
+              <option value="unassigned">Unassigned (0 hrs)</option>
+            </select>
+          </Field>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery("");
+              setStatusFilter("all");
+              setGradeFilters([]);
+              setPositionFilters([]);
+              setWorkloadFilter("all");
+              setSubjectFilters([]);
+            }}
+            style={{ ...secondaryActionStyle(), height: 36 }}
+          >
+            Reset
+          </button>
+        </div>
+
+        <div className="faculty-filter-row-secondary" style={{ marginTop: 8, display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", gap: 8, alignItems: "end" }}>
+          <Field label="Position">
+            <SearchableMultiSelectChips
+              options={positionFilterOptions}
+              selected={positionFilters}
+              onToggle={(option) => {
+                setPositionFilters((prev) =>
+                  prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]
+                );
+              }}
+              emptyLabel="No position options available."
+              placeholder="Search and select positions"
+              showSelectedChips={false}
+              showEmptySelectionText={false}
+            />
+          </Field>
+
+          <Field label="Subjects">
+            <SearchableMultiSelectChips
+              options={subjectFilterOptions}
+              selected={subjectFilters}
+              onToggle={(option) => {
+                setSubjectFilters((prev) =>
+                  prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]
+                );
+              }}
+              emptyLabel="No subject options available."
+              placeholder="Search and select subject filters"
+              showSelectedChips={false}
+              showEmptySelectionText={false}
+            />
+          </Field>
+
+          <Field label="Grade Level">
+            <SearchableMultiSelectChips
+              options={GRADE_LEVEL_OPTIONS}
+              selected={gradeFilters}
+              onToggle={(option) => {
+                setGradeFilters((prev) => (prev.includes(option) ? prev.filter((item) => item !== option) : [...prev, option]));
+              }}
+              emptyLabel="No grade level options available."
+              placeholder="Search and select grade levels"
+              showSelectedChips={false}
+              showEmptySelectionText={false}
+            />
+          </Field>
+        </div>
+
+        {selectedMultiFilterChips.length ? (
+          <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {selectedMultiFilterChips.map((chip) => (
+              <span key={chip.key} style={chipStyle()}>
+                {chip.label}
+                <button type="button" onClick={() => removeSelectedMultiFilterChip(chip.type, chip.value)} style={chipRemoveStyle()}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <p style={{ margin: "10px 0 0", color: "#5d698d", fontSize: 12 }}>
+          Showing {filteredFacultyMembers.length} of {facultyMembers.length} teacher{facultyMembers.length === 1 ? "" : "s"}
+        </p>
+
+        {facultyMembers.length === 0 ? (
+          <p style={{ margin: "14px 0 0", color: "#7a86a7", fontSize: 13 }}>No faculty records added yet.</p>
+        ) : filteredFacultyMembers.length === 0 ? (
+          <p style={{ margin: "14px 0 0", color: "#7a86a7", fontSize: 13 }}>No teachers match the current search or filters.</p>
+        ) : viewMode === "grid" ? (
+          <div
+            className="faculty-scroll-list"
+            style={{
+              marginTop: 12,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
+              gap: 12,
+              maxHeight: 740,
+              overflowY: "auto",
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+              padding: 2,
+            }}
+          >
+            {filteredFacultyMembers.map((member) => (
+              <FacultyListRow
+                key={member.id}
+                member={member}
+                isEditing={editingId === member.id && isDrawerOpen}
+                onEdit={handleEditFaculty}
+                onDelete={handleDeleteFaculty}
+                onToggleActive={handleToggleRetired}
+              />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="faculty-scroll-list"
+            style={{
+              marginTop: 12,
+              maxHeight: 740,
+              overflowY: "auto",
+              overflowX: "auto",
+              border: "1px solid #e2e8f0",
+              borderRadius: 12,
+              background: "#ffffff",
+            }}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0", position: "sticky", top: 0, zIndex: 10 }}>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.03em" }}>Teacher</th>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.03em" }}>Position &amp; Status</th>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.03em", minWidth: 200 }}>Weekly Load</th>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.03em" }}>Sections</th>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: "0.03em" }}>Ancillaries</th>
+                  <th style={{ padding: "12px 16px", color: "#475569", fontWeight: 700, fontSize: 12, textAlign: "right", textTransform: "uppercase", letterSpacing: "0.03em" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredFacultyMembers.map((member) => (
+                  <FacultyTableRow
+                    key={member.id}
+                    member={member}
+                    isEditing={editingId === member.id && isDrawerOpen}
+                    onEdit={handleEditFaculty}
+                    onDelete={handleDeleteFaculty}
+                    onToggleActive={handleToggleRetired}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Slide-over Backdrop Overlay */}
+      <div
+        onClick={handleCloseDrawer}
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          backgroundColor: "rgba(15, 23, 42, 0.45)",
+          backdropFilter: "blur(3px)",
+          WebkitBackdropFilter: "blur(3px)",
+          zIndex: 99990,
+          opacity: isDrawerOpen ? 1 : 0,
+          pointerEvents: isDrawerOpen ? "auto" : "none",
+          transition: "opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
+        }}
+      />
+
+      {/* Slide-over Editing Sidebar Drawer (Moving right-to-left smoothly) */}
+      <aside
+        ref={formCardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={editingId ? "Edit Faculty Profile" : "Add Faculty Profile"}
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 580,
+          maxWidth: "92vw",
+          height: "100vh",
+          backgroundColor: "#ffffff",
+          zIndex: 99995,
+          boxShadow: isDrawerOpen ? "-12px 0 36px rgba(15, 23, 42, 0.2)" : "none",
+          transform: isDrawerOpen ? "translateX(0)" : "translateX(100%)",
+          transition: "transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.32s ease",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          pointerEvents: isDrawerOpen ? "auto" : "none",
+        }}
+      >
+        {/* Drawer Header (Fixed at top) */}
+        <div
+          style={{
+            padding: "18px 24px",
+            borderBottom: "1px solid #e2e8f0",
+            background: "#f8faff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexShrink: 0,
+          }}
+        >
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: editingId ? "#3B4197" : "#10b981",
+                  display: "inline-block",
+                }}
+              />
+              <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18, fontWeight: 800 }}>
+                {editingId ? "Edit Faculty Profile" : "Add Faculty Profile"}
+              </h2>
+            </div>
+            <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12.5 }}>
+              {editingId
+                ? `Updating profile for ${editingMember?.name || "faculty member"}${editingMember?.employeeId ? ` (${editingMember.employeeId})` : ""}`
+                : "Enter credentials, subject expertise, and advisory designation"}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleCloseDrawer}
+            aria-label="Close editing panel"
+            style={{
+              background: "transparent",
+              border: "1px solid #cbd5e1",
+              borderRadius: 8,
+              width: 34,
+              height: 34,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              color: "#64748b",
+              fontSize: 18,
+              fontWeight: 600,
+              lineHeight: 1,
+              transition: "all 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#eef2ff";
+              e.currentTarget.style.color = "#3B4197";
+              e.currentTarget.style.borderColor = "#3B4197";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#64748b";
+              e.currentTarget.style.borderColor = "#cbd5e1";
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Drawer Scrollable Body */}
+        <div
+          ref={drawerBodyRef}
+          className="faculty-drawer-scroll"
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "20px 24px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
             <Field label="Name" required error={touched.name ? validationErrors.name : ""}>
               <input
                 type="text"
@@ -1031,16 +2190,33 @@ export default function FacultyManagement() {
               </select>
             </Field>
 
-            <Field label="Employment Status" required error={touched.employmentStatus ? validationErrors.employmentStatus : ""}>
+            <Field label="Appointment Category" required error={touched.appointmentStatus ? validationErrors.appointmentStatus : ""}>
               <select
-                value={formState.employmentStatus}
-                onChange={(event) => handleFormField("employmentStatus", event.target.value)}
-                onBlur={() => markTouched("employmentStatus")}
-                style={selectStyle(!!(touched.employmentStatus && validationErrors.employmentStatus))}
+                value={formState.appointmentStatus || formState.employmentStatus || "Permanent"}
+                onChange={(event) => {
+                  handleFormField("appointmentStatus", event.target.value);
+                  handleFormField("employmentStatus", event.target.value);
+                }}
+                onBlur={() => markTouched("appointmentStatus")}
+                style={selectStyle(!!(touched.appointmentStatus && validationErrors.appointmentStatus))}
               >
-                {EMPLOYMENT_STATUS_OPTIONS.map((status) => (
+                {APPOINTMENT_STATUS_OPTIONS.map((status) => (
                   <option key={status} value={status}>
                     {status}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Working Arrangement" required>
+              <select
+                value={formState.workingArrangement || "Full-Time"}
+                onChange={(event) => handleFormField("workingArrangement", event.target.value)}
+                style={selectStyle(false)}
+              >
+                {WORKING_ARRANGEMENT_OPTIONS.map((arr) => (
+                  <option key={arr} value={arr}>
+                    {arr}
                   </option>
                 ))}
               </select>
@@ -1101,7 +2277,7 @@ export default function FacultyManagement() {
             </Field>
           </div>
 
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 6 }}>
             <Field label="Ancillary Assignments (input)">
               <div style={{ display: "flex", gap: 8 }}>
                 <input
@@ -1121,10 +2297,60 @@ export default function FacultyManagement() {
                 </button>
               </div>
             </Field>
+            {/* DepEd Class Adviser 1-Load Credit Toggle */}
+            <div style={{ margin: "10px 0", padding: "10px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#1f2c6f" }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser")))}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    handleFormField("isClassAdviser", checked);
+                    if (checked) {
+                      if (!formState.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser"))) {
+                        handleFormField("ancillaryAssignments", [...formState.ancillaryAssignments, "Class Adviser"]);
+                      }
+                      showNotice("Designated as Class Adviser (+5h teaching load credit applied under DepEd DO 005, s. 2024).", "success");
+                    } else {
+                      handleFormField("ancillaryAssignments", formState.ancillaryAssignments.filter((a) => !String(a).toLowerCase().includes("adviser")));
+                    }
+                  }}
+                />
+                <span>Class Adviser (DepEd 1-Load Credit / 5 hrs advisory time)</span>
+              </label>
+              <p style={{ margin: "4px 0 0 24px", fontSize: 11, color: "#64748b" }}>
+                Per DO 005, s. 2024, advisory duty is credited as 1 teaching load (caps actual classroom teaching to 25 hrs/week instead of 30 hrs).
+              </p>
+            </div>
             <ChipList items={formState.ancillaryAssignments} onRemove={removeAncillaryAssignment} emptyText="No ancillary assignments added." />
+            {formState.ancillaryAssignments && formState.ancillaryAssignments.length > 0 ? (
+              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>DepEd Workload Presets:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    showNotice("Applied Major Ancillary Credit (-4 teaching periods/week).", "success");
+                  }}
+                  style={{ fontSize: 11, background: "#eef2ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
+                  title="Deducts 4 teaching periods for major roles like Registrar, Guidance Coordinator, Property Custodian."
+                >
+                  Major Credit (-4 periods)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    showNotice("Applied Minor Ancillary Credit (-2 teaching periods/week).", "success");
+                  }}
+                  style={{ fontSize: 11, background: "#eef2ff", color: "#3B4197", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
+                  title="Deducts 2 teaching periods for minor roles like Grade Level Chair, Canteen Manager."
+                >
+                  Minor Credit (-2 periods)
+                </button>
+              </div>
+            ) : null}
           </div>
 
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 6 }}>
             <Field label="Unavailable Periods" error={touched.unavailablePeriods ? validationErrors.unavailablePeriods : ""}>
               <SearchableMultiSelectChips
                 options={unavailablePeriodOptions}
@@ -1135,19 +2361,34 @@ export default function FacultyManagement() {
             </Field>
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <Field label="Subject Expertise" required error={touched.subjectExpertise ? validationErrors.subjectExpertise : ""}>
+          <div style={{ marginTop: 6 }}>
+            <Field label="Primary Subject Expertise (Preferred)" required error={touched.subjectExpertise ? validationErrors.subjectExpertise : ""}>
               <SearchableMultiSelectChips
                 options={subjectOptions}
-                selected={formState.subjectExpertise}
-                onToggle={(option) => toggleMultiSelect("subjectExpertise", option)}
+                selected={formState.primaryExpertise && formState.primaryExpertise.length ? formState.primaryExpertise : formState.subjectExpertise}
+                onToggle={(option) => {
+                  const currentPrimary = formState.primaryExpertise && formState.primaryExpertise.length ? formState.primaryExpertise : formState.subjectExpertise;
+                  const nextPrimary = currentPrimary.includes(option) ? currentPrimary.filter((i) => i !== option) : [...currentPrimary, option];
+                  setFormState((prev) => ({ ...prev, primaryExpertise: nextPrimary, subjectExpertise: nextPrimary }));
+                }}
                 emptyLabel="No subjects available yet. Create subjects first."
-                placeholder="Search subjects..."
+                placeholder="Search primary subjects..."
               />
             </Field>
           </div>
 
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 6 }}>
+            <Field label="Secondary Subject Expertise (Fallback)">
+              <SearchableMultiSelectChips
+                options={subjectOptions}
+                selected={formState.secondaryExpertise || []}
+                onToggle={(option) => toggleMultiSelect("secondaryExpertise", option)}
+                placeholder="Search secondary subjects..."
+              />
+            </Field>
+          </div>
+
+          <div style={{ marginTop: 6 }}>
             <Field label="Grade Level Assignments" required error={touched.gradeLevelAssignments ? validationErrors.gradeLevelAssignments : ""}>
               <SearchableMultiSelectChips
                 options={GRADE_LEVEL_OPTIONS}
@@ -1157,56 +2398,224 @@ export default function FacultyManagement() {
               />
             </Field>
           </div>
+        </div>
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-            {editingId ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => handleToggleRetired(editingId)}
-                  style={secondaryActionStyle()}
-                >
-                  {editingMember?.active ? "Deactivate" : "Activate"}
-                </button>
-                <button type="button" onClick={() => handleDeleteFaculty(editingId)} style={dangerActionStyle()}>
-                  Delete
-                </button>
-              <button type="button" onClick={handleCancelEdit} style={secondaryActionStyle()}>
-                Cancel
+        {/* Drawer Sticky Footer Actions */}
+        <div
+          style={{
+            padding: "16px 24px",
+            borderTop: "1px solid #e2e8f0",
+            background: "#ffffff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexShrink: 0,
+            boxShadow: "0 -4px 12px rgba(15,23,42,0.04)",
+            gap: 10,
+          }}
+        >
+          {editingId ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                type="button"
+                onClick={() => handleToggleRetired(editingId)}
+                style={{
+                  ...secondaryActionStyle(),
+                  padding: "8px 12px",
+                  fontSize: 12,
+                }}
+              >
+                {editingMember?.active ? "Deactivate" : "Activate"}
               </button>
-              </>
-            ) : null}
+              <button
+                type="button"
+                onClick={() => handleDeleteFaculty(editingId)}
+                style={{
+                  ...dangerActionStyle(),
+                  padding: "8px 12px",
+                  fontSize: 12,
+                }}
+              >
+                Delete Member
+              </button>
+            </div>
+          ) : (
+            <div />
+          )}
 
-            <button type="button" onClick={handleSaveFaculty} style={primaryActionStyle()}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleCloseDrawer}
+              style={{
+                ...secondaryActionStyle(),
+                padding: "8px 16px",
+                fontSize: 13,
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveFaculty}
+              style={{
+                ...primaryActionStyle(),
+                padding: "8px 20px",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
               {editingId ? "Save Changes" : "Add Faculty"}
             </button>
           </div>
         </div>
-      </div>
+      </aside>
+
+      <ConfirmationModal
+        open={confirmModal.open}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmLabel={confirmModal.confirmLabel}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={confirmModal.onCancel}
+      />
     </>
   );
 }
 
-function FacultyListRow({ member, isEditing, onEdit }) {
-  // Use assignedLoadStatus for badge label and color
-  const statusToneMap = {
-    Unassigned: "neutral",
-    Underload: "warning",
-    Balanced: "good",
-    Overload: "danger",
-  };
-  const loadStatus = member.assignedLoadStatus || "Unassigned";
-  const badgeTone = statusToneMap[loadStatus] || "neutral";
+function getTeacherInitials(name) {
+  if (!name || typeof name !== "string") return "FC";
+  const cleaned = name.replace(/^(Mr\.|Ms\.|Mrs\.|Dr\.|Prof\.|Master\s+Teacher\s+[I|V|X]+)\s+/i, "").trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "FC";
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
-  // For the progress bar, still use percent, but color by status
-  const loadPercent = Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0;
-  // Chart color mapping for consistency with dashboard
+function formatSectionChip(sec) {
+  if (!sec) return "";
+  const name = String(sec.name || sec.id || "").trim();
+  const rawId = String(sec.id || "").trim();
+
+  // 1. Direct match for standard DepEd format like "9-Stravinsky" or "Grade 9 - Stravinsky"
+  const gradeNamedMatch = name.match(/^(?:Grade\s*|G)?(\d{1,2})\s*[-_·\s:]+\s*([A-Za-z].*)$/i);
+  if (gradeNamedMatch) {
+    const grade = gradeNamedMatch[1];
+    const rest = gradeNamedMatch[2].trim();
+    if (!/^Section\s*\d+$/i.test(rest) && !/^\d+$/.test(rest)) {
+      return `${grade}-${rest}`;
+    }
+  }
+
+  // 2. Grade known separately and name is a custom word (e.g., "Stravinsky", "Diamond", "Rizal")
+  let gradeNum = "";
+  if (sec.grade) {
+    const m = String(sec.grade).match(/\d+/);
+    if (m) gradeNum = m[0];
+  }
+  if (!gradeNum && sec.id) {
+    const m = String(sec.id).match(/(?:grade|g|jhs|shs|^)[-_·\s]*(\d{1,2})/i);
+    if (m) gradeNum = m[1];
+  }
+
+  if (gradeNum && name && !/^(?:Section\s*\d+|\d+|jhs|shs)/i.test(name)) {
+    const cleanName = name.replace(new RegExp(`^(?:Grade\\s*|G)?${gradeNum}\\s*[-_·]?\\s*`, "i"), "").trim();
+    if (cleanName && !/^(?:Section\s*\d+|\d+)$/i.test(cleanName)) {
+      return `${gradeNum}-${cleanName}`;
+    }
+  }
+
+  // 3. Fallback for numeric sections: ensure 1-based indexing (never Section 0)
+  const combined = `${name} ${rawId}`;
+  const numMatch = combined.match(/\b(?:jhs|shs)?[-_·\s]*(\d{1,2})[-_·\s]+(\d+)\b/i) ||
+                   name.match(/^(?:Grade\s*|G)?(\d{1,2})\s*[-_·]\s*(?:Section\s*)?(\d+)$/i);
+  if (numMatch) {
+    const grade = numMatch[1];
+    let secNum = parseInt(numMatch[2], 10);
+    // If zero-based index (e.g. 0), convert to 1-based
+    if (secNum === 0 || rawId.endsWith("-0") || name.endsWith(" 0")) {
+      secNum = secNum + 1;
+    }
+    return `${grade}-Section ${secNum}`;
+  }
+
+  if (sec.label) {
+    return String(sec.label).replace(/^Grade\s*/i, "").replace(/\s*[-·]\s*/, "-");
+  }
+  return name;
+}
+
+function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [menuOpen]);
+
+  const loadStatus = member.assignedLoadStatus || "Unassigned";
+
+  // Calibrate progress bar against teacher's max teaching limit (30h regular, 25h adviser)
+  const memberHours = Number.isFinite(member.assignedLoadHours) ? member.assignedLoadHours : 0;
+  const maxHours = member.maxTeachingContactHours || 30;
+  const barPercent = Math.max(0, Math.min(100, (memberHours / maxHours) * 100));
+
   const fillColor = {
-    neutral: "#c3c9de",    // Unassigned
-    warning: "#8893d9",   // Underload
-    good: "#3B4197",      // Balanced
-    danger: "#e53935",    // Overload (red)
-  }[badgeTone];
+    Unassigned: "#cbd5e1",
+    Underload: "#818cf8",
+    "Part load": "#818cf8",
+    Balanced: "#3B4197",
+    "Full load": "#3B4197",
+    Overload: "#ef4444",
+  }[loadStatus] || "#cbd5e1";
+
+  const statusColor = {
+    Unassigned: "#64748b",
+    Underload: "#4f46e5",
+    "Part load": "#4f46e5",
+    Balanced: "#3B4197",
+    "Full load": "#3B4197",
+    Overload: "#dc2626",
+  }[loadStatus] || "#64748b";
+
+  const formattedHours = memberHours ? `${memberHours.toFixed(1).replace(/\.0$/, "")}` : "0";
+
+  const appointmentStatus = member.appointmentStatus || member.employmentStatus || "Permanent";
+  const workingArrangement = member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time");
+  const position = member.position || "Teacher I";
+  const employeeId = member.employeeId || "—";
+  const isActive = member.active !== false;
+  const prepsCount = member.distinctPrepsCount || 0;
+  const prepsList = Array.isArray(member.distinctPrepsList) ? member.distinctPrepsList : [];
+
+  // Ancillaries list
+  const ancillaries = [];
+  if (
+    member.isClassAdviser ||
+    (Array.isArray(member.ancillaryAssignments) &&
+      member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+  ) {
+    ancillaries.push("Class Adviser");
+  }
+  if (Array.isArray(member.ancillaryAssignments)) {
+    member.ancillaryAssignments.forEach((anc) => {
+      const text = String(anc).trim();
+      if (text && !text.toLowerCase().includes("adviser") && !ancillaries.includes(text)) {
+        ancillaries.push(text);
+      }
+    });
+  }
+
+  const sections = Array.isArray(member.assignedSections) ? member.assignedSections : [];
 
   return (
     <div
@@ -1220,46 +2629,622 @@ function FacultyListRow({ member, isEditing, onEdit }) {
         }
       }}
       style={{
-        border: isEditing ? "1px solid #cdd5ff" : "1px solid #e3e7ef",
-        borderRadius: 10,
-        background: isEditing ? "#f3f6ff" : "#fbfcff",
-        padding: "10px 12px",
+        border: isEditing ? "2px solid #3B4197" : "1px solid #e2e8f0",
+        borderRadius: 14,
+        background: isEditing ? "#f8faff" : "#ffffff",
+        padding: "14px 16px",
         cursor: "pointer",
+        transition: "all 0.15s ease",
+        boxShadow: isEditing ? "0 2px 8px rgba(59,65,151,0.12)" : "0 1px 3px rgba(15,23,42,0.03)",
+        position: "relative",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <div>
-          <p style={{ margin: 0, color: "#25336f", fontSize: 14, fontWeight: 700 }}>{member.name}</p>
-          <p style={{ margin: "2px 0 0", color: "#5d698f", fontSize: 12 }}>{member.employeeId}</p>
-        </div>
+      {/* 1. Identity First: [Initials] Name, Position, EMP-ID · Regular | ● Active ⋮ */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 8,
+              background: "#eef2ff",
+              border: "1px solid #c7d2fe",
+              color: "#3B4197",
+              fontWeight: 700,
+              fontSize: 13,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              letterSpacing: "0.5px",
+              flexShrink: 0,
+              marginTop: 1,
+            }}
+          >
+            {getTeacherInitials(member.name)}
+          </div>
 
-        <span style={statusPillStyle(member.active)}>{member.active ? "Active" : "Inactive"}</span>
-      </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Faculty name: Largest text in the card */}
+            <h3
+              style={{
+                margin: 0,
+                color: "#0f172a",
+                fontSize: 15,
+                fontWeight: 700,
+                lineHeight: 1.25,
+                wordBreak: "break-word",
+              }}
+            >
+              {member.name}
+            </h3>
 
-      <div style={{ marginTop: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-          <span style={{ color: "#5d698f", fontSize: 12, fontWeight: 600 }}>Teacher Load</span>
-          <span style={loadStateBadgeStyle(badgeTone)}>{loadStatus}</span>
-        </div>
+            {/* Position: Directly below the name, smaller, medium-weight */}
+            <div style={{ marginTop: 2, fontSize: 12.5, fontWeight: 500, color: "#475569" }}>
+              {position}
+            </div>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ height: 8, borderRadius: 999, background: "#e8edf9", overflow: "hidden" }}>
-              <div
-                style={{
-                  width: `${Math.max(0, Math.min(loadPercent, 100))}%`,
-                  height: "100%",
-                  background: fillColor,
-                }}
-              />
+            {/* Employee ID and employment: One muted metadata line */}
+            <div style={{ marginTop: 2, fontSize: 11.5, color: "#64748b" }}>
+              {employeeId} · {appointmentStatus} · {workingArrangement}
             </div>
           </div>
-          <span style={{ color: "#25336f", fontSize: 12, fontWeight: 500, marginLeft: 8 }}>
-            {member.assignedLoadMinutes ? `${(member.assignedLoadMinutes / 60).toFixed(2)} hrs (${member.assignedLoadMinutes} min)` : "0 hrs"}
+        </div>
+
+        {/* Active Status & Actions Menu */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: isActive ? "#10b981" : "#94a3b8",
+                display: "inline-block",
+              }}
+            />
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                color: isActive ? "#047857" : "#64748b",
+              }}
+            >
+              {isActive ? "Active" : "Inactive"}
+            </span>
+          </div>
+
+          {/* Action Menu (⋮) */}
+          <div style={{ position: "relative" }} ref={menuRef}>
+            <button
+              type="button"
+              aria-label="Faculty actions"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((prev) => !prev);
+              }}
+              style={{
+                background: menuOpen ? "#f1f5f9" : "transparent",
+                border: "none",
+                borderRadius: 6,
+                width: 26,
+                height: 26,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: "#64748b",
+                fontSize: 16,
+                lineHeight: 1,
+                transition: "background 0.15s ease",
+              }}
+            >
+              ⋮
+            </button>
+            {menuOpen && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: 4,
+                  background: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 8,
+                  boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)",
+                  zIndex: 50,
+                  minWidth: 140,
+                  padding: "4px 0",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    onEdit?.(member);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "8px 14px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "#334155",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  Edit Profile
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    onToggleActive?.(member.id);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "8px 14px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "#334155",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  {isActive ? "Deactivate" : "Activate"}
+                </button>
+                <div style={{ height: 1, background: "#f1f5f9", margin: "4px 0" }} />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    onDelete?.(member.id);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "8px 14px",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "#dc2626",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#fef2f2")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  Delete Member
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: "#f1f5f9", margin: "12px 0 10px" }} />
+
+      {/* 2. Workload Second: Weekly teaching load | [2 Preps] 25 hrs/wk [Balanced] */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>Weekly teaching load</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {prepsCount > 0 && (
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 600,
+                color: "#3B4197",
+                background: "#eef2ff",
+                border: "1px solid #c7d2fe",
+                borderRadius: 4,
+                padding: "1px 6px",
+              }}
+              title={prepsList.length ? `Preparations: ${prepsList.join(", ")}` : ""}
+            >
+              {prepsCount} {prepsCount === 1 ? "Prep" : "Preps"}
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: "#1e293b", fontWeight: 600 }}>
+            {formattedHours} hrs/wk{" "}
+            <span style={{ color: statusColor, fontWeight: 700 }}>[{loadStatus}]</span>
           </span>
         </div>
       </div>
+
+      {/* Progress bar: Thin ~6px, quiet background track, no /30 or percentage */}
+      <div
+        style={{
+          height: 6,
+          borderRadius: 999,
+          background: "#f1f5f9",
+          overflow: "hidden",
+          marginTop: 6,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            width: `${barPercent}%`,
+            height: "100%",
+            background: fillColor,
+            borderRadius: 999,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+
+      {/* 3. Assignments Last: Sections & Ancillaries */}
+      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, alignItems: "start", marginBottom: 8 }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: "#64748b", paddingTop: 2 }}>Sections</span>
+        {sections.length > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {sections.map((sec) => (
+              <span
+                key={sec.id}
+                style={{
+                  fontSize: 11,
+                  background: "#f8fafc",
+                  color: "#1e293b",
+                  padding: "2px 8px",
+                  borderRadius: 6,
+                  border: "1px solid #e2e8f0",
+                  fontWeight: 500,
+                  lineHeight: 1.4,
+                  display: "inline-flex",
+                  alignItems: "center",
+                }}
+              >
+                {formatSectionChip(sec)}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic", paddingTop: 2 }}>None assigned</span>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, alignItems: "baseline" }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: "#64748b" }}>Ancillary</span>
+        {ancillaries.length > 0 ? (
+          <span style={{ fontSize: 12, color: "#334155", lineHeight: 1.4, fontWeight: 400 }}>
+            {ancillaries.join(", ")}
+          </span>
+        ) : (
+          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>None</span>
+        )}
+      </div>
     </div>
+  );
+}
+
+function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
+
+  const loadStatus = member.assignedLoadStatus || "Unassigned";
+  const memberHours = Number.isFinite(member.assignedLoadHours) ? member.assignedLoadHours : 0;
+  const maxHours = member.maxTeachingContactHours || 30;
+  const barPercent = Math.max(0, Math.min(100, (memberHours / maxHours) * 100));
+
+  const fillColor = {
+    Unassigned: "#cbd5e1",
+    Underload: "#818cf8",
+    "Part load": "#818cf8",
+    Balanced: "#3B4197",
+    "Full load": "#3B4197",
+    Overload: "#ef4444",
+  }[loadStatus] || "#cbd5e1";
+
+  const statusColor = {
+    Unassigned: "#64748b",
+    Underload: "#4f46e5",
+    "Part load": "#4f46e5",
+    Balanced: "#3B4197",
+    "Full load": "#3B4197",
+    Overload: "#dc2626",
+  }[loadStatus] || "#64748b";
+
+  const formattedHours = memberHours ? `${memberHours.toFixed(1).replace(/\.0$/, "")}` : "0";
+  const appointmentStatus = member.appointmentStatus || member.employmentStatus || "Permanent";
+  const workingArrangement = member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time");
+  const position = member.position || "Teacher I";
+  const employeeId = member.employeeId || "—";
+  const isActive = member.active !== false;
+  const prepsCount = member.distinctPrepsCount || 0;
+  const prepsList = Array.isArray(member.distinctPrepsList) ? member.distinctPrepsList : [];
+
+  const ancillaries = [];
+  if (
+    member.isClassAdviser ||
+    (Array.isArray(member.ancillaryAssignments) &&
+      member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+  ) {
+    ancillaries.push("Class Adviser");
+  }
+  if (Array.isArray(member.ancillaryAssignments)) {
+    member.ancillaryAssignments.forEach((anc) => {
+      const text = String(anc).trim();
+      if (text && !text.toLowerCase().includes("adviser") && !ancillaries.includes(text)) {
+        ancillaries.push(text);
+      }
+    });
+  }
+
+  const sections = Array.isArray(member.assignedSections) ? member.assignedSections : [];
+
+  return (
+    <tr
+      onClick={() => onEdit?.(member)}
+      style={{
+        borderBottom: "1px solid #f1f5f9",
+        background: isEditing ? "#eef2ff" : "#ffffff",
+        cursor: "pointer",
+        transition: "background 0.15s ease",
+      }}
+      onMouseEnter={(e) => {
+        if (!isEditing) e.currentTarget.style.background = "#f8faff";
+      }}
+      onMouseLeave={(e) => {
+        if (!isEditing) e.currentTarget.style.background = "#ffffff";
+      }}
+    >
+      {/* Teacher */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              background: "#eef2ff",
+              border: "1px solid #c7d2fe",
+              color: "#3B4197",
+              fontWeight: 700,
+              fontSize: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            {getTeacherInitials(member.name)}
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 13.5 }}>{member.name}</div>
+            <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>{employeeId}</div>
+          </div>
+        </div>
+      </td>
+
+      {/* Position & Status */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle" }}>
+        <div style={{ fontWeight: 600, color: "#334155", fontSize: 12.5 }}>{position}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+          <span style={{ fontSize: 11.5, color: "#64748b" }}>{appointmentStatus} · {workingArrangement}</span>
+          <span style={{ color: "#cbd5e1" }}>•</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: isActive ? "#047857" : "#64748b", fontWeight: 500 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: isActive ? "#10b981" : "#94a3b8" }} />
+            {isActive ? "Active" : "Inactive"}
+          </span>
+        </div>
+      </td>
+
+      {/* Weekly Load */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, maxWidth: 220 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#1e293b" }}>{formattedHours} hrs/wk</span>
+            {prepsCount > 0 && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "#3B4197",
+                  background: "#eef2ff",
+                  border: "1px solid #c7d2fe",
+                  borderRadius: 4,
+                  padding: "1px 5px",
+                }}
+                title={prepsList.length ? `Preparations: ${prepsList.join(", ")}` : ""}
+              >
+                {prepsCount} {prepsCount === 1 ? "Prep" : "Preps"}
+              </span>
+            )}
+          </div>
+          <span style={{ fontSize: 11, fontWeight: 700, color: statusColor }}>[{loadStatus}]</span>
+        </div>
+        <div style={{ height: 5, borderRadius: 99, background: "#f1f5f9", overflow: "hidden", marginTop: 5, maxWidth: 220 }}>
+          <div style={{ width: `${barPercent}%`, height: "100%", background: fillColor, borderRadius: 99, transition: "width 0.3s ease" }} />
+        </div>
+      </td>
+
+      {/* Sections Assigned */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle", maxWidth: 240 }}>
+        {sections.length > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+            {sections.slice(0, 4).map((sec) => (
+              <span
+                key={sec.id}
+                style={{
+                  fontSize: 10.5,
+                  background: "#f8fafc",
+                  color: "#1e293b",
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  border: "1px solid #e2e8f0",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {formatSectionChip(sec)}
+              </span>
+            ))}
+            {sections.length > 4 && (
+              <span style={{ fontSize: 10.5, color: "#64748b", fontWeight: 600 }}>
+                +{sections.length - 4} more
+              </span>
+            )}
+          </div>
+        ) : (
+          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>None</span>
+        )}
+      </td>
+
+      {/* Ancillary */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle", maxWidth: 180 }}>
+        {ancillaries.length > 0 ? (
+          <span style={{ fontSize: 12, color: "#334155", lineHeight: 1.3 }}>
+            {ancillaries.join(", ")}
+          </span>
+        ) : (
+          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>None</span>
+        )}
+      </td>
+
+      {/* Action Menu (⋮) */}
+      <td style={{ padding: "12px 16px", verticalAlign: "middle", textAlign: "right" }}>
+        <div style={{ position: "relative", display: "inline-block" }} ref={menuRef}>
+          <button
+            type="button"
+            aria-label="Faculty actions"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((prev) => !prev);
+            }}
+            style={{
+              background: menuOpen ? "#f1f5f9" : "transparent",
+              border: "none",
+              borderRadius: 6,
+              width: 28,
+              height: 28,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              color: "#64748b",
+              fontSize: 16,
+              lineHeight: 1,
+              transition: "background 0.15s ease",
+            }}
+          >
+            ⋮
+          </button>
+          {menuOpen && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: "100%",
+                right: 0,
+                marginTop: 4,
+                background: "#ffffff",
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+                boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1)",
+                zIndex: 50,
+                minWidth: 140,
+                padding: "4px 0",
+                textAlign: "left",
+              }}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onEdit?.(member);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "8px 14px",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "#334155",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+              >
+                Edit Profile
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onToggleActive?.(member.id);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "8px 14px",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "#334155",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+              >
+                {isActive ? "Deactivate" : "Activate"}
+              </button>
+              <div style={{ height: 1, background: "#f1f5f9", margin: "4px 0" }} />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onDelete?.(member.id);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "8px 14px",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "#dc2626",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#fef2f2")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+              >
+                Delete Member
+              </button>
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -1404,7 +3389,7 @@ function SearchableMultiSelectChips({
                     }}
                   >
                     <span>{option}</span>
-                    <span style={{ color: isSelected ? "#3B4197" : "#9aa5c2", fontWeight: 700 }}>{isSelected ? "✓" : "+"}</span>
+                    <span style={{ color: isSelected ? "#3B4197" : "#9aa5c2", fontSize: 11, fontWeight: 700 }}>{isSelected ? "Selected" : "+"}</span>
                   </button>
                 );
               })
@@ -1464,26 +3449,31 @@ function ChipList({ items, onRemove, emptyText }) {
 
 function statusPillStyle(active) {
   return {
-    color: active ? "#2f5f3a" : "#7f4a18",
+    color: active ? "#3B4197" : "#64748b",
     fontSize: 11,
     fontWeight: 700,
     whiteSpace: "nowrap",
-    background: active ? "#edf8f0" : "#fff3e6",
+    background: active ? "#eef2ff" : "#f1f5f9",
     borderRadius: 999,
-    border: active ? "1px solid #cde8d4" : "1px solid #f2dcc2",
+    border: active ? "1px solid #c7d2fe" : "1px solid #cbd5e1",
     padding: "3px 8px",
     display: "inline-flex",
+    alignItems: "center",
     justifyContent: "center",
   };
 }
 
 function loadStateBadgeStyle(tone) {
-  // Chart color mapping for badge backgrounds and borders
+  // Monochromatic Blue palette, RED for Overload
   const palette = {
-    neutral: { color: "#4d5a84", background: "#c3c9de", border: "#c3c9de" },    // Unassigned
-    warning: { color: "#4d5a84", background: "#8893d9", border: "#8893d9" },   // Underload
-    good: { color: "#fff", background: "#3B4197", border: "#3B4197" },        // Balanced
-    danger: { color: "#fff", background: "#e53935", border: "#e53935" },      // Overload (red)
+    neutral: { color: "#475569", background: "#f8fafc", border: "#cbd5e1" },     // Unassigned (slate)
+    underload: { color: "#5663bd", background: "#f8faff", border: "#d0dcfd" },   // Underload (soft monochromatic blue)
+    warning: { color: "#5663bd", background: "#f8faff", border: "#d0dcfd" },     // Underload alias
+    part: { color: "#5663bd", background: "#f8faff", border: "#d0dcfd" },        // Underload alias
+    balanced: { color: "#3B4197", background: "#eef2ff", border: "#c7d2fe" },    // Balanced (primary brand blue)
+    good: { color: "#3B4197", background: "#eef2ff", border: "#c7d2fe" },        // Balanced alias
+    full: { color: "#3B4197", background: "#eef2ff", border: "#c7d2fe" },        // Balanced alias
+    danger: { color: "#b91c1c", background: "#fee2e2", border: "#fca5a5" },      // Overload (RED)
   };
   const selected = palette[tone] || palette.neutral;
   return {
@@ -1494,26 +3484,28 @@ function loadStateBadgeStyle(tone) {
     background: selected.background,
     borderRadius: 999,
     border: `1px solid ${selected.border}`,
-    padding: "3px 8px",
+    padding: "3px 10px",
     display: "inline-flex",
+    alignItems: "center",
     justifyContent: "center",
+    gap: 4,
   };
 }
 
 function getTeacherLoadState(loadPercent) {
   if (!loadPercent || loadPercent <= 0) {
-    return { label: "Unassigned", tone: "neutral", fill: "#cfd7ef" };
+    return { label: "Unassigned", tone: "neutral", fill: "#cbd5e1" };
   }
 
   if (loadPercent < 80) {
-    return { label: "Underload", tone: "warning", fill: "#f2c28f" };
+    return { label: "Underload", tone: "underload", fill: "#818cf8" };
   }
 
   if (loadPercent <= 100) {
-    return { label: "Balanced", tone: "good", fill: "#3B4197" };
+    return { label: "Balanced", tone: "balanced", fill: "#3B4197" };
   }
 
-  return { label: "Overload", tone: "danger", fill: "#c7545f" };
+  return { label: "Overload", tone: "danger", fill: "#ef4444" };
 }
 
 function inputStyle(hasError = false) {
@@ -1711,15 +3703,21 @@ function normalizeFacultyRecord(formState, editingId) {
     sex: formState.sex,
     employeeId: sanitizeText(formState.employeeId).toUpperCase(),
     position: normalizeDesignation(formState.position),
-    employmentStatus: formState.employmentStatus,
+    appointmentStatus: formState.appointmentStatus || formState.employmentStatus || "Permanent",
+    workingArrangement: formState.workingArrangement || "Full-Time",
+    employmentStatus: formState.appointmentStatus || formState.employmentStatus || "Permanent",
     email: sanitizeText(formState.email).toLowerCase(),
     contact: sanitizeText(formState.contact),
     degree: sanitizeText(formState.degree),
     major: sanitizeText(formState.major),
     minor: sanitizeText(formState.minor),
+    isClassAdviser: Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))),
+    advisorySection: sanitizeText(formState.advisorySection),
     ancillaryAssignments: normalizeArray(formState.ancillaryAssignments),
     unavailablePeriods: normalizeUnavailablePeriods(formState.unavailablePeriods),
-    subjectExpertise: normalizeArray(formState.subjectExpertise),
+    subjectExpertise: normalizeArray(formState.primaryExpertise?.length ? formState.primaryExpertise : formState.subjectExpertise),
+    primaryExpertise: normalizeArray(formState.primaryExpertise?.length ? formState.primaryExpertise : formState.subjectExpertise),
+    secondaryExpertise: normalizeArray(formState.secondaryExpertise),
     gradeLevelAssignments: normalizeArray(formState.gradeLevelAssignments),
     assignedLoadPercent: 0,
     active: true,
@@ -1879,7 +3877,9 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
   const sex = normalizeSexValue(pickRowValue(normalizedRow, ["sex", "gender"]));
   const employeeId = pickRowValue(normalizedRow, ["employeeid", "id", "teacherid"]);
   const position = normalizeDesignation(pickRowValue(normalizedRow, ["position", "designation"]));
-  const employmentStatus = normalizeEmploymentStatus(pickRowValue(normalizedRow, ["employmentstatus", "status"]));
+  const appointmentStatus = normalizeEmploymentStatus(pickRowValue(normalizedRow, ["appointmentcategory", "appointmentstatus", "employmentstatus", "status"]));
+  const workingArrangement = normalizeWorkingArrangement(pickRowValue(normalizedRow, ["workingarrangement", "arrangement", "schedule"]));
+  const employmentStatus = appointmentStatus;
   const email = pickRowValue(normalizedRow, ["email", "emailaddress"]);
   const contact = pickRowValue(normalizedRow, ["contact", "contactnumber", "phone"]);
   const degree = pickRowValue(normalizedRow, ["degree"]);
@@ -1892,11 +3892,10 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
     unavailablePeriodOptions,
     true
   );
-  const subjectExpertise = resolveListToOptions(
-    splitListInput(pickRowValue(normalizedRow, ["subjectexpertise", "expertise"])),
-    subjectOptions,
-    false
-  );
+  const rawExpertise = splitListInput(pickRowValue(normalizedRow, ["subjectexpertise", "expertise"]));
+  const subjectExpertise = (subjectOptions && subjectOptions.length > 0)
+    ? resolveListToOptions(rawExpertise, subjectOptions, true)
+    : rawExpertise;
   const gradeLevelAssignments = resolveListToGradeLevels(
     splitListInput(pickRowValue(normalizedRow, ["gradelevelassignments", "gradeassignments", "gradelevels"]))
   );
@@ -1906,13 +3905,18 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
     return null;
   }
 
+  const uniqueId = employeeId || `EMP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
   return {
     ...EMPTY_FORM,
+    id: uniqueId,
     name,
     sex,
-    employeeId,
+    employeeId: uniqueId,
     position,
-    employmentStatus: employmentStatus || "Regular",
+    appointmentStatus: appointmentStatus || "Permanent",
+    workingArrangement: workingArrangement || "Full-Time",
+    employmentStatus: appointmentStatus || "Permanent",
     email,
     contact,
     degree,
@@ -1923,6 +3927,7 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
     unavailablePeriods: normalizeUnavailablePeriods(unavailablePeriods),
     subjectExpertise,
     gradeLevelAssignments,
+    active: true,
   };
 }
 
@@ -2058,8 +4063,18 @@ function normalizeSexValue(value) {
 
 function normalizeEmploymentStatus(value) {
   const normalized = sanitizeText(value).toLowerCase();
+  if (normalized.includes("reg") || normalized.includes("perm")) return "Permanent";
+  if (normalized.includes("prov") || normalized.includes("prob")) return "Provisional";
+  if (normalized.includes("cont")) return "Contractual";
+  if (normalized.includes("sub")) return "Substitute";
   const match = EMPLOYMENT_STATUS_OPTIONS.find((option) => option.toLowerCase() === normalized);
-  return match || "";
+  return match || "Permanent";
+}
+
+function normalizeWorkingArrangement(value) {
+  const normalized = sanitizeText(value).toLowerCase();
+  if (normalized.includes("part")) return "Part-Time";
+  return "Full-Time";
 }
 
 function normalizeDesignation(value) {
@@ -2072,4 +4087,20 @@ function normalizeDesignation(value) {
 
   const fuzzy = DEPED_DESIGNATION_OPTIONS.find((option) => option.toLowerCase().includes(normalized));
   return fuzzy || "";
+}
+
+function ConfirmationModal({ open, message, onConfirm, onCancel, title = "Confirmation", confirmLabel = "Confirm" }) {
+  if (!open) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999999 }}>
+      <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 16, width: 440, maxWidth: "90%", padding: 24, boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)" }}>
+        <h3 style={{ margin: "0 0 10px", color: "#1e293b", fontSize: 18, fontWeight: 700 }}>{title}</h3>
+        <p style={{ margin: "0 0 20px", color: "#64748b", fontSize: 14, lineHeight: 1.5 }}>{message}</p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+          <button type="button" onClick={onCancel} style={{ padding: "9px 18px", borderRadius: 8, background: "#f1f5f9", color: "#475569", fontWeight: 600, border: "none", cursor: "pointer" }}>Cancel</button>
+          <button type="button" onClick={onConfirm} style={{ padding: "9px 18px", borderRadius: 8, background: "#b53f4e", color: "#fff", fontWeight: 700, border: "none", cursor: "pointer" }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
 }

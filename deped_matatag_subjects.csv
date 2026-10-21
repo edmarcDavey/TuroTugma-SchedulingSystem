@@ -1,0 +1,45 @@
+Subject Name,Subject Code,School Level,Subject Type,Daily Minutes,Classes per Week,Grade Level,Semester,Program Scope,Strand
+English,ENG,JHS,Core,60,4,Grades 7–10,,Universal,
+Mathematics,MATH,JHS,Core,60,4,Grades 7–10,,Universal,
+Science,SCI,JHS,Core,60,4,Grades 7–10,,Universal,
+Filipino,FIL,JHS,Core,60,4,Grades 7–10,,Universal,
+Araling Panlipunan,AP,JHS,Core,60,4,Grades 7–10,,Universal,
+Values Education,VE,JHS,Core,60,4,Grades 7–10,,Universal,
+MAPEH,MAPEH,JHS,Core,60,4,Grades 7–10,,Universal,
+HGP,HGP,JHS,Enrichment,60,1,Grades 7–10,,Universal,
+Aral Program,ARAL,JHS,Enrichment,60,1,Grades 7–10,,Regular,
+Technology and Livelihood Education (TLE),TLE,JHS,Specialized,60,4,Grades 7–10,,"Regular, SPA",
+SPA Specialization,SPASPEC,JHS,Specialized,60,4,Grades 7–10,,SPA,
+ICT,ICT,JHS,Specialized,60,4,Grades 7–10,,"SPJ, SP-STEM",
+Developmental Reading,DEVREAD,JHS,Specialized,60,3,7,,SP-STEM,
+Elementary Algebra,ELEMALG,JHS,Specialized,60,3,7,,SP-STEM,
+Environmental Science,ENVSCI,JHS,Specialized,60,3,7,,SP-STEM,
+Oral Communication in Context,ORALCOM,SHS,Core,50,4,11,First Semester,,
+General Mathematics,GENMATH,SHS,Core,50,4,11,First Semester,,
+Earth and Life Science,EARTHSCI,SHS,Core,50,4,11,First Semester,,
+Komunikasyon at Pananaliksik,KOMPAN,SHS,Core,50,4,11,First Semester,,
+Physical Education and Health 1,PEH1,SHS,Core,50,2,11,First Semester,,
+21st Century Literature,LIT21,SHS,Core,50,4,11,Last Semester,,
+Statistics and Probability,STATPROB,SHS,Core,50,4,11,Last Semester,,
+Physical Science,PHYSCI,SHS,Core,50,4,11,Last Semester,,
+Personal Development,PERDEV,SHS,Core,50,4,11,Last Semester,,
+Physical Education and Health 2,PEH2,SHS,Core,50,2,11,Last Semester,,
+"Understanding Culture, Society, and Politics",UCSP,SHS,Core,50,4,12,First Semester,,
+Media and Information Literacy,MIL,SHS,Core,50,4,12,First Semester,,
+Empowerment Technologies,EMPTECH,SHS,Applied,50,4,11,First Semester,,
+English for Academic and Professional Purposes,EAPP,SHS,Applied,50,4,11,Last Semester,,
+Practical Research 1,PRACRES1,SHS,Applied,50,4,11,Last Semester,,
+Practical Research 2,PRACRES2,SHS,Applied,50,4,12,First Semester,,
+Entrepreneurship,ENTREP,SHS,Applied,50,4,12,Last Semester,,
+Pre-Calculus,PRECALC,SHS,Specialized,50,4,11,First Semester,,STEM
+Basic Calculus,BASCALC,SHS,Specialized,50,4,11,Last Semester,,STEM
+General Physics 1,GENPHYS1,SHS,Specialized,50,4,12,First Semester,,STEM
+General Physics 2,GENPHYS2,SHS,Specialized,50,4,12,Last Semester,,STEM
+General Chemistry 1,GENCHEM1,SHS,Specialized,50,4,11,First Semester,,STEM
+General Chemistry 2,GENCHEM2,SHS,Specialized,50,4,11,Last Semester,,STEM
+Creative Writing,CREWRITE,SHS,Specialized,50,4,11,First Semester,,HUMSS
+Philippine Politics and Governance,PPG,SHS,Specialized,50,4,11,Last Semester,,HUMSS
+Fundamentals of ABM 1,FABM1,SHS,Specialized,50,4,11,First Semester,,ABM
+Fundamentals of ABM 2,FABM2,SHS,Specialized,50,4,11,Last Semester,,ABM
+Computer Systems Servicing 1,CSS1,SHS,Specialized,50,4,11,First Semester,,TVL
+Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,11,Last Semester,,TVL

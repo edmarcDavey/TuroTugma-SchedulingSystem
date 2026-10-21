@@ -91,32 +91,47 @@ export default function FinalTimeTables() {
     }
   }
 
-  useEffect(() => {
-    // Load the most recent draft, supporting both array and single object formats
-    const draftsRaw = window.localStorage.getItem(DRAFTS_STORAGE_KEY);
-    let latestDraft = null;
-    if (draftsRaw) {
-      try {
-        const parsed = JSON.parse(draftsRaw);
-        if (Array.isArray(parsed)) {
-          if (parsed.length > 0) {
-            // Sort by updatedAt descending
-            parsed.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-            latestDraft = parsed[0];
-          }
-        } else if (parsed && typeof parsed === "object") {
-          latestDraft = parsed;
+  const loadActiveSchedule = () => {
+    try {
+      const publishedRaw = getFromStorage("turotugma_published_schedules", null);
+      if (publishedRaw && typeof publishedRaw === "object") {
+        const pubList = Object.values(publishedRaw).filter((item) => item && item.assignments && Object.keys(item.assignments).length > 0);
+        if (pubList.length > 0) {
+          pubList.sort((a, b) => new Date(b.publishedAt || b.updatedAt || 0) - new Date(a.publishedAt || a.updatedAt || 0));
+          const latestPub = pubList[0];
+          setDraft({
+            id: `published-${latestPub.scheduleType || "jhs"}`,
+            scheduleType: latestPub.scheduleType || "jhs",
+            name: `Published Schedule — ${(latestPub.scheduleType || "jhs").toUpperCase()}`,
+            updatedAt: latestPub.publishedAt || latestPub.updatedAt,
+            schedule: latestPub,
+            config: latestPub.config || latestPub.scheduleConfig,
+          });
+          const sectionsRaw = getFromStorage(SECTIONS_STORAGE_KEY, {});
+          setSections(normalizeSections(sectionsRaw, latestPub?.scheduleType || "jhs"));
+          setSubjects(getFromStorage(SUBJECTS_STORAGE_KEY, []));
+          setTeachers(getFromStorage(FACULTY_STORAGE_KEY, []));
+          return;
         }
-      } catch {
-        latestDraft = null;
       }
+      setDraft(null);
+    } catch (err) {
+      console.error("Error loading active schedule in FinalTimeTables:", err);
+      setDraft(null);
     }
-    setDraft(latestDraft);
-    // Use normalization for sections
-    const sectionsRaw = getFromStorage(SECTIONS_STORAGE_KEY, {});
-    setSections(normalizeSections(sectionsRaw, latestDraft?.scheduleType || "jhs"));
-    setSubjects(getFromStorage(SUBJECTS_STORAGE_KEY, []));
-    setTeachers(getFromStorage(FACULTY_STORAGE_KEY, []));
+  };
+
+  useEffect(() => {
+    loadActiveSchedule();
+    const handleSync = () => loadActiveSchedule();
+    window.addEventListener("storage", handleSync);
+    window.addEventListener("focus", handleSync);
+    window.addEventListener("turotugma:schedule-updated", handleSync);
+    return () => {
+      window.removeEventListener("storage", handleSync);
+      window.removeEventListener("focus", handleSync);
+      window.removeEventListener("turotugma:schedule-updated", handleSync);
+    };
   }, []);
 
   function getSectionName(sectionId) {
@@ -161,23 +176,263 @@ export default function FinalTimeTables() {
     }
     return sectionId;
   }
+  function formatCleanSubjectName(rawName) {
+    if (!rawName || typeof rawName !== "string") return rawName || "";
+    let name = rawName.trim();
+    const jhsCorePattern = /^(Science|Mathematics|Math|English|Filipino|Araling Panlipunan|Edukasyon sa Pagpapakakatao|EsP|MAPEH|Technology and Livelihood Education|TLE)\s+\d+$/i;
+    if (jhsCorePattern.test(name)) {
+      return name.replace(/\s+\d+$/i, "").trim();
+    }
+    return name;
+  }
   function getSubjectName(subjectId) {
     const found = Array.isArray(subjects) ? subjects.find((s) => s.id === subjectId) : null;
-    return found ? found.subjectName || found.name : subjectId;
+    const raw = found ? found.subjectName || found.name : subjectId;
+    return formatCleanSubjectName(raw);
   }
   function getTeacherName(teacherId) {
     const found = Array.isArray(teachers) ? teachers.find((t) => t.id === teacherId) : null;
     return found ? found.teacherName || found.name : teacherId;
   }
 
-  // Render nothing if no draft
+  const {
+    cellAssignmentIndex,
+    teacherAssignmentIndex,
+    sectionsById,
+    subjectsById,
+    teachersById,
+    days,
+    regularDays,
+    shortenedDays,
+    maxPeriods,
+  } = React.useMemo(() => {
+    const cellIdx = new Map();
+    const teacherIdx = new Map();
+    const secMap = new Map();
+    const subMap = new Map();
+    const tMap = new Map();
+    const sById = new Map();
+
+    if (!draft || !draft.schedule) {
+      return {
+        cellAssignmentIndex: cellIdx,
+        teacherAssignmentIndex: teacherIdx,
+        sectionsById: secMap,
+        subjectsById: subMap,
+        teachersById: tMap,
+        days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        regularDays: ["Monday", "Tuesday", "Wednesday", "Thursday"],
+        shortenedDays: ["Friday"],
+        maxPeriods: 8,
+      };
+    }
+
+    const sched = draft.schedule;
+    const assign = sched.assignments || {};
+
+    const secList = Array.isArray(sched.sections) && sched.sections.length > 0 ? sched.sections : sections;
+    secList.forEach((s) => {
+      if (s.id) secMap.set(s.id, s);
+      if (s.name) secMap.set(s.name, s);
+      if (s.code) secMap.set(s.code, s);
+    });
+
+    const allSubjects = Array.isArray(sched.subjects) && sched.subjects.length > 0
+      ? [...sched.subjects, ...(subjects || [])]
+      : subjects || [];
+    allSubjects.forEach((s) => {
+      if (s.id) subMap.set(s.id, s);
+      if (s.subjectCode) subMap.set(s.subjectCode, s);
+      if (s.code) subMap.set(s.code, s);
+    });
+
+    const allTeachers = Array.isArray(sched.teachers) && sched.teachers.length > 0
+      ? [...sched.teachers, ...(teachers || [])]
+      : Array.isArray(sched.faculty) && sched.faculty.length > 0
+      ? [...sched.faculty, ...(teachers || [])]
+      : teachers || [];
+    allTeachers.forEach((t) => {
+      if (t.id) tMap.set(t.id, t);
+      if (t.name) tMap.set(t.name, t);
+      if (t.teacherName) tMap.set(t.teacherName, t);
+    });
+
+    const slotList = Array.isArray(sched.slots) && sched.slots.length > 0 ? sched.slots : [];
+    slotList.forEach((s) => sById.set(s.id, s));
+
+    const levelCfg = sched.config?.jhs || draft?.config?.jhs || {};
+    const weekdayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+    let daysFromSlots = [];
+    let regDaysFromSlots = [];
+    let shortDaysFromSlots = [];
+
+    if (slotList.length > 0) {
+      const daySet = new Set();
+      const regSet = new Set();
+      const shortSet = new Set();
+
+      slotList.forEach((s) => {
+        if (s.day) {
+          daySet.add(s.day);
+          if (s.sessionType === "shortened") shortSet.add(s.day);
+          else regSet.add(s.day);
+        }
+      });
+
+      daysFromSlots = Array.from(daySet);
+      regDaysFromSlots = Array.from(regSet);
+      shortDaysFromSlots = Array.from(shortSet);
+    }
+
+    let regDays = regDaysFromSlots.length > 0
+      ? regDaysFromSlots
+      : (Array.isArray(levelCfg.regularDays) && levelCfg.regularDays.length > 0
+        ? levelCfg.regularDays
+        : ["Monday", "Tuesday", "Wednesday", "Thursday"]);
+
+    let shortDays = shortDaysFromSlots.length > 0
+      ? shortDaysFromSlots
+      : (Array.isArray(levelCfg.shortenedDays) && levelCfg.shortenedDays.length > 0
+        ? levelCfg.shortenedDays
+        : ["Friday"]);
+
+    let dayList = daysFromSlots.length > 0
+      ? daysFromSlots
+      : Array.from(new Set([...regDays, ...shortDays]));
+
+    if (assign) {
+      Object.keys(assign).forEach((cellKey) => {
+        if (!cellKey) return;
+        const parts = cellKey.split("|");
+        if (parts.length < 2) return;
+        const slotId = parts[1];
+        let slot = sById.get(slotId);
+        let day = slot?.day;
+        if (!day) {
+          const lowerSlot = slotId.toLowerCase();
+          if (lowerSlot.includes("mon")) day = "Monday";
+          else if (lowerSlot.includes("tue")) day = "Tuesday";
+          else if (lowerSlot.includes("wed")) day = "Wednesday";
+          else if (lowerSlot.includes("thu")) day = "Thursday";
+          else if (lowerSlot.includes("fri")) day = "Friday";
+          else if (lowerSlot.includes("sat")) day = "Saturday";
+          else if (lowerSlot.includes("sun")) day = "Sunday";
+        }
+
+        const secId = parts[0];
+        const period = slot?.period ? Number(slot.period) : null;
+        const secObj = secMap.get(secId) || secList.find((s) => s.id === secId || s.name === secId);
+        const sectionAliases = new Set([secId]);
+        if (secObj) {
+          if (secObj.id) sectionAliases.add(secObj.id);
+          if (secObj.name) sectionAliases.add(secObj.name);
+          if (secObj.code) sectionAliases.add(secObj.code);
+        }
+
+        const jhsMatch = String(secId).match(/jhs-(\d+)-(\d+)/i);
+        if (jhsMatch) {
+          const g = parseInt(jhsMatch[1], 10);
+          const idx = parseInt(jhsMatch[2], 10);
+          const gradeSecs = secList.filter((s) => Number(s.grade) === g);
+          if (gradeSecs[idx]) {
+            sectionAliases.add(gradeSecs[idx].id);
+            sectionAliases.add(gradeSecs[idx].name);
+          }
+        }
+
+        sectionAliases.forEach((alias) => {
+          if (day && period) {
+            cellIdx.set(`${alias}|${day}|${period}`, assign[cellKey]);
+          }
+          cellIdx.set(`${alias}|${slotId}`, assign[cellKey]);
+        });
+
+        if (assign[cellKey]?.teacherId && day && period) {
+          teacherIdx.set(`${assign[cellKey].teacherId}|${day}|${period}`, { assignment: assign[cellKey], sectionId: secId });
+        }
+
+        if (day && !dayList.includes(day)) {
+          dayList.push(day);
+        }
+      });
+    }
+
+    dayList.sort((a, b) => weekdayOrder.indexOf(a) - weekdayOrder.indexOf(b));
+    if (dayList.length === 0) {
+      dayList = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    }
+
+    regDays = regDays.filter((d) => dayList.includes(d));
+    shortDays = shortDays.filter((d) => dayList.includes(d));
+
+    const maxPFromSlots = slotList.length > 0 ? Math.max(...slotList.map((s) => Number(s.period) || 1)) : 0;
+    const maxP = Math.max(maxPFromSlots, levelCfg.periods?.regular || 8, levelCfg.periods?.special || 8);
+
+    return {
+      cellAssignmentIndex: cellIdx,
+      teacherAssignmentIndex: teacherIdx,
+      sectionsById: secMap,
+      subjectsById: subMap,
+      teachersById: tMap,
+      days: dayList,
+      regularDays: regDays,
+      shortenedDays: shortDays,
+      maxPeriods: maxP,
+    };
+  }, [draft, sections, subjects, teachers]);
+
+  function getCellAssignment(sectionId, day, periodNum) {
+    const secObj = sectionsById.get(sectionId);
+    const secName = secObj?.name || getSectionName(sectionId);
+    return (
+      cellAssignmentIndex.get(`${sectionId}|${day}|${periodNum}`) ||
+      cellAssignmentIndex.get(`${secName}|${day}|${periodNum}`) ||
+      null
+    );
+  }
+
+  function getTeacherCellAssignment(teacherId, day, periodNum) {
+    return teacherAssignmentIndex.get(`${teacherId}|${day}|${periodNum}`) || null;
+  }
+
+  function getAdviserName(sectionId) {
+    const checkDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    for (const day of checkDays) {
+      for (let p = 1; p <= 8; p++) {
+        const assign = getCellAssignment(sectionId, day, p);
+        if (assign?.teacherId) {
+          return getTeacherName(assign.teacherId);
+        }
+      }
+    }
+    return "-";
+  }
+
+  // Render notice if no published schedule
   if (!draft || !draft.schedule || !draft.config) {
     return (
-      <div>
-        <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Time Tables</h1>
-        <p style={{ margin: "8px 0 24px", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
-          No saved schedule draft found.
-        </p>
+      <div style={{ padding: "30px 20px" }}>
+        <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Final Time Tables</h1>
+        <div
+          style={{
+            marginTop: 20,
+            padding: "32px 30px",
+            background: "#fff",
+            borderRadius: 12,
+            border: "1px solid #e2e8f0",
+            boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05)",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📅</div>
+          <h3 style={{ margin: "0 0 8px", color: "#1e293b", fontSize: 20, fontWeight: 700 }}>
+            No Published Schedule Available
+          </h3>
+          <p style={{ margin: 0, color: "#64748b", fontSize: 15, maxWidth: 600, marginLeft: "auto", marginRight: "auto" }}>
+            Only officially published schedules are displayed in the public view. If you are an administrator, please go to the <b>Schedule Generator</b> in the dashboard and click <b>Publish Schedule</b> to make the active schedule public.
+          </p>
+        </div>
       </div>
     );
   }
@@ -188,7 +443,7 @@ export default function FinalTimeTables() {
   const assignments = draft.schedule.assignments || {};
 
   // For demo, use JHS config
-  const levelConfig = config["jhs"];
+  const levelConfig = config["jhs"] || {};
   const weekdayOrder = [
     "Monday",
     "Tuesday",
@@ -198,29 +453,23 @@ export default function FinalTimeTables() {
     "Saturday",
     "Sunday",
   ];
-  let days = [
-    ...(levelConfig.regularDays || []),
-    ...(levelConfig.shortenedDays || []),
-  ];
-  // Remove duplicates and sort by weekday order
-  days = Array.from(new Set(days)).sort((a, b) => weekdayOrder.indexOf(a) - weekdayOrder.indexOf(b));
-  const periods = Array.from({ length: levelConfig.periods.regular || 8 }, (_, i) => i + 1);
+  const periods = Array.from({ length: maxPeriods || levelConfig.periods?.regular || 8 }, (_, i) => i + 1);
 
   // Section and teacher view logic
   let sectionIds = Array.from(
-    new Set(Object.keys(assignments).map((k) => k.split("|")[0]))
-  );
-  // Map sectionId to grade using normalized sections
+    new Set([...Object.keys(assignments).map((k) => k.split("|")[0]), ...sections.map((s) => s.id)])
+  ).filter(Boolean);
+
   const sectionIdToGrade = {};
   sections.forEach(s => { sectionIdToGrade[s.id] = s.grade; });
-  // Get all grades present
-  const allGrades = Array.from(new Set(sections.map(s => s.grade))).sort((a, b) => a - b);
 
-  // For teacher view: build teacher list and mapping
   let teacherIds = Array.from(
-    new Set(Object.values(assignments).map(a => a.teacherId).filter(Boolean))
+    new Set(Object.values(assignments).map(a => a?.teacherId).filter(Boolean))
   );
-  // Filter teachers by search term
+  if (teacherIds.length === 0 && teachers.length > 0) {
+    teacherIds = teachers.map((t) => t.id);
+  }
+
   let filteredTeacherIds = teacherIds;
   if (viewMode === 'teachers' && searchTerm.trim()) {
     const lower = searchTerm.trim().toLowerCase();
@@ -230,16 +479,12 @@ export default function FinalTimeTables() {
     });
   }
 
-
-  // Filter sectionIds by grade if filter is set (sections view only)
   if (viewMode === 'sections' && gradeFilter !== 'all') {
     sectionIds = sectionIds.filter(id => String(sectionIdToGrade[id]) === String(gradeFilter));
   }
-  // Filter sectionIds by selectedSection (sections view only)
   if (viewMode === 'sections' && selectedSection !== 'all') {
     sectionIds = sectionIds.filter(id => id === selectedSection);
   }
-  // Filter sectionIds by search term (section name, sections view only)
   if (viewMode === 'sections' && searchTerm.trim()) {
     const lower = searchTerm.trim().toLowerCase();
     sectionIds = sectionIds.filter(id => {
@@ -248,18 +493,17 @@ export default function FinalTimeTables() {
     });
   }
 
-  // Filter teacherIds by selectedTeacher (teachers view only)
   if (viewMode === 'teachers' && selectedTeacher !== 'all') {
     filteredTeacherIds = filteredTeacherIds.filter(id => id === selectedTeacher);
   }
-  // Filter teacherIds by teacherType (teachers view only)
   if (viewMode === 'teachers' && teacherType !== 'all') {
-    // Find all adviser teacherIds (assigned as adviser in any section)
     const adviserIds = new Set();
     sectionIds.forEach(sectionId => {
-      const firstPeriodKey = `${sectionId}|JHS-P1`;
-      const adviserId = assignments[firstPeriodKey]?.teacherId;
-      if (adviserId) adviserIds.add(adviserId);
+      const adviserName = getAdviserName(sectionId);
+      if (adviserName && adviserName !== "-") {
+        const advObj = teachers.find((t) => (t.teacherName || t.name) === adviserName || t.id === adviserName);
+        if (advObj) adviserIds.add(advObj.id);
+      }
     });
     if (teacherType === 'adviser') {
       filteredTeacherIds = filteredTeacherIds.filter(id => adviserIds.has(id));
@@ -523,10 +767,8 @@ export default function FinalTimeTables() {
           if (day === 'Sunday') return 'Sun';
           return day[0];
         }
-        const regularSessionDays = (levelConfig.regularDays || []);
-        const shortenedSessionDays = (levelConfig.shortenedDays || []);
-        const regularSessionInitials = regularSessionDays.map(getDayInitials).join(', ');
-        const shortenedSessionInitials = shortenedSessionDays.map(getDayInitials).join(', ');
+        const regularSessionInitials = (regularDays || []).map(getDayInitials).join(', ');
+        const shortenedSessionInitials = (shortenedDays || []).map(getDayInitials).join(', ');
 
         const regularTimes = getPeriodTimes(
           'regular',
@@ -675,9 +917,7 @@ export default function FinalTimeTables() {
                         whiteSpace: 'nowrap',
                       }}>{shortenedTimes[idx]}</td>
                       {days.map((day) => {
-                        // For section view: show the assignment for this section, period, and day
-                        const slotKey = `${sectionId}|JHS-P${periodNum}`;
-                        const assignment = assignments[slotKey];
+                        const assignment = getCellAssignment(sectionId, day, periodNum);
                         return (
                           <td key={day} style={{
                             border: '1px solid #e5eaf4',
@@ -767,10 +1007,8 @@ export default function FinalTimeTables() {
           if (day === 'Sunday') return 'Sun';
           return day[0];
         }
-        const regularSessionDays = (levelConfig.regularDays || []);
-        const shortenedSessionDays = (levelConfig.shortenedDays || []);
-        const regularSessionInitials = regularSessionDays.map(getDayInitials).join(', ');
-        const shortenedSessionInitials = shortenedSessionDays.map(getDayInitials).join(', ');
+        const regularSessionInitials = (regularDays || []).map(getDayInitials).join(', ');
+        const shortenedSessionInitials = (shortenedDays || []).map(getDayInitials).join(', ');
 
         const regularTimes = getPeriodTimes(
           'regular',
@@ -905,16 +1143,8 @@ export default function FinalTimeTables() {
                         whiteSpace: 'nowrap',
                       }}>{shortenedTimes[idx]}</td>
                       {days.map((day) => {
-                        // For each section, check if this teacher is assigned at this slot
-                        let found = null;
-                        for (const sectionId of sectionIds) {
-                          const slotKey = `${sectionId}|JHS-P${periodNum}`;
-                          const assignment = assignments[slotKey];
-                          if (assignment && assignment.teacherId === teacherId) {
-                            found = { assignment, sectionId };
-                            break;
-                          }
-                        }
+                        const teacherAssign = getTeacherCellAssignment(teacherId, day, periodNum);
+                        const found = teacherAssign ? { assignment: teacherAssign.assignment, sectionId: teacherAssign.sectionId } : null;
                         return (
                           <td key={day} style={{
                             border: '1px solid #e5eaf4',
