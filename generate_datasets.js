@@ -32,10 +32,11 @@ const subjectsData = [
   // JHS Specialized / Program Subjects
   ['Technology and Livelihood Education (TLE)', 'TLE', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'Regular, SPA', ''],
   ['SPA Specialization', 'SPASPEC', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPA', ''],
-  ['ICT', 'ICT', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPJ, SP-STEM', ''],
+  ['ICT (SPJ)', 'ICT-SPJ', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPJ', ''],
+  ['ICT (SP-STEM)', 'ICT-STEM', 'JHS', 'Specialized', '60', '3', 'Grades 7–10', '', 'SP-STEM', ''],
 
-  // JHS Enhanced STEM Subjects (Grade 7 SP-STEM Exclusively - 3 hrs/wk across 3 meetings × 60m)
-  ['Developmental Reading', 'DEVREAD', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
+  // JHS Enhanced STEM Subjects (Grade 7 SP-STEM Exclusively - DEVREAD is 1 hr/wk, ELEMALG & ENVSCI are 3 hrs/wk)
+  ['Developmental Reading', 'DEVREAD', 'JHS', 'Specialized', '60', '1', '7', '', 'SP-STEM', ''],
   ['Elementary Algebra', 'ELEMALG', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
   ['Environmental Science', 'ENVSCI', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
 
@@ -190,7 +191,7 @@ const departmentSpecs = [
     degree: "Bachelor of Physical Education",
     major: "MAPEH",
     minor: "Sports Science",
-    subjects: ["MAPEH", "SPA Specialization", "Physical Education and Health 1", "Physical Education and Health 2"],
+    subjects: ["MAPEH", "SPA Specialization (Media Arts)", "SPA Specialization (Dance Arts)", "SPA Specialization (Instrumental Music)", "SPA Specialization (Visual Arts)", "SPA Specialization", "Physical Education and Health 1", "Physical Education and Health 2"],
     grades: ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"]
   },
   {
@@ -199,7 +200,7 @@ const departmentSpecs = [
     degree: "BS Industrial Education",
     major: "Technology and Livelihood Education",
     minor: "Computer Education",
-    subjects: ["Technology and Livelihood Education (TLE)", "ICT", "Empowerment Technologies", "Computer Systems Servicing 1", "Entrepreneurship"],
+    subjects: ["Technology and Livelihood Education (TLE)", "ICT (SPJ)", "ICT (SP-STEM)", "ICT", "Empowerment Technologies", "Computer Systems Servicing 1", "Entrepreneurship"],
     grades: ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"]
   },
   {

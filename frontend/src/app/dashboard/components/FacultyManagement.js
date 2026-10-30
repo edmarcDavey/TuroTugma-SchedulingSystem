@@ -401,10 +401,13 @@ const EMPTY_FORM = {
   minor: "",
   isClassAdviser: false,
   advisorySection: "",
+  ancillaryCreditHours: 0,
   ancillaryAssignments: [],
   ancillaryInput: "",
   unavailablePeriods: [],
   subjectExpertise: [],
+  primaryExpertise: [],
+  secondaryExpertise: [],
   gradeLevelAssignments: [],
 };
 
@@ -448,6 +451,7 @@ export default function FacultyManagement() {
 
   const subjectOptions = useMemo(() => getSubjectOptions(), []);
   const unavailablePeriodOptions = useMemo(() => getUnavailablePeriodOptions(), []);
+  const sectionOptions = useMemo(() => getSectionOptions(), []);
   const [facultyWithLoad, setFacultyWithLoad] = useState([]);
 
   // Summary KPI statistics: Balanced vs Underload vs Overload vs Unassigned
@@ -663,10 +667,12 @@ export default function FacultyManagement() {
     }
     recalcLoads();
     window.addEventListener("turotugma:faculty-updated", recalcLoads);
+    window.addEventListener("turotugma_faculty_updated", recalcLoads);
     window.addEventListener("turotugma:schedule-updated", recalcLoads);
     window.addEventListener("storage", recalcLoads);
     return () => {
       window.removeEventListener("turotugma:faculty-updated", recalcLoads);
+      window.removeEventListener("turotugma_faculty_updated", recalcLoads);
       window.removeEventListener("turotugma:schedule-updated", recalcLoads);
       window.removeEventListener("storage", recalcLoads);
     };
@@ -695,6 +701,7 @@ export default function FacultyManagement() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(FACULTY_STORAGE_KEY, JSON.stringify(nextFaculty));
       window.dispatchEvent(new Event("turotugma:faculty-updated"));
+      window.dispatchEvent(new Event("turotugma_faculty_updated"));
     }
   };
 
@@ -730,11 +737,13 @@ export default function FacultyManagement() {
 
     window.addEventListener("focus", syncFromStorage);
     window.addEventListener("turotugma:faculty-updated", syncFromStorage);
+    window.addEventListener("turotugma_faculty_updated", syncFromStorage);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("focus", syncFromStorage);
       window.removeEventListener("turotugma:faculty-updated", syncFromStorage);
+      window.removeEventListener("turotugma_faculty_updated", syncFromStorage);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [editingId, touched.unavailablePeriods]);
@@ -758,23 +767,29 @@ export default function FacultyManagement() {
       return;
     }
 
-    const exists = formState.ancillaryAssignments.some((item) => item.toLowerCase() === value.toLowerCase());
+    const currentAssignments = Array.isArray(formState.ancillaryAssignments) ? formState.ancillaryAssignments : [];
+    const exists = currentAssignments.some((item) => item.toLowerCase() === value.toLowerCase());
     if (exists) {
       handleFormField("ancillaryInput", "");
       return;
     }
 
+    const isAdviser = value.toLowerCase().includes("adviser");
     setFormState((prev) => ({
       ...prev,
-      ancillaryAssignments: [...prev.ancillaryAssignments, value],
+      isClassAdviser: isAdviser ? true : prev.isClassAdviser,
+      ancillaryAssignments: [...(prev.ancillaryAssignments || []), value],
       ancillaryInput: "",
     }));
   };
 
   const removeAncillaryAssignment = (assignment) => {
+    const isAdviserRole = String(assignment).toLowerCase().includes("adviser");
     setFormState((prev) => ({
       ...prev,
-      ancillaryAssignments: prev.ancillaryAssignments.filter((item) => item !== assignment),
+      isClassAdviser: isAdviserRole ? false : prev.isClassAdviser,
+      advisorySection: isAdviserRole ? "" : prev.advisorySection,
+      ancillaryAssignments: (prev.ancillaryAssignments || []).filter((item) => item !== assignment),
     }));
   };
 
@@ -941,7 +956,20 @@ export default function FacultyManagement() {
   };
 
   const handleSaveFaculty = () => {
-    const liveValidationErrors = validateFacultyForm(formState, facultyMembers, editingId);
+    // 1. Auto-commit any pending ancillary input text first!
+    let nextAncillaryAssignments = Array.isArray(formState.ancillaryAssignments) ? [...formState.ancillaryAssignments] : [];
+    const pendingAncillary = sanitizeText(formState.ancillaryInput);
+    if (pendingAncillary && !nextAncillaryAssignments.some((item) => item.toLowerCase() === pendingAncillary.toLowerCase())) {
+      nextAncillaryAssignments.push(pendingAncillary);
+    }
+
+    const stateToValidate = {
+      ...formState,
+      ancillaryAssignments: nextAncillaryAssignments,
+      ancillaryInput: "",
+    };
+
+    const liveValidationErrors = validateFacultyForm(stateToValidate, facultyMembers, editingId);
     const hasErrors = Object.keys(liveValidationErrors).length > 0;
     if (hasErrors) {
       setTouched({
@@ -950,16 +978,18 @@ export default function FacultyManagement() {
         employeeId: true,
         position: true,
         employmentStatus: true,
+        appointmentStatus: true,
         email: true,
         contact: true,
         subjectExpertise: true,
         gradeLevelAssignments: true,
       });
-      showNotice("Please fix the highlighted errors.", "error");
+      const firstErrorMsg = Object.values(liveValidationErrors)[0] || "Please fix highlighted fields.";
+      showNotice(firstErrorMsg, "error");
       return;
     }
 
-    const normalized = normalizeFacultyRecord(formState, editingId);
+    const normalized = normalizeFacultyRecord(stateToValidate, editingId);
 
     if (editingId) {
       const existing = facultyMembers.find((member) => member.id === editingId);
@@ -968,20 +998,14 @@ export default function FacultyManagement() {
         return;
       }
 
-      const unchanged = JSON.stringify(stripAuditFields(existing)) === JSON.stringify(stripAuditFields(normalized));
-      if (unchanged) {
-        showNotice("No changes to save.", "error");
-        setIsDrawerOpen(false);
-        return;
-      }
-
       const nextFaculty = facultyMembers.map((member) =>
         member.id === editingId
           ? {
+              ...member,
               ...normalized,
-              active: member.active,
+              active: typeof member.active === "boolean" ? member.active : true,
               assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0,
-              createdAt: member.createdAt,
+              createdAt: member.createdAt || normalized.createdAt,
               updatedAt: new Date().toISOString(),
             }
           : member
@@ -992,7 +1016,7 @@ export default function FacultyManagement() {
       setFormState(EMPTY_FORM);
       setTouched({});
       setIsDrawerOpen(false);
-      showNotice("Faculty record updated.", "success");
+      showNotice("Faculty record updated successfully.", "success");
       return;
     }
 
@@ -1000,7 +1024,7 @@ export default function FacultyManagement() {
     setFormState(EMPTY_FORM);
     setTouched({});
     setIsDrawerOpen(false);
-    showNotice("Faculty record added.", "success");
+    showNotice("Faculty record added successfully.", "success");
   };
 
   const handleAddNewFaculty = () => {
@@ -1022,28 +1046,33 @@ export default function FacultyManagement() {
 
   const handleEditFaculty = (member) => {
     setEditingId(member.id);
+    const hasAdviserAncillary = Array.isArray(member.ancillaryAssignments) &&
+      member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser"));
+    const isAdviser = Boolean(member.isClassAdviser || hasAdviserAncillary);
+
     setFormState({
-      name: member.name,
-      sex: member.sex,
-      employeeId: member.employeeId,
+      name: member.name || "",
+      sex: member.sex || "",
+      employeeId: member.employeeId || "",
       position: member.position || "Teacher I",
       appointmentStatus: member.appointmentStatus || member.employmentStatus || "Permanent",
       workingArrangement: member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time"),
       employmentStatus: member.appointmentStatus || member.employmentStatus || "Permanent",
-      email: member.email,
-      contact: member.contact,
-      degree: member.degree,
-      major: member.major,
-      minor: member.minor,
-      isClassAdviser: Boolean(member.isClassAdviser || member.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))),
+      email: member.email || "",
+      contact: member.contact || "",
+      degree: member.degree || "",
+      major: member.major || "",
+      minor: member.minor || "",
+      isClassAdviser: isAdviser,
       advisorySection: member.advisorySection || "",
-      ancillaryAssignments: member.ancillaryAssignments || [],
+      ancillaryCreditHours: Number(member.ancillaryCreditHours) || 0,
+      ancillaryAssignments: Array.isArray(member.ancillaryAssignments) ? [...member.ancillaryAssignments] : [],
       ancillaryInput: "",
-      unavailablePeriods: member.unavailablePeriods || [],
-      subjectExpertise: member.subjectExpertise || member.primaryExpertise || [],
-      primaryExpertise: member.primaryExpertise || member.subjectExpertise || [],
-      secondaryExpertise: member.secondaryExpertise || [],
-      gradeLevelAssignments: member.gradeLevelAssignments || [],
+      unavailablePeriods: Array.isArray(member.unavailablePeriods) ? [...member.unavailablePeriods] : [],
+      subjectExpertise: Array.isArray(member.subjectExpertise) ? [...member.subjectExpertise] : (Array.isArray(member.primaryExpertise) ? [...member.primaryExpertise] : []),
+      primaryExpertise: Array.isArray(member.primaryExpertise) ? [...member.primaryExpertise] : (Array.isArray(member.subjectExpertise) ? [...member.subjectExpertise] : []),
+      secondaryExpertise: Array.isArray(member.secondaryExpertise) ? [...member.secondaryExpertise] : [],
+      gradeLevelAssignments: Array.isArray(member.gradeLevelAssignments) ? [...member.gradeLevelAssignments] : [],
     });
     setTouched({});
     setIsDrawerOpen(true);
@@ -2282,6 +2311,8 @@ export default function FacultyManagement() {
               <div style={{ display: "flex", gap: 8 }}>
                 <input
                   type="text"
+                  list="deped-ancillary-pool"
+                  placeholder="e.g. DRRM Coordinator, ICT Coordinator, Custodian..."
                   value={formState.ancillaryInput}
                   onChange={(event) => handleFormField("ancillaryInput", event.target.value)}
                   onKeyDown={(event) => {
@@ -2292,11 +2323,62 @@ export default function FacultyManagement() {
                   }}
                   style={inputStyle(false)}
                 />
+                <datalist id="deped-ancillary-pool">
+                  {ANCILLARY_POOL.map((role) => (
+                    <option key={role} value={role} />
+                  ))}
+                </datalist>
                 <button type="button" onClick={addAncillaryAssignment} style={smallActionStyle()}>
                   Add
                 </button>
               </div>
             </Field>
+
+            {/* Quick add popular DepEd ancillary tags */}
+            <div style={{ marginTop: 6, display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Quick Add Role:</span>
+              {[
+                "School DRRM Coordinator",
+                "School ICT Coordinator",
+                "School Property Custodian",
+                "School Guidance Coordinator",
+                "Grade Level Coordinator",
+                "Subject Area Coordinator",
+              ].map((role) => {
+                const isPresent = (formState.ancillaryAssignments || []).some(
+                  (item) => item.toLowerCase() === role.toLowerCase()
+                );
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => {
+                      if (!isPresent) {
+                        setFormState((prev) => ({
+                          ...prev,
+                          ancillaryAssignments: [...(prev.ancillaryAssignments || []), role],
+                        }));
+                        showNotice(`Added ${role}.`, "success");
+                      }
+                    }}
+                    style={{
+                      fontSize: 11,
+                      background: isPresent ? "#f1f5f9" : "#eef2ff",
+                      color: isPresent ? "#94a3b8" : "#3730a3",
+                      border: isPresent ? "1px solid #e2e8f0" : "1px solid #c7d2fe",
+                      borderRadius: 6,
+                      padding: "2px 7px",
+                      cursor: isPresent ? "default" : "pointer",
+                      fontWeight: 600,
+                    }}
+                    disabled={isPresent}
+                  >
+                    {isPresent ? "✓ " : "+"} {role.replace(/^School\s*/i, "")}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* DepEd Class Adviser 1-Load Credit Toggle */}
             <div style={{ margin: "10px 0", padding: "10px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#1f2c6f" }}>
@@ -2305,14 +2387,24 @@ export default function FacultyManagement() {
                   checked={Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser")))}
                   onChange={(e) => {
                     const checked = e.target.checked;
-                    handleFormField("isClassAdviser", checked);
-                    if (checked) {
-                      if (!formState.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser"))) {
-                        handleFormField("ancillaryAssignments", [...formState.ancillaryAssignments, "Class Adviser"]);
+                    setFormState((prev) => {
+                      let nextAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
+                      if (checked) {
+                        if (!nextAssignments.some((a) => String(a).toLowerCase().includes("adviser"))) {
+                          nextAssignments.push("Class Adviser");
+                        }
+                      } else {
+                        nextAssignments = nextAssignments.filter((a) => !String(a).toLowerCase().includes("adviser"));
                       }
+                      return {
+                        ...prev,
+                        isClassAdviser: checked,
+                        advisorySection: checked ? prev.advisorySection : "",
+                        ancillaryAssignments: nextAssignments,
+                      };
+                    });
+                    if (checked) {
                       showNotice("Designated as Class Adviser (+5h teaching load credit applied under DepEd DO 005, s. 2024).", "success");
-                    } else {
-                      handleFormField("ancillaryAssignments", formState.ancillaryAssignments.filter((a) => !String(a).toLowerCase().includes("adviser")));
                     }
                   }}
                 />
@@ -2321,33 +2413,83 @@ export default function FacultyManagement() {
               <p style={{ margin: "4px 0 0 24px", fontSize: 11, color: "#64748b" }}>
                 Per DO 005, s. 2024, advisory duty is credited as 1 teaching load (caps actual classroom teaching to 25 hrs/week instead of 30 hrs).
               </p>
+
+              {/* Advisory Section Selector */}
+              {Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))) && (
+                <div style={{ marginTop: 10, paddingLeft: 24 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 4 }}>
+                    Advisory Section:
+                  </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <select
+                      value={formState.advisorySection || ""}
+                      onChange={(e) => handleFormField("advisorySection", e.target.value)}
+                      style={{ ...selectStyle(false), flex: 1 }}
+                    >
+                      <option value="">Select Advisory Section (or enter below)</option>
+                      {sectionOptions.map((sec) => (
+                        <option key={sec.id || sec.name} value={sec.name}>
+                          {sec.label || sec.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Or type section name..."
+                      value={formState.advisorySection || ""}
+                      onChange={(e) => handleFormField("advisorySection", e.target.value)}
+                      style={{ ...inputStyle(false), width: 170 }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            <ChipList items={formState.ancillaryAssignments} onRemove={removeAncillaryAssignment} emptyText="No ancillary assignments added." />
-            {formState.ancillaryAssignments && formState.ancillaryAssignments.length > 0 ? (
-              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>DepEd Workload Presets:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    showNotice("Applied Major Ancillary Credit (-4 teaching periods/week).", "success");
-                  }}
-                  style={{ fontSize: 11, background: "#eef2ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
-                  title="Deducts 4 teaching periods for major roles like Registrar, Guidance Coordinator, Property Custodian."
-                >
-                  Major Credit (-4 periods)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    showNotice("Applied Minor Ancillary Credit (-2 teaching periods/week).", "success");
-                  }}
-                  style={{ fontSize: 11, background: "#eef2ff", color: "#3B4197", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
-                  title="Deducts 2 teaching periods for minor roles like Grade Level Chair, Canteen Manager."
-                >
-                  Minor Credit (-2 periods)
-                </button>
-              </div>
-            ) : null}
+
+            <ChipList items={formState.ancillaryAssignments || []} onRemove={removeAncillaryAssignment} emptyText="No ancillary assignments added." />
+
+            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>DepEd Workload Presets:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormState((prev) => {
+                    const currentAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
+                    const hasMajor = currentAssignments.some((a) => a.toLowerCase().includes("coordinator") || a.toLowerCase().includes("custodian") || a.toLowerCase().includes("major"));
+                    const nextAssignments = hasMajor ? currentAssignments : [...currentAssignments, "Major Ancillary Coordinator"];
+                    return {
+                      ...prev,
+                      ancillaryCreditHours: 4,
+                      ancillaryAssignments: nextAssignments,
+                    };
+                  });
+                  showNotice("Applied Major Ancillary Credit (-4 teaching periods/week, 4h credit).", "success");
+                }}
+                style={{ fontSize: 11, background: "#eef2ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
+                title="Credits 4 teaching periods for major roles like Registrar, Guidance Coordinator, Property Custodian."
+              >
+                Major Credit (-4 periods)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormState((prev) => {
+                    const currentAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
+                    const hasMinor = currentAssignments.some((a) => a.toLowerCase().includes("coordinator") || a.toLowerCase().includes("chair") || a.toLowerCase().includes("minor"));
+                    const nextAssignments = hasMinor ? currentAssignments : [...currentAssignments, "Minor Ancillary Duty"];
+                    return {
+                      ...prev,
+                      ancillaryCreditHours: 2,
+                      ancillaryAssignments: nextAssignments,
+                    };
+                  });
+                  showNotice("Applied Minor Ancillary Credit (-2 teaching periods/week, 2h credit).", "success");
+                }}
+                style={{ fontSize: 11, background: "#eef2ff", color: "#3B4197", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
+                title="Credits 2 teaching periods for minor roles like Grade Level Chair, Canteen Manager."
+              >
+                Minor Credit (-2 periods)
+              </button>
+            </div>
           </div>
 
           <div style={{ marginTop: 6 }}>
@@ -3637,7 +3779,8 @@ function smallDangerStyle() {
 function validateFacultyForm(formState, facultyMembers, editingId) {
   const errors = {};
 
-  if (!formState.name.trim()) {
+  const name = String(formState.name || "").trim();
+  if (!name) {
     errors.name = "Name is required.";
   }
 
@@ -3645,45 +3788,54 @@ function validateFacultyForm(formState, facultyMembers, editingId) {
     errors.sex = "Sex is required.";
   }
 
-  if (!formState.employeeId.trim()) {
+  const employeeId = String(formState.employeeId || "").trim();
+  if (!employeeId) {
     errors.employeeId = "Employee ID is required.";
   } else {
     const duplicate = facultyMembers.some(
-      (member) => member.id !== editingId && member.employeeId.toLowerCase() === formState.employeeId.trim().toLowerCase()
+      (member) => member.id !== editingId && String(member.employeeId || "").trim().toLowerCase() === employeeId.toLowerCase()
     );
     if (duplicate) {
       errors.employeeId = "Employee ID must be unique.";
     }
   }
 
-  if (!formState.position.trim()) {
+  const position = String(formState.position || "").trim();
+  if (!position) {
     errors.position = "Position is required.";
   }
 
-  if (!formState.employmentStatus) {
+  if (!formState.employmentStatus && !formState.appointmentStatus) {
     errors.employmentStatus = "Employment Status is required.";
   }
 
-  if (!formState.email.trim()) {
+  const email = String(formState.email || "").trim();
+  if (!email) {
     errors.email = "Email is required.";
-  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(formState.email.trim())) {
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
     errors.email = "Enter a valid email address.";
   } else {
     const duplicateEmail = facultyMembers.some(
-      (member) => member.id !== editingId && member.email.toLowerCase() === formState.email.trim().toLowerCase()
+      (member) => member.id !== editingId && String(member.email || "").trim().toLowerCase() === email.toLowerCase()
     );
     if (duplicateEmail) {
       errors.email = "Email must be unique.";
     }
   }
 
-  if (!formState.contact.trim()) {
+  const rawContact = String(formState.contact || "").trim();
+  const cleanedContact = rawContact.replace(/[\s\-()]/g, "");
+  if (!rawContact) {
     errors.contact = "Contact is required.";
-  } else if (!/^(\+639\d{9}|09\d{9})$/u.test(formState.contact.trim())) {
+  } else if (!/^(\+639\d{9}|09\d{9})$/u.test(cleanedContact)) {
     errors.contact = "Use +639XXXXXXXXX or 09XXXXXXXXX format.";
   }
 
-  if (!Array.isArray(formState.subjectExpertise) || formState.subjectExpertise.length === 0) {
+  const primaryOrExpertise = (Array.isArray(formState.primaryExpertise) && formState.primaryExpertise.length)
+    ? formState.primaryExpertise
+    : (Array.isArray(formState.subjectExpertise) ? formState.subjectExpertise : []);
+
+  if (primaryOrExpertise.length === 0) {
     errors.subjectExpertise = "Select at least one subject expertise.";
   }
 
@@ -3696,11 +3848,17 @@ function validateFacultyForm(formState, facultyMembers, editingId) {
 
 function normalizeFacultyRecord(formState, editingId) {
   const now = new Date().toISOString();
+  const isClassAdviser = Boolean(
+    formState.isClassAdviser ||
+    (Array.isArray(formState.ancillaryAssignments) && formState.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+  );
+  const rawCredit = Number(formState.ancillaryCreditHours);
+  const ancillaryCreditHours = Number.isFinite(rawCredit) && rawCredit > 0 ? rawCredit : (isClassAdviser ? 5 : 0);
 
   return {
     id: editingId || createFacultyId(),
     name: sanitizeText(formState.name),
-    sex: formState.sex,
+    sex: formState.sex || "Male",
     employeeId: sanitizeText(formState.employeeId).toUpperCase(),
     position: normalizeDesignation(formState.position),
     appointmentStatus: formState.appointmentStatus || formState.employmentStatus || "Permanent",
@@ -3711,17 +3869,18 @@ function normalizeFacultyRecord(formState, editingId) {
     degree: sanitizeText(formState.degree),
     major: sanitizeText(formState.major),
     minor: sanitizeText(formState.minor),
-    isClassAdviser: Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))),
+    isClassAdviser,
     advisorySection: sanitizeText(formState.advisorySection),
+    ancillaryCreditHours,
     ancillaryAssignments: normalizeArray(formState.ancillaryAssignments),
     unavailablePeriods: normalizeUnavailablePeriods(formState.unavailablePeriods),
     subjectExpertise: normalizeArray(formState.primaryExpertise?.length ? formState.primaryExpertise : formState.subjectExpertise),
     primaryExpertise: normalizeArray(formState.primaryExpertise?.length ? formState.primaryExpertise : formState.subjectExpertise),
     secondaryExpertise: normalizeArray(formState.secondaryExpertise),
     gradeLevelAssignments: normalizeArray(formState.gradeLevelAssignments),
-    assignedLoadPercent: 0,
-    active: true,
-    createdAt: now,
+    assignedLoadPercent: Number(formState.assignedLoadPercent) || 0,
+    active: typeof formState.active === "boolean" ? formState.active : true,
+    createdAt: formState.createdAt || now,
     updatedAt: now,
   };
 }
@@ -3810,6 +3969,41 @@ function getSubjectOptions() {
   }
 }
 
+function getSectionOptions() {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem("turotugma_sections_created");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const sections = [];
+    const seen = new Set();
+    for (const level of ["jhs", "shs"]) {
+      if (parsed && parsed[level] && typeof parsed[level] === "object") {
+        for (const gradeKey of Object.keys(parsed[level])) {
+          const gradeObj = parsed[level][gradeKey];
+          const gradeNum = parseInt(String(gradeKey).replace(/\D/g, ""), 10);
+          const secs = Array.isArray(gradeObj?.sections) ? gradeObj.sections : (Array.isArray(gradeObj) ? gradeObj : []);
+          secs.forEach((sec, index) => {
+            if (sec) {
+              const secName = typeof sec === "string" ? sec : (sec.name || "");
+              if (!secName || seen.has(secName.toLowerCase())) return;
+              seen.add(secName.toLowerCase());
+              const grade = sec.grade || gradeNum || gradeKey;
+              const label = secName.toLowerCase().includes(`grade ${grade}`) || secName.startsWith(`${grade}-`)
+                ? secName
+                : `Grade ${grade} - ${secName}`;
+              sections.push({ id: sec.id || `${level}-${gradeNum}-${index}`, name: secName, label });
+            }
+          });
+        }
+      }
+    }
+    return sections;
+  } catch {
+    return [];
+  }
+}
+
 function getUnavailablePeriodOptions() {
   if (typeof window === "undefined") {
     return FALLBACK_PERIOD_OPTIONS;
@@ -3852,8 +4046,13 @@ function getInitialFaculty() {
     return parsed.map((member) => ({
       ...member,
       ancillaryAssignments: normalizeArray(member.ancillaryAssignments),
+      ancillaryCreditHours: Number(member.ancillaryCreditHours) || 0,
+      advisorySection: sanitizeText(member.advisorySection),
+      isClassAdviser: Boolean(member.isClassAdviser || (Array.isArray(member.ancillaryAssignments) && member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))),
       unavailablePeriods: normalizeUnavailablePeriods(member.unavailablePeriods),
-      subjectExpertise: normalizeArray(member.subjectExpertise),
+      subjectExpertise: normalizeArray(member.subjectExpertise || member.primaryExpertise),
+      primaryExpertise: normalizeArray(member.primaryExpertise || member.subjectExpertise),
+      secondaryExpertise: normalizeArray(member.secondaryExpertise),
       gradeLevelAssignments: resolveListToGradeLevels(normalizeArray(member.gradeLevelAssignments)),
       assignedLoadPercent: Number.isFinite(member.assignedLoadPercent) ? member.assignedLoadPercent : 0,
       active: typeof member.active === "boolean" ? member.active : true,
@@ -4078,7 +4277,9 @@ function normalizeWorkingArrangement(value) {
 }
 
 function normalizeDesignation(value) {
-  const normalized = sanitizeText(value).toLowerCase();
+  const raw = sanitizeText(value);
+  if (!raw) return "Teacher I";
+  const normalized = raw.toLowerCase();
 
   const direct = DEPED_DESIGNATION_OPTIONS.find((option) => option.toLowerCase() === normalized);
   if (direct) {
@@ -4086,7 +4287,7 @@ function normalizeDesignation(value) {
   }
 
   const fuzzy = DEPED_DESIGNATION_OPTIONS.find((option) => option.toLowerCase().includes(normalized));
-  return fuzzy || "";
+  return fuzzy || direct || raw || "Teacher I";
 }
 
 function ConfirmationModal({ open, message, onConfirm, onCancel, title = "Confirmation", confirmLabel = "Confirm" }) {

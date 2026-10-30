@@ -57,18 +57,76 @@ The system balances three core objectives:
   - **SPA (Special Program in the Arts)**: Takes core subjects + TLE + SPA Specialization + HGP.
   - **SPJ (Special Program in Journalism)**: Takes core subjects + ICT/Journalism + HGP.
   - **SP-STEM (Special Program in Science, Technology & Engineering)**: Takes core subjects + enhanced STEM electives (Environmental Science, Developmental Reading, Elementary Algebra, ICT) + HGP.
-- **Grade 11 to 12 (SHS)**: Classified by Academic and TVL Strands (STEM, ABM, HUMSS, GAS, TVL-ICT, TVL-HE).
+- **Grade 11 (Strengthened SHS — DO 017, s. 2026)**:
+  - **Academic Pathway**: Organized into Clusters (*Arts, Social Sciences & Humanities*, *Business & Entrepreneurship*, *STEM*, *Sports, Health & Wellness*, *Field Experience/Research*).
+  - **TechPro Pathway**: Organized into Areas (*ICT Support & Programming*, *Hospitality & Tourism*, *Industrial Technologies*, *Agri-Fishery & Food*, *Creative Arts & Design*, *Construction & Building*).
+  - **Trimester Calendar**: 3 Terms (Term 1, Term 2, Term 3). Grade 11 Core subjects run across all 3 terms (160 hours each), while Academic electives complete in 1 term (80h or 160h) and TechPro electives span all 3 terms (320 hours).
+- **Grade 12 (Legacy / Transition Cohort)**: Retains legacy 2-semester format and strands (STEM, ABM, HUMSS, GAS, TVL-ICT, TVL-HE) until pilot or subsequent phase rollouts.
 
 ### 3.3. Subjects Management
-- **Subject Code & Name**: Canonical codes (e.g., `MATH`, `SCI`, `ENG`, `FIL`, `AP`, `VE`/`ESP`, `MAPEH`, `TLE`, `HGP`).
-- **Weekly Workload (`classesPerWeek`)**: Specifies how many recurring daily meetings the class must receive per week (typically 4 meetings/week for core subjects, 1 meeting/week for HGP).
+- **Subject Code & Name**: Canonical codes (e.g., `MATH`, `SCI`, `ENG`, `FIL`, `COMM11`, `GENMATH11`, `GENSCI11`, `LCS11`, `PKLP11`, `AP`, `VE`/`ESP`, `MAPEH`, `TLE`, `HGP`, `SPASPEC`).
+- **Weekly Workload & Curriculum Hours**: 
+  - `classesPerWeek` & `dailyMinutes`: Weekly meeting patterns.
+  - `totalHours`: Official DepEd instructional hours requirement (160h for Core across 3 terms, 80h/160h for single-term electives, 320h for TechPro).
+- **Delivery Period & Trimester Scoping**: Configurable as `All 3 Terms`, `Term 1`, `Term 2`, `Term 3`, or legacy semesters (`First Semester`, `Last Semester`).
 - **Grade Level & Exclusivity**: Binds subjects to specific grade levels or marks them as Universal across JHS/SHS.
+- **Clean & Ultra-Compact Form Layout**:
+  - **Line 1 (Identity & Classification)**: `Subject Name`, `Subject Code`, `School Level`, `Grade Level`, and `Subject Type` arranged in a single neat line.
+  - **Line 2 (Workload, Scope & Teaching Mode)**: `Daily Duration (minutes)`, `Classes per Week`, `Program Target Scope (JHS)` (or SHS Delivery Term, Required Hours, and Strand), `Teaching Mode` (defaults to `Single Teacher`), and `Number of Teachers` (when breakout is selected) arranged inline in a single neat line.
+  - **Breakout Stream Rows**: When `Multi-Teacher Breakout` is enabled, individual 2-column rows appear cleanly underneath for each stream (`Stream Name` and `Qualification / Teacher` selector).
+- **Teaching Faculty Allocation Mode**: 
+  - **Single Teacher (Default)**: Standard DepEd rule for 99% of subjects (including special sections like SP-STEM electives and SPJ journalism). Exactly 1 teacher is assigned per period.
+  - **Multi-Teacher Breakout**: Configurable for subjects that split into concurrent discipline streams during a single period (e.g., SPA Specialization, SPS Sports streams, TVL workshop stations). Allows defining the required teacher count (2–6) and separate individual input fields for each stream/specialization.
 
 ### 3.4. Faculty Management
+- **Profile & Identification**: Teacher Name, Sex, DepEd Employee ID, Position/Designation (`Teacher I–III`, `Master Teacher I–V`, `Head Teacher I–VI`), Appointment Category (`Permanent`, `Provisional`, `Contractual`, `Substitute`), and Working Arrangement (`Full-Time`, `Part-Time`).
+- **Educational Background & Major Qualification**: Tracks Degree, Major (e.g., Mathematics, English, Filipino, Science, Araling Panlipunan, TLE, ICT), and Minor teaching background for intelligent multi-teacher dynamic stream allocation.
+- **DepEd Ancillary Assignments**:
+  - **Auto-Commit on Save**: Any ancillary role typed in the input field is automatically committed and saved even if the user clicks "Save Changes" directly without clicking the "Add" button first.
+  - **DepEd Ancillary Datalist & Quick Add**: Built-in suggestions from the DepEd Ancillary Pool (`School DRRM Coordinator`, `School ICT Coordinator`, `School Property Custodian`, `School Guidance Coordinator`, `Grade Level Coordinator`, `Subject Area Coordinator`, etc.). Clickable quick-add chips allow one-click role addition.
+  - **DepEd Workload Presets**: Interactive buttons apply statutory teaching load relief per DepEd guidelines:
+    - **Major Credit (-4 periods / 4h credit)**: Credits 4 teaching periods/week for major roles (e.g., Registrar, Guidance Coordinator, Property Custodian).
+    - **Minor Credit (-2 periods / 2h credit)**: Credits 2 teaching periods/week for minor roles (e.g., Grade Level Chair, Canteen Manager).
+- **Class Adviser Designation & Advisory Section**:
+  - Designated via the 1-load credit toggle per **DepEd DO 005, s. 2024** (caps actual classroom teaching at 25 hrs/week instead of 30 hrs by granting 5 hours/week advisory credit).
+  - Activating the Class Adviser toggle reveals a dedicated **Advisory Section** selector with both a dropdown of active school sections and custom text input.
+  - Advisory Homeroom Guidance Program (HGP) periods are automatically linked to the teacher's designated advisory section.
 - **Subject Expertise**: Assigns Primary Major and Secondary Minor teaching qualifications.
 - **Grade Level Assignments**: Authorizes which grade levels (e.g., Grade 7, Grade 9) the teacher is certified to instruct.
 - **Unavailable Periods**: Explicitly marks periods when a teacher cannot teach due to ancillary duties, administrative work, or part-time schedules.
-- **Maximum Load Tracking**: Visual progress bars monitor weekly assigned teaching load against DepEd limits.
+- **Maximum Load Tracking**: Visual progress bars monitor weekly assigned teaching load against DepEd limits (Balanced: 20–30h for regular, 16–25h for Class Advisers; Overload: >30h regular, >25h adviser).
+- **Cross-Component Synchronization**: Automatically persists updates to `localStorage` under `turotugma_faculty` and synchronizes in real-time across Subjects Management and Schedule Generator via dual custom events (`turotugma:faculty-updated` and `turotugma_faculty_updated`).
+
+### 3.5. Multi-Teacher & Specialization Breakout Management (SPA, SPS, TVL, Co-Teaching)
+Under **DepEd Order No. 21, s. 2019** and the **MATATAG Curriculum Framework**, certain specialized subjects require concurrent teaching breakout streams during a single period (e.g., Period 4). Rather than having one teacher handle the entire class, the section divides into concurrent discipline streams (e.g., **Economics & History** for Araling Panlipunan; **Media Arts, Dance Arts & Instrumental Music** for SPA; **Cookery & EIM** for TLE), each instructed simultaneously by a dedicated teacher.
+
+#### 1. Controlling Multi-Teacher Requirements in Subjects Management
+- By default, **all subjects are Single Teacher**. Special section subjects (e.g., Environmental Science or Developmental Reading in SP-STEM, Journalism in SPJ) default to 1 teacher.
+- When adding or editing a subject in [SubjectsManagement.js](file:///c:/xampp/htdocs/SchedulingSystem/frontend/src/app/dashboard/components/SubjectsManagement.js):
+  - In **Line 3 (Teaching Mode)**, select **"Multi-Teacher Breakout"** from the dropdown.
+  - Select the required number of teachers (2 to 6).
+  - Clean 2-column rows appear for each stream with:
+    - **Stream / Specialization Name**: Input field for the stream title (e.g., `Visual Arts`, `Dance Arts`, `Economics`, `History`).
+    - **Qualification / Teacher**: Clean selector with two optgroups:
+      - **Auto-Match by Major (Any Free Specialist)**: Defaults to auto-matching by stream name or choosing any specific major (e.g., `Arts / Fine Arts`, `Dance`, `Economics`, `History`, `TLE`). The generator dynamically and randomly distributes sections across **any free teacher** holding that qualification rather than limiting to a single person.
+      - **Lock Specific Teacher (Optional Override)**: Allows the scheduler to still lock in a specific faculty member if desired.
+- Subjects with multi-teacher breakouts display a `Breakout (X Teachers)` badge in the subject catalog.
+
+#### 2. Hybrid Auto-Scheduling Protocol
+During automated schedule generation, the scheduler allocates teachers using a **4-tier Hybrid matching protocol**:
+1. **Tier 1 (Specific Teacher Lock)**: If the scheduler explicitly locked in a specific teacher for that stream, the engine assigns them first (provided they are free and unblocked).
+2. **Tier 2 (Major / Specialization Qualification — Dynamic Pool)**: If set to Major matching (or auto-match), the engine searches for **any active teacher** whose `major`, `minor`, `specialization`, or `subjectExpertise` matches that discipline. The engine balances teaching loads across all qualified teachers with randomized tie-breaking, ensuring fair faculty rotation across multiple sections.
+3. **Tier 3 (Candidate Reuse)**: For the primary stream, the candidate teacher assigned to the parent subject is reused if free.
+4. **Tier 4 (Department Fallback)**: If no specific sub-specialist is available, the engine automatically selects any available teacher from the parent department (e.g., MAPEH, Araling Panlipunan, TLE) sorted by lowest workload, guaranteeing zero double-booking and zero unscheduled periods.
+
+#### 3. Manual Grid Editing & Verification
+- In the manual grid editor, selecting any multi-teacher subject opens an interactive **"Set / Edit X Teachers"** button and dedicated modal rather than a single teacher dropdown.
+- Existing assignments feature an interactive breakout badge (e.g., `ECONOMICS – Maria Santos; HISTORY – Juan Dela Cruz`). Clicking the badge opens the breakout assignment modal.
+- The modal performs real-time validation:
+  - **No Duplicate Stream Teachers**: A teacher selected for Stream 1 cannot be selected for Stream 2 in the same period.
+  - **No Section Double-Booking**: Teachers currently scheduled in other sections at that period are disabled and labeled with the conflicting section name.
+  - **Restriction Enforcement**: Teachers with blocked unavailable periods are disabled.
+  - Applying the breakout assignment updates teaching load percentages and re-evaluates all schedule constraints automatically.
 
 ---
 

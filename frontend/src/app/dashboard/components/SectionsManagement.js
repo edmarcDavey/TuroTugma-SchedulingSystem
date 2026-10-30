@@ -355,7 +355,7 @@ export default function SectionsManagement() {
           {offeredLevels !== "shs_only" ? (
             <SectionsContainer
               title="Junior High School (Grade 7-10)"
-              subtitle="Set section counts per grade level, choose or customize automated naming schemes, and assign curriculum classifications."
+              subtitle="Set section counts per grade level. Special Programs (SPA, SPJ, SP-STEM) are automatically allocated first, and subsequent sections default to Regular Curriculum."
               level="jhs"
               grades={JUNIOR_HIGH_GRADES}
               config={jhsConfig}
@@ -370,7 +370,7 @@ export default function SectionsManagement() {
           {offeredLevels !== "jhs_only" ? (
             <SectionsContainer
               title="Senior High School (Grade 11-12)"
-              subtitle="Set section counts per grade level, choose or customize automated naming schemes, and assign DepEd tracks & elective clusters."
+              subtitle="Set section counts per grade level. DepEd Tracks & Elective Clusters (STEM, HUMSS, ABM, TechPro ICT) are automatically distributed across sections."
               level="shs"
               grades={SENIOR_HIGH_GRADES}
               config={shsConfig}
@@ -914,14 +914,14 @@ function SectionsContainer({
 
           return (
             <div key={grade} style={{ border: "1px solid #e3e7ef", borderRadius: 12, padding: 14, background: "#fbfcff" }}>
-              {/* Header and Automated Section Naming Controls (NO section count pill) */}
+              {/* Header and Automated Section Naming Controls */}
               <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 12, paddingBottom: 10, borderBottom: "1px solid #edf2f7" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ color: "#1f2c6f", fontSize: 16, fontWeight: 700 }}>Grade {grade}</span>
                 </div>
 
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
-                  {/* Total Sections input (fully accessible in both creation and edit mode) */}
+                  {/* Total Sections input */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <label htmlFor={`grade-${grade}-count`} style={{ color: "#475569", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
                       Total Sections:
@@ -985,75 +985,96 @@ function SectionsContainer({
               {/* Section Rows */}
               {gradeConfig.sections.length > 0 ? (
                 <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                  {gradeConfig.sections.map((section, index) => (
-                    <div
-                      key={`${grade}-${index}`}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: level === "jhs" ? "36px 1fr 220px" : "36px 1fr 150px 240px",
-                        gap: 10,
-                        alignItems: "center",
-                        background: "#ffffff",
-                        padding: "8px 10px",
-                        borderRadius: 8,
-                        border: "1px solid #e2e8f0",
-                      }}
-                    >
-                      <span style={indexPillStyle()}>{index + 1}</span>
+                  {gradeConfig.sections.map((section, index) => {
+                    const jhsClass =
+                      section.classification === "Special" || section.classification === "STE"
+                        ? "SP-STEM"
+                        : section.classification || "Regular";
 
-                      {/* Administrator can manually edit any generated section name */}
-                      <input
-                        type="text"
-                        value={section.name}
-                        onChange={(event) => onSectionNameChange(level, grade, index, event.target.value)}
-                        placeholder={`Grade ${grade} - Section Name`}
-                        style={{ ...inputStyle(), fontWeight: 600 }}
-                      />
+                    const isJhsSpa = jhsClass === "SPA";
+                    const isJhsSpj = jhsClass === "SPJ";
+                    const isJhsStem = jhsClass === "SP-STEM";
 
-                      {level === "jhs" ? (
-                        <select
-                          value={
-                            section.classification === "Special" || section.classification === "STE"
-                              ? "SP-STEM"
-                              : section.classification || "Regular"
-                          }
-                          onChange={(event) => onSectionMetaChange(level, grade, index, "classification", event.target.value)}
-                          style={{ ...selectStyle(), width: "100%" }}
-                        >
-                          {JHS_PROGRAM_OPTIONS.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <>
+                    return (
+                      <div
+                        key={`${grade}-${index}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: level === "jhs" ? "36px 1fr 220px" : "36px 1fr 150px 240px",
+                          gap: 10,
+                          alignItems: "center",
+                          background: "#ffffff",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "1px solid #e2e8f0",
+                        }}
+                      >
+                        <span style={indexPillStyle()}>{index + 1}</span>
+
+                        {/* Administrator can manually edit any generated section name */}
+                        <input
+                          type="text"
+                          value={section.name}
+                          onChange={(event) => onSectionNameChange(level, grade, index, event.target.value)}
+                          placeholder={`Grade ${grade} - Section Name`}
+                          style={{ ...inputStyle(), fontWeight: 600 }}
+                        />
+
+                        {level === "jhs" ? (
                           <select
-                            value={section.track || "Academic"}
-                            onChange={(event) => onSectionMetaChange(level, grade, index, "track", event.target.value)}
-                            style={{ ...selectStyle(), width: "100%" }}
+                            value={jhsClass}
+                            onChange={(event) => onSectionMetaChange(level, grade, index, "classification", event.target.value)}
+                            style={{
+                              ...selectStyle(),
+                              width: "100%",
+                              fontWeight: 700,
+                              background: isJhsSpa ? "#faf5ff" : isJhsSpj ? "#fff7ed" : isJhsStem ? "#f0f9ff" : "#ffffff",
+                              borderColor: isJhsSpa ? "#c084fc" : isJhsSpj ? "#fb923c" : isJhsStem ? "#38bdf8" : "#cfd7ef",
+                              color: isJhsSpa ? "#7e22ce" : isJhsSpj ? "#c2410c" : isJhsStem ? "#0369a1" : "#1f2c6f",
+                            }}
                           >
-                            {SHS_TRACK_OPTIONS.map((opt) => (
+                            {JHS_PROGRAM_OPTIONS.map((opt) => (
                               <option key={opt.value} value={opt.value}>
                                 {opt.label}
                               </option>
                             ))}
                           </select>
-                          <select
-                            value={section.cluster || SHS_CLUSTER_OPTIONS[0]}
-                            onChange={(event) => onSectionMetaChange(level, grade, index, "cluster", event.target.value)}
-                            style={{ ...selectStyle(), width: "100%" }}
-                          >
-                            {SHS_CLUSTER_OPTIONS.map((cluster) => (
-                              <option key={cluster} value={cluster}>
-                                {cluster}
-                              </option>
-                            ))}
-                          </select>
-                        </>
-                      )}
-                    </div>
-                  ))}
+                        ) : (
+                          <>
+                            <select
+                              value={section.track || "Academic"}
+                              onChange={(event) => onSectionMetaChange(level, grade, index, "track", event.target.value)}
+                              style={{
+                                ...selectStyle(),
+                                width: "100%",
+                                fontWeight: 700,
+                                background: section.track === "TechPro" ? "#fff7ed" : "#eff6ff",
+                                borderColor: section.track === "TechPro" ? "#fed7aa" : "#bfdbfe",
+                                color: section.track === "TechPro" ? "#9a3412" : "#1e40af",
+                              }}
+                            >
+                              {SHS_TRACK_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={section.cluster || SHS_CLUSTER_OPTIONS[0]}
+                              onChange={(event) => onSectionMetaChange(level, grade, index, "cluster", event.target.value)}
+                              style={{ ...selectStyle(), width: "100%", fontWeight: 600 }}
+                            >
+                              {SHS_CLUSTER_OPTIONS.map((cluster) => (
+                                <option key={cluster} value={cluster}>
+                                  {cluster}
+                                </option>
+                              ))}
+                            </select>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p style={{ margin: "12px 0 0", color: "#7a86a7", fontSize: 13, fontStyle: "italic" }}>
@@ -1173,6 +1194,48 @@ function shuffleArray(array) {
   return arr;
 }
 
+export function getAutomatedJhsClassification(index, totalCount) {
+  if (totalCount === 1) {
+    return "Regular";
+  }
+  if (totalCount === 2) {
+    return index === 0 ? "SPA" : "Regular";
+  }
+  if (totalCount === 3) {
+    if (index === 0) return "SPA";
+    if (index === 1) return "SPJ";
+    return "Regular";
+  }
+  // totalCount >= 4:
+  // Order: SPA, SPJ, SP-STEM, and the rest Regular
+  if (index === 0) return "SPA";
+  if (index === 1) return "SPJ";
+  if (index === 2) return "SP-STEM";
+  return "Regular";
+}
+
+export const SHS_AUTOMATED_PROGRAMS_ORDER = [
+  { track: "Academic", cluster: "STEM (Science, Tech, Eng, Math)" },
+  { track: "Academic", cluster: "Arts, Social Sciences & Humanities (HUMSS)" },
+  { track: "Academic", cluster: "Business & Entrepreneurship (ABM)" },
+  { track: "TechPro", cluster: "ICT (Information & Comm Tech)" },
+  { track: "TechPro", cluster: "Industrial Arts & Maritime" },
+  { track: "TechPro", cluster: "Family & Consumer Science" },
+  { track: "TechPro", cluster: "Agriculture & Fishery Arts" },
+  { track: "Academic", cluster: "General Academic / Electives" },
+];
+
+export function getAutomatedShsTrackCluster(index, totalCount) {
+  if (totalCount === 1) {
+    return { track: "Academic", cluster: "General Academic / Electives" };
+  }
+  const preset = SHS_AUTOMATED_PROGRAMS_ORDER[index % SHS_AUTOMATED_PROGRAMS_ORDER.length];
+  return {
+    track: preset.track,
+    cluster: preset.cluster,
+  };
+}
+
 function buildSections(
   level,
   grade,
@@ -1187,6 +1250,18 @@ function buildSections(
   const rawWords = schemeLibrary[theme] || schemeLibrary["Gems"] || (Object.values(schemeLibrary)[0] || []);
   const words = randomize ? shuffleArray(rawWords) : [...rawWords];
 
+  const allPreviousWereDefaultRegular =
+    previousSections.length > 0 &&
+    previousSections.every((s) => !s.classification || s.classification === "Regular");
+
+  const allPreviousShsWereDefault =
+    previousSections.length > 0 &&
+    previousSections.every(
+      (s) =>
+        (!s.track || s.track === "Academic") &&
+        (!s.cluster || s.cluster === "STEM (Science, Tech, Eng, Math)")
+    );
+
   return Array.from({ length: size }, (_, index) => {
     const previous = previousSections[index];
     const rawWord = words.length > 0 ? words[index % words.length] : `Section ${index + 1}`;
@@ -1200,18 +1275,22 @@ function buildSections(
     }
 
     if (level === "jhs") {
-      let classification = previous?.classification || "Regular";
+      let classification = previous?.classification;
       if (classification === "Special" || classification === "STE") classification = "SP-STEM";
+      if (!classification || allPreviousWereDefaultRegular) {
+        classification = getAutomatedJhsClassification(index, size);
+      }
       return {
         name,
         classification,
       };
     }
 
+    const autoShs = getAutomatedShsTrackCluster(index, size);
     return {
       name,
-      track: previous?.track || "Academic",
-      cluster: previous?.cluster || "STEM (Science, Tech, Eng, Math)",
+      track: !allPreviousShsWereDefault && previous?.track ? previous.track : autoShs.track,
+      cluster: !allPreviousShsWereDefault && previous?.cluster ? previous.cluster : autoShs.cluster,
     };
   });
 }

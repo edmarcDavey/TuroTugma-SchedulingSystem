@@ -31,10 +31,11 @@ const subjectsData = [
   // JHS Specialized / Program Subjects
   ['Technology and Livelihood Education (TLE)', 'TLE', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'Regular, SPA', ''],
   ['SPA Specialization', 'SPASPEC', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPA', ''],
-  ['ICT', 'ICT', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPJ, SP-STEM', ''],
+  ['ICT (SPJ)', 'ICT-SPJ', 'JHS', 'Specialized', '60', '4', 'Grades 7–10', '', 'SPJ', ''],
+  ['ICT (SP-STEM)', 'ICT-STEM', 'JHS', 'Specialized', '60', '3', 'Grades 7–10', '', 'SP-STEM', ''],
 
-  // JHS Enhanced STEM Subjects (Grade 7 SP-STEM Exclusively - 3 hrs/wk across 3 meetings × 60m)
-  ['Developmental Reading', 'DEVREAD', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
+  // JHS Enhanced STEM Subjects (Grade 7 SP-STEM Exclusively - DEVREAD is 1 hr/wk, ELEMALG & ENVSCI are 3 hrs/wk)
+  ['Developmental Reading', 'DEVREAD', 'JHS', 'Specialized', '60', '1', '7', '', 'SP-STEM', ''],
   ['Elementary Algebra', 'ELEMALG', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
   ['Environmental Science', 'ENVSCI', 'JHS', 'Specialized', '60', '3', '7', '', 'SP-STEM', ''],
 
@@ -137,20 +138,20 @@ const ancillaries = ["", "Grade Level Chairman", "ICT Coordinator", "School Regi
 
 let teacherCounter = 1;
 
-function generateProfile({ levelType, dept, degree, major, minor, subjects, grades }) {
-  const isMale = (teacherCounter % 2 === 1);
+function generateProfile({ levelType, dept, degree, major, minor, subjects, grades, customName, customSex, customEmail, customPosition }) {
+  const isMale = customSex ? (customSex === "Male") : (teacherCounter % 2 === 1);
   const firstName = isMale 
     ? firstNamesMale[teacherCounter % firstNamesMale.length]
     : firstNamesFemale[teacherCounter % firstNamesFemale.length];
   const lastName = lastNames[teacherCounter % lastNames.length];
   const middleInitial = String.fromCharCode(65 + (teacherCounter % 26));
 
-  const name = `${firstName} ${middleInitial}. ${lastName}`;
-  const sex = isMale ? "Male" : "Female";
+  const name = customName || `${firstName} ${middleInitial}. ${lastName}`;
+  const sex = customSex || (isMale ? "Male" : "Female");
   const empId = `EMP-2026-${String(teacherCounter).padStart(3, '0')}`;
-  const position = positions[teacherCounter % positions.length];
+  const position = customPosition || positions[teacherCounter % positions.length];
   const status = (teacherCounter % 8 === 0) ? "Probationary" : "Regular";
-  const email = `${firstName.toLowerCase()}.${lastName.toLowerCase().replace(/\s+/g, '')}${teacherCounter}@deped.gov.ph`;
+  const email = customEmail || `${firstName.toLowerCase()}.${lastName.toLowerCase().replace(/\s+/g, '')}${teacherCounter}@deped.gov.ph`;
   const contact = `0917${String(1000000 + (teacherCounter * 8765)).slice(-7)}`;
 
   const ancillary = ancillaries[teacherCounter % ancillaries.length];
@@ -183,21 +184,37 @@ const jhsDepts = [
   { dept: "English", count: 11, subjects: ["English", "Developmental Reading"] },
   { dept: "Filipino", count: 8, subjects: ["Filipino"] },
   { dept: "Araling Panlipunan", count: 8, subjects: ["Araling Panlipunan"] },
-  { dept: "MAPEH", count: 6, subjects: ["MAPEH", "SPA Specialization"] },
-  { dept: "TLE / ICT", count: 4, subjects: ["Technology and Livelihood Education (TLE)", "ICT"] },
+  {
+    dept: "MAPEH",
+    count: 6,
+    teachers: [
+      { name: "Cherry Mae Garing", sex: "Female", email: "cherry.garing@deped.gov.ph", position: "Teacher I", subjects: ["MAPEH", "SPA Specialization (Media Arts)", "SPA Specialization"] },
+      { name: "Alpha Mae Ambatali", sex: "Female", email: "alpha.ambatali@deped.gov.ph", position: "Teacher II", subjects: ["MAPEH", "SPA Specialization (Dance Arts)", "SPA Specialization"] },
+      { name: "May Bitla", sex: "Female", email: "may.bitla@deped.gov.ph", position: "Teacher III", subjects: ["MAPEH", "SPA Specialization (Instrumental Music)", "SPA Specialization"] },
+      { name: "Joshua Z. Reyes", sex: "Male", email: "joshua.reyes@deped.gov.ph", position: "Master Teacher I", subjects: ["MAPEH", "SPA Specialization (Visual Arts)", "SPA Specialization"] },
+      { name: "Gwendolyn A. Cruz", sex: "Female", email: "gwendolyn.cruz@deped.gov.ph", position: "Teacher II", subjects: ["MAPEH", "SPA Specialization"] },
+      { name: "Eduardo B. Bautista", sex: "Male", email: "eduardo.bautista@deped.gov.ph", position: "Master Teacher II", subjects: ["MAPEH", "SPA Specialization"] }
+    ]
+  },
+  { dept: "TLE / ICT", count: 4, subjects: ["Technology and Livelihood Education (TLE)", "ICT (SPJ)", "ICT (SP-STEM)", "ICT"] },
   { dept: "Values / Guidance", count: 4, subjects: ["Values Education", "HGP", "Aral Program"] }
 ];
 
 jhsDepts.forEach(d => {
   for (let i = 0; i < d.count; i++) {
+    const tConfig = d.teachers ? d.teachers[i] : null;
     generateProfile({
       levelType: "jhs_only",
       dept: d.dept,
       degree: "Bachelor of Secondary Education",
       major: d.dept,
       minor: "Education",
-      subjects: d.subjects,
-      grades: ["Grade 7", "Grade 8", "Grade 9", "Grade 10"]
+      subjects: tConfig ? tConfig.subjects : d.subjects,
+      grades: ["Grade 7", "Grade 8", "Grade 9", "Grade 10"],
+      customName: tConfig ? tConfig.name : undefined,
+      customSex: tConfig ? tConfig.sex : undefined,
+      customEmail: tConfig ? tConfig.email : undefined,
+      customPosition: tConfig ? tConfig.position : undefined,
     });
   }
 });

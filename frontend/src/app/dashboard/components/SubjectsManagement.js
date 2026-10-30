@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 
 const JHS_GRADES = [7, 8, 9, 10];
@@ -15,21 +15,62 @@ const JHS_PROGRAM_SCOPES = [
 ];
 
 const SHS_CLUSTERS = [
-  "STEM (Science, Tech, Eng, Math)",
-  "Business & Entrepreneurship (ABM)",
-  "Arts, Social Sciences & Humanities (HUMSS)",
-  "ICT (Information & Comm Tech)",
-  "Industrial Arts & Maritime",
-  "Agriculture & Fishery Arts",
-  "Family & Consumer Science",
+  "Arts, Social Sciences & Humanities",
+  "Business & Entrepreneurship",
+  "STEM",
   "Sports, Health & Wellness",
-  "General Academic / Electives",
+  "Field Experience / Research",
+  "TechPro: ICT Support & Programming",
+  "TechPro: Hospitality & Tourism",
+  "TechPro: Industrial Technologies",
+  "TechPro: Agri-Fishery & Food",
+  "TechPro: Creative Arts & Design",
+  "TechPro: Construction & Building",
+  "ABM",
+  "HUMSS",
+  "TVL",
+  "GAS",
 ];
 
 const JHS_SUBJECT_TYPES = ["Core", "Specialized", "Enrichment"];
 const SHS_SUBJECT_TYPES = ["Core", "Applied", "Specialized", "Enrichment"];
-const SHS_SEMESTERS = ["First Semester", "Last Semester"];
+const SHS_SEMESTERS = [
+  "All 3 Terms",
+  "Term 1",
+  "Term 2",
+  "Term 3",
+  "First Semester",
+  "Last Semester",
+];
 const SUBJECTS_STORAGE_KEY = "turotugma_subjects";
+const FACULTY_STORAGE_KEY = "turotugma_faculty";
+
+function getInitialFaculty() {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(FACULTY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function getStreamObj(streamItem, idx) {
+  if (typeof streamItem === "object" && streamItem !== null) {
+    return {
+      name: streamItem.name || "",
+      requiredMajor: streamItem.requiredMajor || "",
+      defaultTeacherId: streamItem.defaultTeacherId || "",
+    };
+  }
+  return {
+    name: streamItem ? String(streamItem) : "",
+    requiredMajor: "",
+    defaultTeacherId: "",
+  };
+}
 
 function formatSubjectPeriodSlot(slot) {
   if (!slot || slot === "any") return null;
@@ -67,13 +108,76 @@ const EMPTY_FORM = {
   programScope: "Universal",
   strand: "",
   semester: "",
+  curriculumVersion: "strengthened_2026",
+  totalHours: "160",
+  teachingMode: "single",
+  requiredTeachers: "1",
+  breakoutStreams: [],
 };
 
 export default function SubjectsManagement() {
   const offeredLevels = getOfferedLevels();
   const [subjects, setSubjects] = useState(() => getInitialSubjects());
+  const [facultyMembers, setFacultyMembers] = useState(() => getInitialFaculty());
   const [formState, setFormState] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
+
+  const availableMajors = useMemo(() => {
+    const standardMajors = [
+      "Arts / Fine Arts",
+      "Dance",
+      "Music",
+      "Theater Arts",
+      "Media Arts",
+      "Economics",
+      "History",
+      "Araling Panlipunan",
+      "Social Studies",
+      "Mathematics",
+      "Science",
+      "Biology",
+      "Chemistry",
+      "Physics",
+      "English",
+      "Filipino",
+      "Journalism",
+      "TLE - Home Economics",
+      "TLE - ICT Support & Programming",
+      "TLE - Industrial Arts",
+      "TLE - Agri-Fishery",
+      "Values Education / ESP",
+    ];
+    const fromFaculty = new Set();
+    facultyMembers.forEach((t) => {
+      if (t.major && typeof t.major === "string" && t.major.trim()) {
+        fromFaculty.add(t.major.trim());
+      }
+      if (t.specialization && typeof t.specialization === "string" && t.specialization.trim()) {
+        fromFaculty.add(t.specialization.trim());
+      }
+    });
+    const combined = [...standardMajors];
+    fromFaculty.forEach((m) => {
+      if (!combined.some((s) => s.toLowerCase() === m.toLowerCase())) {
+        combined.push(m);
+      }
+    });
+    return combined.sort((a, b) => a.localeCompare(b));
+  }, [facultyMembers]);
+
+  useEffect(() => {
+    const handleFacultySync = () => {
+      setFacultyMembers(getInitialFaculty());
+    };
+    window.addEventListener("storage", handleFacultySync);
+    window.addEventListener("turotugma_faculty_updated", handleFacultySync);
+    window.addEventListener("turotugma:faculty-updated", handleFacultySync);
+    return () => {
+      window.removeEventListener("storage", handleFacultySync);
+      window.removeEventListener("turotugma_faculty_updated", handleFacultySync);
+      window.removeEventListener("turotugma:faculty-updated", handleFacultySync);
+    };
+  }, []);
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("success");
   const [noticeVisible, setNoticeVisible] = useState(false);
@@ -201,6 +305,14 @@ export default function SubjectsManagement() {
 
   const handleEditSubject = (subject) => {
     setEditingId(subject.id);
+    const reqTeachers = subject.requiredTeachers != null ? Number(subject.requiredTeachers) : (subject.subjectCode === "SPASPEC" ? 3 : 1);
+    const rawStreams = Array.isArray(subject.breakoutStreams)
+      ? subject.breakoutStreams
+      : typeof subject.breakoutStreams === "string" && subject.breakoutStreams
+      ? subject.breakoutStreams.split(",").map((s) => s.trim()).filter(Boolean)
+      : (subject.subjectCode === "SPASPEC" ? ["Media Arts", "Dance Arts", "Instrumental Music"] : []);
+    const streams = Array.from({ length: reqTeachers }, (_, idx) => getStreamObj(rawStreams[idx], idx));
+
     setFormState({
       subjectName: subject.subjectName,
       subjectCode: subject.subjectCode,
@@ -212,6 +324,11 @@ export default function SubjectsManagement() {
       programScope: subject.programScope || "Universal",
       strand: subject.strand || "",
       semester: subject.semester || "",
+      curriculumVersion: subject.curriculumVersion || "strengthened_2026",
+      totalHours: subject.totalHours != null ? String(subject.totalHours) : (subject.schoolLevel === "shs" ? "160" : ""),
+      teachingMode: subject.teachingMode || (subject.subjectCode === "SPASPEC" ? "breakout" : "single"),
+      requiredTeachers: String(reqTeachers),
+      breakoutStreams: streams,
     });
 
     window.requestAnimationFrame(() => {
@@ -368,51 +485,54 @@ export default function SubjectsManagement() {
       }
 
       if (!text || !text.includes("Subject Name")) {
-        text = `Subject Name,Subject Code,School Level,Subject Type,Daily Minutes,Classes per Week,Grade Level,Semester,Program Scope,Strand
-English,ENG,JHS,Core,60,4,Grades 7–10,,Universal,
-Mathematics,MATH,JHS,Core,60,4,Grades 7–10,,Universal,
-Science,SCI,JHS,Core,60,4,Grades 7–10,,Universal,
-Filipino,FIL,JHS,Core,60,4,Grades 7–10,,Universal,
-Araling Panlipunan,AP,JHS,Core,60,4,Grades 7–10,,Universal,
-Values Education,VE,JHS,Core,60,4,Grades 7–10,,Universal,
-MAPEH,MAPEH,JHS,Core,60,4,Grades 7–10,,Universal,
-HGP,HGP,JHS,Enrichment,60,1,Grades 7–10,,Universal,
-Aral Program,ARAL,JHS,Enrichment,60,1,Grades 7–10,,Regular,
-Technology and Livelihood Education (TLE),TLE,JHS,Specialized,60,4,Grades 7–10,,"Regular, SPA",
-SPA Specialization,SPASPEC,JHS,Specialized,60,4,Grades 7–10,,SPA,
-ICT,ICT,JHS,Specialized,60,4,Grades 7–10,,"SPJ, SP-STEM",
-Developmental Reading,DEVREAD,JHS,Specialized,60,3,7,,SP-STEM,
-Elementary Algebra,ELEMALG,JHS,Specialized,60,3,7,,SP-STEM,
-Environmental Science,ENVSCI,JHS,Specialized,60,3,7,,SP-STEM,
-Oral Communication in Context,ORALCOM,SHS,Core,50,4,11,First Semester,,
-General Mathematics,GENMATH,SHS,Core,50,4,11,First Semester,,
-Earth and Life Science,EARTHSCI,SHS,Core,50,4,11,First Semester,,
-Komunikasyon at Pananaliksik,KOMPAN,SHS,Core,50,4,11,First Semester,,
-Physical Education and Health 1,PEH1,SHS,Core,50,2,11,First Semester,,
-21st Century Literature,LIT21,SHS,Core,50,4,11,Last Semester,,
-Statistics and Probability,STATPROB,SHS,Core,50,4,11,Last Semester,,
-Physical Science,PHYSCI,SHS,Core,50,4,11,Last Semester,,
-Personal Development,PERDEV,SHS,Core,50,4,11,Last Semester,,
-Physical Education and Health 2,PEH2,SHS,Core,50,2,11,Last Semester,,
-"Understanding Culture, Society, and Politics",UCSP,SHS,Core,50,4,12,First Semester,,
-Media and Information Literacy,MIL,SHS,Core,50,4,12,First Semester,,
-Empowerment Technologies,EMPTECH,SHS,Applied,50,4,11,First Semester,,
-English for Academic and Professional Purposes,EAPP,SHS,Applied,50,4,11,Last Semester,,
-Practical Research 1,PRACRES1,SHS,Applied,50,4,11,Last Semester,,
-Practical Research 2,PRACRES2,SHS,Applied,50,4,12,First Semester,,
-Inquiries, Investigations, and Immersion,3I,SHS,Applied,50,4,12,Last Semester,,
-General Physics 1,GENPHYS1,SHS,Specialized,50,4,12,First Semester,,STEM
-General Chemistry 1,GENCHEM1,SHS,Specialized,50,4,12,First Semester,,STEM
-Pre-Calculus,PRECALC,SHS,Specialized,50,4,11,First Semester,,STEM
-Basic Calculus,BASICCALC,SHS,Specialized,50,4,11,Last Semester,,STEM
-Business Math,BUSMATH,SHS,Specialized,50,4,11,First Semester,,ABM
-Organization and Management,ORGMGT,SHS,Specialized,50,4,11,First Semester,,ABM
-Fundamentals of ABM 1,FABM1,SHS,Specialized,50,4,11,Last Semester,,ABM
-Disciplines and Ideas in the Social Sciences,DISS,SHS,Specialized,50,4,11,First Semester,,HUMSS
-Creative Writing,CREATIVEWR,SHS,Specialized,50,4,11,First Semester,,HUMSS
-World Religions and Belief Systems,WORLDREL,SHS,Specialized,50,4,11,Last Semester,,HUMSS
-Computer Programming 1,COMPPROG1,SHS,Specialized,50,4,11,First Semester,,TVL
-Computer Programming 2,COMPPROG2,SHS,Specialized,50,4,11,Last Semester,,TVL`;
+        text = `Subject Name,Subject Code,School Level,Subject Type,Daily Minutes,Classes per Week,Grade Level,Semester,Program Scope,Strand,Total Hours
+English,ENG,JHS,Core,60,4,Grades 7–10,,Universal,,240
+Mathematics,MATH,JHS,Core,60,4,Grades 7–10,,Universal,,240
+Science,SCI,JHS,Core,60,4,Grades 7–10,,Universal,,240
+Filipino,FIL,JHS,Core,60,4,Grades 7–10,,Universal,,240
+Araling Panlipunan,AP,JHS,Core,60,4,Grades 7–10,,Universal,,240
+Values Education,VE,JHS,Core,60,4,Grades 7–10,,Universal,,240
+MAPEH,MAPEH,JHS,Core,60,4,Grades 7–10,,Universal,,240
+HGP,HGP,JHS,Enrichment,60,1,Grades 7–10,,Universal,,60
+Aral Program,ARAL,JHS,Enrichment,60,1,Grades 7–10,,Regular,,60
+Technology and Livelihood Education (TLE),TLE,JHS,Specialized,60,4,Grades 7–10,,"Regular, SPA",,240
+SPA Specialization,SPASPEC,JHS,Specialized,60,4,Grades 7–10,,SPA,,240
+ICT (SPJ),ICT-SPJ,JHS,Specialized,60,4,Grades 7–10,,SPJ,,240
+ICT (SP-STEM),ICT-STEM,JHS,Specialized,60,3,Grades 7–10,,SP-STEM,,180
+Developmental Reading,DEVREAD,JHS,Specialized,60,1,7,,SP-STEM,,60
+Elementary Algebra,ELEMALG,JHS,Specialized,60,3,7,,SP-STEM,,180
+Environmental Science,ENVSCI,JHS,Specialized,60,3,7,,SP-STEM,,180
+Effective Communication and Mabisang Komunikasyon,COMM11,SHS,Core,50,4,11,All 3 Terms,,Universal,160
+General Mathematics,GENMATH11,SHS,Core,50,4,11,All 3 Terms,,Universal,160
+General Science,GENSCI11,SHS,Core,50,4,11,All 3 Terms,,Universal,160
+Life and Career Skills,LCS11,SHS,Core,50,4,11,All 3 Terms,,Universal,160
+Pag-aaral ng Kasaysayan at Lipunang Pilipino,PKLP11,SHS,Core,50,4,11,All 3 Terms,,Universal,160
+Biology 1,BIO1,SHS,Specialized,50,4,11,Term 1,,STEM,80
+Basic Accounting,ACC1,SHS,Specialized,50,4,11,Term 1,,Business & Entrepreneurship,80
+Creative Writing and Composition,CWRITE1,SHS,Specialized,50,4,11,Term 1,,Arts, Social Sciences & Humanities,80
+Pre-Calculus,PRECALC,SHS,Specialized,50,4,11,Term 2,,STEM,80
+Business Finance,BUSFIN,SHS,Specialized,50,4,11,Term 2,,Business & Entrepreneurship,80
+Philippine Social Issues,SOCISS,SHS,Specialized,50,4,11,Term 2,,Arts, Social Sciences & Humanities,80
+Environmental Science Elective,ENVSCI-SHS,SHS,Specialized,50,4,11,Term 3,,STEM,80
+Principles of Marketing,MKTG,SHS,Specialized,50,4,11,Term 3,,Business & Entrepreneurship,80
+Community Engagement,COMMENG,SHS,Specialized,50,4,11,Term 3,,Arts, Social Sciences & Humanities,80
+Computer Systems and Programming,CSP11,SHS,Specialized,60,4,11,All 3 Terms,,TechPro: ICT Support & Programming,320
+Food and Beverage Operations,FBO11,SHS,Specialized,60,4,11,All 3 Terms,,TechPro: Hospitality & Tourism,320
+"Understanding Culture, Society, and Politics",UCSP,SHS,Core,50,4,12,First Semester,,,80
+Media and Information Literacy,MIL,SHS,Core,50,4,12,First Semester,,,80
+Practical Research 2,PRACRES2,SHS,Applied,50,4,12,First Semester,,,80
+Entrepreneurship,ENTREP,SHS,Applied,50,4,12,Last Semester,,,80
+Inquiries Investigations and Immersion,3I,SHS,Applied,50,4,12,Last Semester,,,80
+General Physics 1,GENPHYS1,SHS,Specialized,50,4,12,First Semester,,STEM,80
+General Physics 2,GENPHYS2,SHS,Specialized,50,4,12,Last Semester,,STEM,80
+General Chemistry 1,GENCHEM1,SHS,Specialized,50,4,12,First Semester,,STEM,80
+General Chemistry 2,GENCHEM2,SHS,Specialized,50,4,12,Last Semester,,STEM,80
+Disciplines and Ideas in Applied Social Sciences,DIASS,SHS,Specialized,50,4,12,First Semester,,HUMSS,80
+Philippine Politics and Governance,PPG,SHS,Specialized,50,4,12,Last Semester,,HUMSS,80
+Fundamentals of ABM 1,FABM1,SHS,Specialized,50,4,12,First Semester,,ABM,80
+Fundamentals of ABM 2,FABM2,SHS,Specialized,50,4,12,Last Semester,,ABM,80
+Computer Systems Servicing 1,CSS1,SHS,Specialized,50,4,12,First Semester,,TVL,160
+Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160`;
       }
 
       const workbook = XLSX.read(text, { type: "string" });
@@ -503,17 +623,45 @@ Computer Programming 2,COMPPROG2,SHS,Specialized,50,4,11,Last Semester,,TVL`;
         </div>
       </div>
 
-      <div ref={formCardRef} style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>{editingId ? "Edit Subject" : "Add Subject"}</h2>
-        <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13 }}>
-          Configure subject details, weekly workload, and target program / cluster scope.
-        </p>
+      <div
+        ref={formCardRef}
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e3e7ef",
+          borderRadius: 14,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div>
+            <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18, fontWeight: 700 }}>
+              {editingId ? "Edit Subject" : "Add Subject"}
+            </h2>
+            <p style={{ margin: "4px 0 0", color: "#5d698d", fontSize: 13 }}>
+              Configure subject details, weekly workload, and faculty allocation.
+            </p>
+          </div>
+          {editingId ? (
+            <button type="button" onClick={handleCancelEdit} style={secondaryActionStyle()}>
+              Cancel Edit
+            </button>
+          ) : null}
+        </div>
 
-        <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
+        {/* Line 1: Subject Name, Code, School Level, Grade Level, Subject Type in ONE LINE */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(180px, 2fr) minmax(100px, 1fr) minmax(130px, 1.2fr) minmax(120px, 1.1fr) minmax(120px, 1.1fr)",
+            gap: 10,
+            marginBottom: 10,
+          }}
+        >
           <Field label="Subject Name">
             <input
               type="text"
-              placeholder="e.g., Advanced Biology"
+              placeholder="e.g., General Mathematics"
               value={formState.subjectName}
               onChange={(event) => handleFormField("subjectName", event.target.value)}
               style={inputStyle()}
@@ -523,7 +671,7 @@ Computer Programming 2,COMPPROG2,SHS,Specialized,50,4,11,Last Semester,,TVL`;
           <Field label="Subject Code">
             <input
               type="text"
-              placeholder="e.g., BIO101"
+              placeholder="e.g., GENMATH"
               value={formState.subjectCode}
               onChange={(event) => handleFormField("subjectCode", event.target.value)}
               style={inputStyle()}
@@ -568,32 +716,45 @@ Computer Programming 2,COMPPROG2,SHS,Specialized,50,4,11,Last Semester,,TVL`;
               ))}
             </select>
           </Field>
+        </div>
 
-          <Field label="Daily Duration (minutes)">
-            <input
-              type="number"
-              min={15}
-              max={120}
-              step="1"
-              value={formState.dailyMinutes}
-              onChange={(event) => handleFormField("dailyMinutes", event.target.value)}
-              style={inputStyle()}
-            />
-          </Field>
+        {/* Line 2: Daily Duration, Classes per Week, Program Target Scope (JHS) / SHS Term & Cluster, Teaching Mode & Number of Teachers IN ONE LINE */}
+        {formState.schoolLevel === "jhs" ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                formState.teachingMode === "breakout"
+                  ? "minmax(90px, 0.9fr) minmax(90px, 0.9fr) minmax(150px, 1.6fr) minmax(150px, 1.4fr) minmax(110px, 1fr)"
+                  : "minmax(100px, 1fr) minmax(100px, 1fr) minmax(170px, 1.8fr) minmax(160px, 1.4fr)",
+              gap: 10,
+              marginBottom: formState.teachingMode === "breakout" ? 10 : 14,
+            }}
+          >
+            <Field label="Daily Duration (minutes)">
+              <input
+                type="number"
+                min={15}
+                max={120}
+                step="1"
+                value={formState.dailyMinutes}
+                onChange={(event) => handleFormField("dailyMinutes", event.target.value)}
+                style={inputStyle()}
+              />
+            </Field>
 
-          <Field label="Classes per Week">
-            <input
-              type="number"
-              min={1}
-              max={8}
-              step="1"
-              value={formState.classesPerWeek}
-              onChange={(event) => handleFormField("classesPerWeek", event.target.value)}
-              style={inputStyle()}
-            />
-          </Field>
+            <Field label="Classes per Week">
+              <input
+                type="number"
+                min={1}
+                max={8}
+                step="1"
+                value={formState.classesPerWeek}
+                onChange={(event) => handleFormField("classesPerWeek", event.target.value)}
+                style={inputStyle()}
+              />
+            </Field>
 
-          {formState.schoolLevel === "jhs" ? (
             <Field label="Program Target Scope (JHS)">
               <select
                 value={formState.programScope || "Universal"}
@@ -607,43 +768,360 @@ Computer Programming 2,COMPPROG2,SHS,Specialized,50,4,11,Last Semester,,TVL`;
                 ))}
               </select>
             </Field>
-          ) : (
-            <>
-              <Field label="Semester (SHS)">
+
+            <Field label="Teaching Mode">
+              <select
+                value={formState.teachingMode || "single"}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === "breakout") {
+                    const count = Number(formState.requiredTeachers) >= 2 ? Number(formState.requiredTeachers) : 2;
+                    const curStreams = Array.isArray(formState.breakoutStreams)
+                      ? formState.breakoutStreams
+                      : typeof formState.breakoutStreams === "string" && formState.breakoutStreams
+                      ? formState.breakoutStreams.split(",").map((s) => s.trim())
+                      : [];
+                    const nextStreams = Array.from({ length: count }, (_, idx) => getStreamObj(curStreams[idx], idx));
+                    setFormState((prev) => ({
+                      ...prev,
+                      teachingMode: "breakout",
+                      requiredTeachers: String(count),
+                      breakoutStreams: nextStreams,
+                    }));
+                  } else {
+                    setFormState((prev) => ({
+                      ...prev,
+                      teachingMode: "single",
+                      requiredTeachers: "1",
+                      breakoutStreams: [],
+                    }));
+                  }
+                }}
+                style={selectStyle()}
+              >
+                <option value="single">Single Teacher (Default)</option>
+                <option value="breakout">Multi-Teacher Breakout</option>
+              </select>
+            </Field>
+
+            {formState.teachingMode === "breakout" ? (
+              <Field label="Number of Teachers">
                 <select
-                  value={formState.semester}
-                  onChange={(event) => handleFormField("semester", event.target.value)}
+                  value={formState.requiredTeachers || "2"}
+                  onChange={(event) => {
+                    const newCount = Math.max(2, Math.min(6, Number(event.target.value) || 2));
+                    setFormState((prev) => {
+                      const cur = Array.isArray(prev.breakoutStreams)
+                        ? prev.breakoutStreams
+                        : typeof prev.breakoutStreams === "string" && prev.breakoutStreams
+                        ? prev.breakoutStreams.split(",").map((s) => s.trim())
+                        : [];
+                      const nextStreams = Array.from({ length: newCount }, (_, idx) => getStreamObj(cur[idx], idx));
+                      return {
+                        ...prev,
+                        requiredTeachers: String(newCount),
+                        breakoutStreams: nextStreams,
+                      };
+                    });
+                  }}
                   style={selectStyle()}
                 >
-                  <option value="">Select Semester</option>
-                  {SHS_SEMESTERS.map((semester) => (
-                    <option key={semester} value={semester}>
-                      {semester}
-                    </option>
-                  ))}
+                  <option value="2">2 Teachers</option>
+                  <option value="3">3 Teachers</option>
+                  <option value="4">4 Teachers</option>
+                  <option value="5">5 Teachers</option>
+                  <option value="6">6 Teachers</option>
                 </select>
               </Field>
+            ) : null}
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                formState.teachingMode === "breakout"
+                  ? "minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(130px, 1.2fr) minmax(90px, 0.9fr) minmax(150px, 1.5fr) minmax(130px, 1.1fr) minmax(100px, 0.9fr)"
+                  : "minmax(90px, 0.9fr) minmax(90px, 0.9fr) minmax(140px, 1.3fr) minmax(100px, 1fr) minmax(160px, 1.6fr) minmax(140px, 1.2fr)",
+              gap: 10,
+              marginBottom: formState.teachingMode === "breakout" ? 10 : 14,
+            }}
+          >
+            <Field label="Daily Duration (minutes)">
+              <input
+                type="number"
+                min={15}
+                max={120}
+                step="1"
+                value={formState.dailyMinutes}
+                onChange={(event) => handleFormField("dailyMinutes", event.target.value)}
+                style={inputStyle()}
+              />
+            </Field>
 
-              <Field label="Elective Cluster Scope (SHS)">
+            <Field label="Classes per Week">
+              <input
+                type="number"
+                min={1}
+                max={8}
+                step="1"
+                value={formState.classesPerWeek}
+                onChange={(event) => handleFormField("classesPerWeek", event.target.value)}
+                style={inputStyle()}
+              />
+            </Field>
+
+            <Field label="Delivery Period / Term (SHS)">
+              <select
+                value={formState.semester}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  let defaultHours = formState.totalHours;
+                  if (val === "All 3 Terms") {
+                    defaultHours = formState.subjectType === "Specialized" ? "320" : "160";
+                  } else if (val === "Term 1" || val === "Term 2" || val === "Term 3") {
+                    defaultHours = "80";
+                  }
+                  setFormState((prev) => ({ ...prev, semester: val, totalHours: defaultHours }));
+                }}
+                style={selectStyle()}
+              >
+                <option value="">Select Term / Semester</option>
+                <optgroup label="Strengthened SHS (DO 017 Trimester)">
+                  <option value="All 3 Terms">All 3 Terms (Core 160h / TechPro 320h)</option>
+                  <option value="Term 1">Term 1 Only (Elective 80h/160h)</option>
+                  <option value="Term 2">Term 2 Only (Elective 80h/160h)</option>
+                  <option value="Term 3">Term 3 Only (Elective 80h/160h)</option>
+                </optgroup>
+                <optgroup label="Legacy SHS (2016 Semester)">
+                  <option value="First Semester">First Semester (Legacy)</option>
+                  <option value="Last Semester">Second / Last Semester (Legacy)</option>
+                </optgroup>
+              </select>
+            </Field>
+
+            <Field label="Required Hours (SHS)">
+              <input
+                type="number"
+                min="40"
+                max="640"
+                step="10"
+                placeholder="e.g., 160"
+                value={formState.totalHours || ""}
+                onChange={(event) => handleFormField("totalHours", event.target.value)}
+                style={inputStyle()}
+              />
+            </Field>
+
+            <Field label="Pathway Cluster / Strand">
+              <select
+                value={formState.strand}
+                onChange={(event) => handleFormField("strand", event.target.value)}
+                style={selectStyle()}
+                disabled={formState.subjectType === "Core"}
+              >
+                <option value="">{formState.subjectType === "Core" ? "Universal to All Learners (Core)" : "Select Target Cluster / Area"}</option>
+                <optgroup label="Strengthened SHS: Academic Clusters">
+                  <option value="Arts, Social Sciences & Humanities">Arts, Social Sciences & Humanities</option>
+                  <option value="Business & Entrepreneurship">Business & Entrepreneurship</option>
+                  <option value="STEM">Science, Technology, Engineering & Math (STEM)</option>
+                  <option value="Sports, Health & Wellness">Sports, Health & Wellness</option>
+                  <option value="Field Experience / Research">Field Experience / Research</option>
+                </optgroup>
+                <optgroup label="Strengthened SHS: TechPro Areas">
+                  <option value="TechPro: ICT Support & Programming">ICT Support & Computer Programming</option>
+                  <option value="TechPro: Hospitality & Tourism">Hospitality and Tourism</option>
+                  <option value="TechPro: Industrial Technologies">Industrial Technologies</option>
+                  <option value="TechPro: Agri-Fishery & Food">Agri-Fishery & Food Innovation</option>
+                  <option value="TechPro: Creative Arts & Design">Creative Arts & Design Technology</option>
+                  <option value="TechPro: Construction & Building">Construction & Building Technology</option>
+                </optgroup>
+                <optgroup label="Legacy SHS Strands (Grade 12)">
+                  <option value="STEM">Legacy STEM</option>
+                  <option value="ABM">Legacy ABM</option>
+                  <option value="HUMSS">Legacy HUMSS</option>
+                  <option value="TVL">Legacy TVL</option>
+                  <option value="GAS">Legacy GAS</option>
+                </optgroup>
+              </select>
+            </Field>
+
+            <Field label="Teaching Mode">
+              <select
+                value={formState.teachingMode || "single"}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === "breakout") {
+                    const count = Number(formState.requiredTeachers) >= 2 ? Number(formState.requiredTeachers) : 2;
+                    const curStreams = Array.isArray(formState.breakoutStreams)
+                      ? formState.breakoutStreams
+                      : typeof formState.breakoutStreams === "string" && formState.breakoutStreams
+                      ? formState.breakoutStreams.split(",").map((s) => s.trim())
+                      : [];
+                    const nextStreams = Array.from({ length: count }, (_, idx) => getStreamObj(curStreams[idx], idx));
+                    setFormState((prev) => ({
+                      ...prev,
+                      teachingMode: "breakout",
+                      requiredTeachers: String(count),
+                      breakoutStreams: nextStreams,
+                    }));
+                  } else {
+                    setFormState((prev) => ({
+                      ...prev,
+                      teachingMode: "single",
+                      requiredTeachers: "1",
+                      breakoutStreams: [],
+                    }));
+                  }
+                }}
+                style={selectStyle()}
+              >
+                <option value="single">Single Teacher (Default)</option>
+                <option value="breakout">Multi-Teacher Breakout</option>
+              </select>
+            </Field>
+
+            {formState.teachingMode === "breakout" ? (
+              <Field label="Number of Teachers">
                 <select
-                  value={formState.strand}
-                  onChange={(event) => handleFormField("strand", event.target.value)}
+                  value={formState.requiredTeachers || "2"}
+                  onChange={(event) => {
+                    const newCount = Math.max(2, Math.min(6, Number(event.target.value) || 2));
+                    setFormState((prev) => {
+                      const cur = Array.isArray(prev.breakoutStreams)
+                        ? prev.breakoutStreams
+                        : typeof prev.breakoutStreams === "string" && prev.breakoutStreams
+                        ? prev.breakoutStreams.split(",").map((s) => s.trim())
+                        : [];
+                      const nextStreams = Array.from({ length: newCount }, (_, idx) => getStreamObj(cur[idx], idx));
+                      return {
+                        ...prev,
+                        requiredTeachers: String(newCount),
+                        breakoutStreams: nextStreams,
+                      };
+                    });
+                  }}
                   style={selectStyle()}
-                  disabled={formState.subjectType === "Core"}
                 >
-                  <option value="">{formState.subjectType === "Core" ? "All Clusters (Core)" : "Select Target Cluster"}</option>
-                  {SHS_CLUSTERS.map((cluster) => (
-                    <option key={cluster} value={cluster}>
-                      {cluster}
-                    </option>
-                  ))}
+                  <option value="2">2 Teachers</option>
+                  <option value="3">3 Teachers</option>
+                  <option value="4">4 Teachers</option>
+                  <option value="5">5 Teachers</option>
+                  <option value="6">6 Teachers</option>
                 </select>
               </Field>
-            </>
-          )}
-        </div>
+            ) : null}
+          </div>
+        )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+        {/* Individual Stream / Specialization Inputs & Qualification/Teacher Selector */}
+        {formState.teachingMode === "breakout" ? (
+          <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
+            {Array.from({ length: Number(formState.requiredTeachers) || 2 }).map((_, idx) => {
+              const streamObj = getStreamObj(formState.breakoutStreams?.[idx], idx);
+
+              let currentSelectValue = "auto";
+              if (streamObj.defaultTeacherId) {
+                currentSelectValue = streamObj.defaultTeacherId;
+              } else if (streamObj.requiredMajor) {
+                currentSelectValue = `major:${streamObj.requiredMajor}`;
+              }
+
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "minmax(180px, 1.2fr) minmax(240px, 1.8fr)",
+                    gap: 10,
+                  }}
+                >
+                  <Field label={`Stream / Specialization ${idx + 1}`}>
+                    <input
+                      type="text"
+                      placeholder={`e.g., ${idx === 0 ? "Visual Arts" : idx === 1 ? "Dance Arts" : `Stream ${idx + 1}`}`}
+                      value={streamObj.name}
+                      onChange={(event) => {
+                        const val = event.target.value;
+                        setFormState((prev) => {
+                          const count = Number(prev.requiredTeachers) || 2;
+                          const cur = Array.isArray(prev.breakoutStreams) ? [...prev.breakoutStreams] : [];
+                          while (cur.length < count) {
+                            cur.push({ name: "", requiredMajor: "", defaultTeacherId: "" });
+                          }
+                          const curObj = getStreamObj(cur[idx], idx);
+                          cur[idx] = { ...curObj, name: val };
+                          return { ...prev, breakoutStreams: cur };
+                        });
+                      }}
+                      style={inputStyle()}
+                    />
+                  </Field>
+
+                  <Field label={`Stream ${idx + 1} Qualification / Teacher`}>
+                    <select
+                      value={currentSelectValue}
+                      onChange={(event) => {
+                        const val = event.target.value;
+                        setFormState((prev) => {
+                          const count = Number(prev.requiredTeachers) || 2;
+                          const cur = Array.isArray(prev.breakoutStreams) ? [...prev.breakoutStreams] : [];
+                          while (cur.length < count) {
+                            cur.push({ name: "", requiredMajor: "", defaultTeacherId: "" });
+                          }
+                          const curObj = getStreamObj(cur[idx], idx);
+                          if (val.startsWith("major:")) {
+                            cur[idx] = {
+                              ...curObj,
+                              requiredMajor: val.replace("major:", ""),
+                              defaultTeacherId: "",
+                            };
+                          } else if (val === "auto" || !val) {
+                            cur[idx] = {
+                              ...curObj,
+                              requiredMajor: "",
+                              defaultTeacherId: "",
+                            };
+                          } else {
+                            cur[idx] = {
+                              ...curObj,
+                              requiredMajor: "",
+                              defaultTeacherId: val,
+                            };
+                          }
+                          return { ...prev, breakoutStreams: cur };
+                        });
+                      }}
+                      style={selectStyle()}
+                    >
+                      <optgroup label="Auto-Match by Major (Any Free Specialist)">
+                        <option value="auto">
+                          Any Teacher with {streamObj.name ? `"${streamObj.name}"` : "Stream"} Major (Auto)
+                        </option>
+                        {availableMajors.map((major) => (
+                          <option key={major} value={`major:${major}`}>
+                            Any Teacher with Major: {major}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Lock Specific Teacher (Optional Override)">
+                        {facultyMembers
+                          .filter((t) => t.active !== false)
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name} {t.major ? `(${t.major})` : t.department ? `(${t.department})` : ""}
+                            </option>
+                          ))}
+                      </optgroup>
+                    </select>
+                  </Field>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           {editingId ? (
             <button type="button" onClick={handleCancelEdit} style={secondaryActionStyle()}>
               Cancel
@@ -885,6 +1363,11 @@ function SubjectRow({ subject, isEditing, onEdit, onDelete }) {
               {formatSubjectPeriodSlot(subject.preferredPeriodSlot)}
             </span>
           ) : null}
+          {subject.teachingMode === "breakout" || Number(subject.requiredTeachers) > 1 ? (
+            <span style={{ fontSize: 10, fontWeight: 700, background: "#f3e8ff", color: "#6b21a8", border: "1px solid #d8b4fe", padding: "1px 6px", borderRadius: 4 }}>
+              Breakout ({subject.requiredTeachers || 2} Teachers)
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -895,7 +1378,11 @@ function SubjectRow({ subject, isEditing, onEdit, onDelete }) {
 
       {renderScopeBadge(subject)}
 
-      {isShs ? <span style={pillStyle()}>{subject.semester || "Semester N/A"}</span> : null}
+      {isShs ? (
+        <span style={pillStyle()}>
+          {subject.semester || "All 3 Terms"}{subject.totalHours ? ` (${subject.totalHours}h)` : ""}
+        </span>
+      ) : null}
 
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
         <button type="button" onClick={() => onEdit(subject)} style={smallActionStyle()}>
@@ -909,10 +1396,13 @@ function SubjectRow({ subject, isEditing, onEdit, onDelete }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, style, hint }) {
   return (
-    <label style={{ display: "grid", gap: 6 }}>
-      <span style={{ margin: 0, color: "#5f6b90", fontSize: 12 }}>{label}</span>
+    <label style={{ display: "grid", gap: 6, ...style }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ margin: 0, color: "#475569", fontSize: 12, fontWeight: 600 }}>{label}</span>
+        {hint ? <span style={{ fontSize: 11, color: "#94a3b8" }}>{hint}</span> : null}
+      </div>
       {children}
     </label>
   );
@@ -1054,7 +1544,7 @@ function validateSubjectForm(formState) {
   }
 
   if (formState.schoolLevel === "shs" && !formState.semester) {
-    return "Semester is required for Senior High School subjects.";
+    return "Term / Delivery period is required for Senior High School subjects.";
   }
 
   return null;
@@ -1079,6 +1569,33 @@ function normalizeSubject(formState, existingId = null) {
     programScope: formState.schoolLevel === "jhs" ? (formState.programScope || "Universal") : "Universal",
     semester: formState.schoolLevel === "shs" ? formState.semester : "",
     strand: formState.schoolLevel === "shs" && formState.subjectType !== "Core" ? formState.strand : "",
+    curriculumVersion: formState.schoolLevel === "shs" ? (formState.curriculumVersion || "strengthened_2026") : "matatag",
+    totalHours: formState.schoolLevel === "shs" ? (Number.parseInt(formState.totalHours, 10) || 160) : null,
+    completionPeriod: formState.schoolLevel === "shs" ? (formState.completionPeriod || formState.semester || "All 3 Terms") : "Full Academic Year",
+    teachingMode: formState.teachingMode === "breakout" ? "breakout" : "single",
+    requiredTeachers: formState.teachingMode === "breakout"
+      ? Math.max(2, Math.min(6, Number.parseInt(formState.requiredTeachers, 10) || 2))
+      : 1,
+    breakoutStreams: formState.teachingMode === "breakout"
+      ? (Array.isArray(formState.breakoutStreams)
+          ? formState.breakoutStreams
+              .slice(0, Math.max(2, Math.min(6, Number.parseInt(formState.requiredTeachers, 10) || 2)))
+              .map((s, idx) => {
+                const obj = getStreamObj(s, idx);
+                return {
+                  name: obj.name.trim() || `Stream ${idx + 1}`,
+                  requiredMajor: obj.requiredMajor ? obj.requiredMajor.trim() : "",
+                  defaultTeacherId: obj.defaultTeacherId ? obj.defaultTeacherId.trim() : "",
+                };
+              })
+          : typeof formState.breakoutStreams === "string"
+          ? formState.breakoutStreams.split(",").map((s, idx) => ({
+              name: s.trim() || `Stream ${idx + 1}`,
+              requiredMajor: "",
+              defaultTeacherId: "",
+            })).filter((s) => s.name)
+          : [])
+      : [],
     createdAt: now,
     updatedAt: now,
   };
@@ -1302,15 +1819,26 @@ function normalizeSemester(value) {
     return "";
   }
 
-  if (normalized.includes("first") || normalized === "1" || normalized === "1st") {
+  if (normalized.includes("all") || normalized.includes("3") || normalized.includes("year")) {
+    return "All 3 Terms";
+  }
+  if (normalized.includes("term 1") || normalized === "t1" || normalized === "term1") {
+    return "Term 1";
+  }
+  if (normalized.includes("term 2") || normalized === "t2" || normalized === "term2") {
+    return "Term 2";
+  }
+  if (normalized.includes("term 3") || normalized === "t3" || normalized === "term3") {
+    return "Term 3";
+  }
+  if (normalized.includes("first") || normalized === "1" || normalized === "1st" || normalized === "sem 1" || normalized === "sem1") {
     return "First Semester";
   }
-
-  if (normalized.includes("last") || normalized.includes("second") || normalized === "2" || normalized === "2nd") {
+  if (normalized.includes("last") || normalized.includes("second") || normalized === "2" || normalized === "2nd" || normalized === "sem 2" || normalized === "sem2") {
     return "Last Semester";
   }
 
-  return "";
+  return value;
 }
 
 function normalizeShsGrade(value) {
@@ -1392,8 +1920,15 @@ function getInitialSubjects() {
       let classesPerWeek = Number(subject.classesPerWeek) || 4;
       let hoursPerWeek = Number(subject.hoursPerWeek);
 
-      const isStemEnhanced = code === "DEVREAD" || code === "ELEMALG" || code === "ENVSCI";
-      if (isStemEnhanced) {
+      const scope = String(subject.programScope || "").toLowerCase();
+      if (code === "DEVREAD") {
+        if (classesPerWeek !== 1 || dailyMinutes !== 60 || hoursPerWeek !== 1) {
+          dailyMinutes = 60;
+          classesPerWeek = 1;
+          hoursPerWeek = 1;
+          needsSync = true;
+        }
+      } else if (code === "ELEMALG" || code === "ENVSCI") {
         if (classesPerWeek !== 3 || dailyMinutes !== 60 || hoursPerWeek !== 3) {
           dailyMinutes = 60;
           classesPerWeek = 3;
@@ -1407,7 +1942,14 @@ function getInitialSubjects() {
           hoursPerWeek = 1;
           needsSync = true;
         }
-      } else if (schoolLevel === "jhs" && (normalizedType === "Core" || code === "TLE" || code === "SPASPEC" || code === "ICT")) {
+      } else if (code === "ICT-STEM" || (code === "ICT" && scope.includes("stem") && !scope.includes("spj"))) {
+        if (classesPerWeek !== 3 || dailyMinutes !== 60 || hoursPerWeek !== 3) {
+          dailyMinutes = 60;
+          classesPerWeek = 3;
+          hoursPerWeek = 3;
+          needsSync = true;
+        }
+      } else if (schoolLevel === "jhs" && (normalizedType === "Core" || code === "TLE" || code === "SPASPEC" || code === "ICT-SPJ" || (code === "ICT" && !scope.includes("stem")))) {
         if (classesPerWeek !== 4 || dailyMinutes !== 60 || hoursPerWeek !== 4) {
           dailyMinutes = 60;
           classesPerWeek = 4;
@@ -1418,6 +1960,13 @@ function getInitialSubjects() {
 
       if (Number.isNaN(hoursPerWeek) || !hoursPerWeek) {
         hoursPerWeek = Math.round(((dailyMinutes * classesPerWeek) / 60) * 100) / 100;
+        needsSync = true;
+      }
+
+      let teachingMode = subject.teachingMode || (code === "SPASPEC" ? "breakout" : "single");
+      let requiredTeachers = subject.requiredTeachers != null ? Number(subject.requiredTeachers) : (code === "SPASPEC" ? 3 : 1);
+      let breakoutStreams = subject.breakoutStreams || (code === "SPASPEC" ? ["Media Arts", "Dance Arts", "Instrumental Music"] : []);
+      if (!subject.teachingMode && code === "SPASPEC") {
         needsSync = true;
       }
 
@@ -1441,6 +1990,9 @@ function getInitialSubjects() {
           gradeLevel: subject.gradeLevel || JHS_GRADE_BAND,
           semester: "",
           strand: "",
+          teachingMode,
+          requiredTeachers,
+          breakoutStreams,
         };
       }
 
@@ -1452,6 +2004,9 @@ function getInitialSubjects() {
         classesPerWeek,
         hoursPerWeek,
         strand: normalizedType !== "Core" ? subject.strand || "" : "",
+        teachingMode,
+        requiredTeachers,
+        breakoutStreams,
       };
     });
 

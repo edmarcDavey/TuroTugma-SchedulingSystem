@@ -42,7 +42,14 @@ const DEFAULT_PROFILE = {
   academicYear: "2026-2027",
   offeredLevels: "both", // 'both' | 'jhs_only' | 'shs_only'
   jhsTerm: "Full Academic Year",
-  shsSemester: "First Semester",
+  shsCalendarSystem: "trimester", // 'trimester' | 'semester'
+  shsActiveTerm: "Term 1", // 'Term 1' | 'Term 2' | 'Term 3'
+  shsSemester: "First Semester", // for legacy cohort
+  shsTermsConfig: {
+    term1: { name: "Term 1", startDate: "2026-08-24", endDate: "2026-11-20", instructionalWeeks: 12, openingDays: 3, endDays: 2 },
+    term2: { name: "Term 2", startDate: "2026-11-23", endDate: "2027-02-26", instructionalWeeks: 12, openingDays: 0, endDays: 3 },
+    term3: { name: "Term 3", startDate: "2027-03-01", endDate: "2027-06-04", instructionalWeeks: 12, openingDays: 0, endDays: 5 },
+  },
   schoolHeadName: "GABRIEL C. ULLANI EdD",
   schoolHeadTitle: "Secondary School Principal II",
   signatories: {
@@ -412,20 +419,62 @@ export default function SchoolProfileSettings() {
                 ) : null}
 
                 {profile.offeredLevels !== "jhs_only" ? (
-                  <div style={{ background: "#f8fafc", padding: 12, borderRadius: 10, border: "1px solid #e2e8f0" }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", display: "block", marginBottom: 4 }}>
-                      Senior High School (SHS) Active Term
-                    </span>
-                    <select
-                      value={profile.shsSemester || "First Semester"}
-                      onChange={(e) => setProfile((prev) => ({ ...prev, shsSemester: e.target.value }))}
-                      style={selectStyle()}
-                    >
-                      <option value="First Semester">First Semester</option>
-                      <option value="Second Semester">Second Semester</option>
-                    </select>
-                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>
-                      SHS subjects change per semester based on strand track requirements.
+                  <div style={{ background: "#f8fafc", padding: 14, borderRadius: 10, border: "1px solid #e2e8f0" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>
+                        Senior High School (SHS) Calendar & Active Term
+                      </span>
+                      <span style={{ fontSize: 11, fontWeight: 700, background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", padding: "2px 8px", borderRadius: 4 }}>
+                        DepEd DO 017, s. 2026 Ready
+                      </span>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 }}>
+                          Calendar System
+                        </label>
+                        <select
+                          value={profile.shsCalendarSystem || "trimester"}
+                          onChange={(e) => setProfile((prev) => ({ ...prev, shsCalendarSystem: e.target.value }))}
+                          style={selectStyle()}
+                        >
+                          <option value="trimester">Trimester (3 Terms — DO 017, s. 2026)</option>
+                          <option value="semester">Semester (2 Semesters — Legacy 2016)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 }}>
+                          Current Active Term
+                        </label>
+                        {(profile.shsCalendarSystem || "trimester") === "trimester" ? (
+                          <select
+                            value={profile.shsActiveTerm || "Term 1"}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, shsActiveTerm: e.target.value }))}
+                            style={selectStyle()}
+                          >
+                            <option value="Term 1">Term 1 (Aug – Nov)</option>
+                            <option value="Term 2">Term 2 (Nov – Feb)</option>
+                            <option value="Term 3">Term 3 (Mar – Jun)</option>
+                          </select>
+                        ) : (
+                          <select
+                            value={profile.shsSemester || "First Semester"}
+                            onChange={(e) => setProfile((prev) => ({ ...prev, shsSemester: e.target.value }))}
+                            style={selectStyle()}
+                          >
+                            <option value="First Semester">First Semester</option>
+                            <option value="Second Semester">Second Semester</option>
+                          </select>
+                        )}
+                      </div>
+                    </div>
+
+                    <p style={{ margin: "4px 0 0", fontSize: 11, color: "#64748b" }}>
+                      {(profile.shsCalendarSystem || "trimester") === "trimester"
+                        ? "Strengthened SHS Grade 11 uses a 3-term system. Core subjects run across all 3 terms (160h), while Academic electives complete in 1 term (80h/160h)."
+                        : "Legacy Grade 12 continues under the 2-semester curriculum calendar unless participating in the strengthened pilot."}
                     </p>
                   </div>
                 ) : null}
@@ -1544,9 +1593,10 @@ const DEFAULT_MATATAG_SUBJECTS = [
   // JHS Specialized & Special Programs (4 meetings × 60 mins = 4 hrs/wk)
   { id: "jhs-tle", subjectName: "Technology and Livelihood Education (TLE)", subjectCode: "TLE", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 4, hoursPerWeek: 4, gradeLevel: "Grades 7–10", programScope: "Regular, SPA" },
   { id: "jhs-spaspec", subjectName: "SPA Specialization", subjectCode: "SPASPEC", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 4, hoursPerWeek: 4, gradeLevel: "Grades 7–10", programScope: "SPA" },
-  { id: "jhs-ict", subjectName: "ICT", subjectCode: "ICT", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 4, hoursPerWeek: 4, gradeLevel: "Grades 7–10", programScope: "SPJ, SP-STEM" },
-  // JHS Enhanced STEM Subjects (Diadi NHS Standard: 3 meetings × 60 mins = 3 hrs/wk)
-  { id: "jhs-devread", subjectName: "Developmental Reading", subjectCode: "DEVREAD", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3, gradeLevel: "7", programScope: "SP-STEM" },
+  { id: "jhs-ict-spj", subjectName: "ICT (SPJ)", subjectCode: "ICT-SPJ", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 4, hoursPerWeek: 4, gradeLevel: "Grades 7–10", programScope: "SPJ" },
+  { id: "jhs-ict-stem", subjectName: "ICT (SP-STEM)", subjectCode: "ICT-STEM", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3, gradeLevel: "Grades 7–10", programScope: "SP-STEM" },
+  // JHS Enhanced STEM Subjects (Diadi NHS Standard: ELEMALG and ENVSCI 3 hrs/wk, DEVREAD 1 hr/wk)
+  { id: "jhs-devread", subjectName: "Developmental Reading", subjectCode: "DEVREAD", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 1, hoursPerWeek: 1, gradeLevel: "7", programScope: "SP-STEM" },
   { id: "jhs-elemalg", subjectName: "Elementary Algebra", subjectCode: "ELEMALG", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3, gradeLevel: "7", programScope: "SP-STEM" },
   { id: "jhs-envsci", subjectName: "Environmental Science", subjectCode: "ENVSCI", schoolLevel: "jhs", subjectType: "Specialized", dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3, gradeLevel: "7", programScope: "SP-STEM" },
   // SHS Core Subjects
@@ -1724,8 +1774,14 @@ function SubjectPlacementRulesManager({ activeLevel, activeSession, levelConfig,
         parsed = parsed.map((s) => {
           if (!s) return s;
           const code = String(s.subjectCode || "").trim().toUpperCase();
-          const isStemEnhanced = code === "DEVREAD" || code === "ELEMALG" || code === "ENVSCI";
-          if (isStemEnhanced && (Number(s.classesPerWeek) !== 3 || Number(s.dailyMinutes) !== 60 || Number(s.hoursPerWeek) !== 3)) {
+          const scope = String(s.programScope || "").toLowerCase();
+
+          if (code === "DEVREAD" && (Number(s.classesPerWeek) !== 1 || Number(s.dailyMinutes) !== 60 || Number(s.hoursPerWeek) !== 1)) {
+            needsSync = true;
+            return { ...s, dailyMinutes: 60, classesPerWeek: 1, hoursPerWeek: 1 };
+          }
+          const isStemEnhanced3 = code === "ELEMALG" || code === "ENVSCI";
+          if (isStemEnhanced3 && (Number(s.classesPerWeek) !== 3 || Number(s.dailyMinutes) !== 60 || Number(s.hoursPerWeek) !== 3)) {
             needsSync = true;
             return { ...s, dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3 };
           }
@@ -1733,8 +1789,14 @@ function SubjectPlacementRulesManager({ activeLevel, activeSession, levelConfig,
             needsSync = true;
             return { ...s, dailyMinutes: 60, classesPerWeek: 1, hoursPerWeek: 1 };
           }
+          if (code === "ICT-STEM" || (code === "ICT" && scope.includes("stem") && !scope.includes("spj"))) {
+            if (Number(s.classesPerWeek) !== 3 || Number(s.dailyMinutes) !== 60 || Number(s.hoursPerWeek) !== 3) {
+              needsSync = true;
+              return { ...s, dailyMinutes: 60, classesPerWeek: 3, hoursPerWeek: 3 };
+            }
+          }
           const isJhsCoreOrGeneral = String(s.schoolLevel || "").toLowerCase() === "jhs" &&
-            (s.subjectType === "Core" || code === "TLE" || code === "SPASPEC" || code === "ICT");
+            (s.subjectType === "Core" || code === "TLE" || code === "SPASPEC" || code === "ICT-SPJ" || (code === "ICT" && !scope.includes("stem")));
           if (isJhsCoreOrGeneral && (Number(s.classesPerWeek) !== 4 || Number(s.dailyMinutes) !== 60 || Number(s.hoursPerWeek) !== 4)) {
             needsSync = true;
             return { ...s, dailyMinutes: 60, classesPerWeek: 4, hoursPerWeek: 4 };

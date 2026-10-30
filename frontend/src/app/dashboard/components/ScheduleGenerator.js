@@ -59,9 +59,12 @@ const TRACKS = ["HUMSS", "STEM", "ABM", "TVL", "GAS"];
 const MAX_TEACHER_LOAD_BASE = 40;
 
 const SCHEDULE_OPTIONS = [
-  { value: "jhs", label: "Junior High School" },
-  { value: "shs-first", label: "Senior High School — First Semester" },
-  { value: "shs-last", label: "Senior High School — Last Semester" },
+  { value: "jhs", label: "Junior High School (Full Year)" },
+  { value: "shs-term1", label: "Senior High School — Term 1 (DO 017 Trimester)" },
+  { value: "shs-term2", label: "Senior High School — Term 2 (DO 017 Trimester)" },
+  { value: "shs-term3", label: "Senior High School — Term 3 (DO 017 Trimester)" },
+  { value: "shs-first", label: "Senior High School — First Semester (Legacy)" },
+  { value: "shs-last", label: "Senior High School — Second Semester (Legacy)" },
 ];
 
 const DEFAULT_CONFIG = {
@@ -106,6 +109,14 @@ const DEFAULT_CONFIG = {
     restrictedPeriodLabels: [],
     teacherRestrictions: [],
     subjectRestrictions: [],
+  },
+  spaSettings: {
+    requiredCount: 3,
+    specializations: [
+      { name: "Media Arts", defaultTeacherId: "EMP-2026-051" },
+      { name: "Dance Arts", defaultTeacherId: "EMP-2026-052" },
+      { name: "Instrumental Music", defaultTeacherId: "EMP-2026-053" },
+    ],
   },
 };
 
@@ -282,7 +293,6 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
   const setShowConflictsPanel = (val) => setActiveDrawerTab((prev) => ((typeof val === "function" ? val(prev === "conflicts") : val) ? "conflicts" : null));
   const setShowRestrictionsModal = (val) => setActiveDrawerTab((prev) => ((typeof val === "function" ? val(prev === "restrictions") : val) ? "restrictions" : null));
   const [previewDraftModal, setPreviewDraftModal] = useState(null);
-  const [showSchedulingConfigurations, setShowSchedulingConfigurations] = useState(true);
   const [gridSessionFilter, setGridSessionFilter] = useState("all");
   const [gridGradeFilter, setGridGradeFilter] = useState("all");
   const [gridSectionTypeFilter, setGridSectionTypeFilter] = useState("all");
@@ -297,6 +307,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
   const [showSubjectRestrictionEditor, setShowSubjectRestrictionEditor] = useState(false);
   const [notice, setNotice] = useState({ text: "", type: "success" });
   const [clearGridModal, setClearGridModal] = useState({ open: false, message: '', onConfirm: null, onCancel: null });
+  const [spaBreakoutModal, setSpaBreakoutModal] = useState(null);
 
   function handleClearGrid() {
     if (!schedule) return;
@@ -332,6 +343,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
     window.addEventListener("turotugma:config-updated", handleSync);
     window.addEventListener("turotugma_config_updated", handleSync);
     window.addEventListener("turotugma_subjects_updated", handleSync);
+    window.addEventListener("turotugma:faculty-updated", handleSync);
     window.addEventListener("turotugma_faculty_updated", handleSync);
     window.addEventListener("turotugma_sections_updated", handleSync);
     window.addEventListener("turotugma_schedule_configurations_updated", handleSync);
@@ -340,6 +352,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       window.removeEventListener("turotugma:config-updated", handleSync);
       window.removeEventListener("turotugma_config_updated", handleSync);
       window.removeEventListener("turotugma_subjects_updated", handleSync);
+      window.removeEventListener("turotugma:faculty-updated", handleSync);
       window.removeEventListener("turotugma_faculty_updated", handleSync);
       window.removeEventListener("turotugma_sections_updated", handleSync);
       window.removeEventListener("turotugma_schedule_configurations_updated", handleSync);
@@ -585,8 +598,8 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
   const allSlotOptions = useMemo(() => {
     const labels = [
       ...buildSlots("jhs", config, { deriveJhsPeriods: isGeneratorMode, subjects }),
+      ...buildSlots("shs-term1", config, { deriveJhsPeriods: isGeneratorMode }),
       ...buildSlots("shs-first", config, { deriveJhsPeriods: isGeneratorMode }),
-      ...buildSlots("shs-last", config, { deriveJhsPeriods: isGeneratorMode }),
     ];
 
     const deduped = new Map();
@@ -728,8 +741,22 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       return { conflicts: [], conflictDetails: [], teacherLoadPercent: {} };
     }
 
+    const effectiveAssignments = { ...(schedule.assignments || {}) };
+    Object.entries(cellEditorDrafts || {}).forEach(([cellKey, draft]) => {
+      if (!draft || (!draft.subjectId && !draft.teacherId)) {
+        delete effectiveAssignments[cellKey];
+      } else if (draft.subjectId && draft.teacherId) {
+        effectiveAssignments[cellKey] = {
+          subjectId: draft.subjectId,
+          teacherId: draft.teacherId,
+          source: "draft",
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    });
+
     return evaluateSchedule({
-      assignments: schedule.assignments || {},
+      assignments: effectiveAssignments,
       sections,
       slots,
       subjects,
@@ -737,38 +764,20 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       scheduleType,
       config,
     });
-  }, [schedule, hasAssignments, sections, slots, subjects, activeTeachers, scheduleType, config]);
+  }, [schedule, hasAssignments, cellEditorDrafts, sections, slots, subjects, activeTeachers, scheduleType, config]);
 
   const conflictDetailsForDisplay = useMemo(() => {
     if (!schedule || !hasAssignments) {
       return [];
     }
-
-    return mergeConflictDetails(schedule.conflictDetails, evaluationForDisplay.conflictDetails);
+    return evaluationForDisplay.conflictDetails || [];
   }, [schedule, hasAssignments, evaluationForDisplay]);
 
   const conflictsForDisplay = useMemo(() => {
     if (!schedule || !hasAssignments) {
       return [];
     }
-
-    const set = new Set();
-    const result = [];
-    (schedule.conflicts || []).forEach((c) => {
-      const s = sanitizeText(c);
-      if (s && !set.has(s)) {
-        set.add(s);
-        result.push(s);
-      }
-    });
-    (evaluationForDisplay.conflicts || []).forEach((c) => {
-      const s = sanitizeText(c);
-      if (s && !set.has(s)) {
-        set.add(s);
-        result.push(s);
-      }
-    });
-    return result;
+    return evaluationForDisplay.conflicts || [];
   }, [schedule, hasAssignments, evaluationForDisplay]);
 
   const conflictCount = conflictsForDisplay.length;
@@ -929,6 +938,19 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
     }
   };
 
+  const handleSaveSpaSettings = (newSpaSettings) => {
+    const currentConfig = loadScheduleConfig();
+    const nextConfig = {
+      ...currentConfig,
+      spaSettings: newSpaSettings,
+    };
+    saveJson(CONFIG_STORAGE_KEY, nextConfig);
+    saveJson("turotugma_schedule_configurations", nextConfig);
+    window.dispatchEvent(new Event("turotugma_schedule_configurations_updated"));
+    setDataRefreshToken((prev) => prev + 1);
+    showNotice(`SPA configuration saved: ${newSpaSettings.specializations?.length || 3} specializations active.`, "success");
+  };
+
   useEffect(() => {
     // Find the most recent schedule (draft or published) for the selected schedule type
     const draftsForType = draftsForCurrentSchedule;
@@ -980,8 +1002,8 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
 
     const allLabels = [
       ...buildSlots("jhs", config, { deriveJhsPeriods: isGeneratorMode }),
+      ...buildSlots("shs-term1", config, { deriveJhsPeriods: isGeneratorMode }),
       ...buildSlots("shs-first", config, { deriveJhsPeriods: isGeneratorMode }),
-      ...buildSlots("shs-last", config, { deriveJhsPeriods: isGeneratorMode }),
     ].map((slot) => slot.label);
 
     const dedupedLabels = Array.from(new Set(allLabels));
@@ -1566,6 +1588,87 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
         if (cellKeys.length === 0) continue;
 
         // -------------------------------------------------------------
+        // Strategy 0.5: Subject Not Eligible for Section
+        // -------------------------------------------------------------
+        if (message.includes("is not eligible for this section")) {
+          let resolved = false;
+          for (const cellKey of cellKeys) {
+            const [sectionId, slotId] = splitCellKey(cellKey);
+            const sectionObj = sectionsById.get(sectionId);
+            const slot = slotsById.get(slotId);
+            if (!sectionObj || !slot) continue;
+
+            const sectionCellKeys = Object.keys(workingAssignments).filter(
+              (ck) => splitCellKey(ck)[0] === sectionObj.id && ck !== cellKey
+            );
+            const eligibleSubjs = getSubjectsForSection(sectionObj, subjects, scheduleType);
+            const subjectCounts = new Map();
+            sectionCellKeys.forEach((ck) => {
+              const a = workingDrafts[ck] || workingAssignments[ck];
+              if (a?.subjectId) subjectCounts.set(a.subjectId, (subjectCounts.get(a.subjectId) || 0) + 1);
+            });
+
+            // 1. Try replacing with an under-scheduled eligible subject
+            const underQuotaSubjs = eligibleSubjs.filter((s) => {
+              const count = subjectCounts.get(s.id) || 0;
+              const req = parseBoundedNumber(s.classesPerWeek, 1, 12, 4);
+              return count < req;
+            });
+
+            const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
+
+            for (const repSubj of underQuotaSubjs) {
+              const teacher = activeTeachers.find((t) =>
+                isTeacherEligible({
+                  teacher: t,
+                  subject: repSubj,
+                  section: sectionObj,
+                  slot,
+                  constraints: config.constraints,
+                  teacherBusyBySlot: busyMap,
+                  excludedSectionId: sectionObj.id,
+                })
+              );
+
+              if (teacher) {
+                const testAssignments = {
+                  ...workingAssignments,
+                  [cellKey]: { subjectId: repSubj.id, teacherId: teacher.id, source: "auto-fix", updatedAt: new Date().toISOString() },
+                };
+                const testEval = getEvaluation(testAssignments);
+                if (testEval.conflicts.length < evaluation.conflicts.length) {
+                  workingDrafts[cellKey] = { subjectId: repSubj.id, teacherId: teacher.id };
+                  workingAssignments[cellKey] = testAssignments[cellKey];
+                  resolved = true;
+                  break;
+                }
+              }
+            }
+
+            // 2. Fallback: If no replacement works without conflict, unassign/clear the ineligible cell
+            if (!resolved) {
+              const testAssignments = { ...workingAssignments };
+              delete testAssignments[cellKey];
+              const testEval = getEvaluation(testAssignments);
+              if (testEval.conflicts.length < evaluation.conflicts.length) {
+                delete workingDrafts[cellKey];
+                delete workingAssignments[cellKey];
+                resolved = true;
+                break;
+              }
+            }
+
+            if (resolved) break;
+          }
+
+          if (resolved) {
+            fixedCount += 1;
+            appliedThisPass = true;
+            break;
+          }
+        }
+
+        // -------------------------------------------------------------
         // Strategy 1: Same-Day Duplicate Subject or Weekly Quota Exceeded
         // -------------------------------------------------------------
         if (
@@ -1577,129 +1680,121 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
           const [firstSectionId] = splitCellKey(cellKeys[0]);
           const sectionObj = sectionsById.get(firstSectionId);
 
-          if (sectionObj && cellKeys.length > 1) {
-            // Keep cellKeys[0], try to fix cellKeys[1..N]
-            for (let i = 1; i < cellKeys.length; i++) {
-              const targetKey = cellKeys[i];
-              const [, targetSlotId] = splitCellKey(targetKey);
-              const targetSlot = slotsById.get(targetSlotId);
-              if (!targetSlot) continue;
-              const targetDay = targetSlot.day || "Monday";
+          if (sectionObj && cellKeys.length > 0) {
+            const firstAsgn = workingDrafts[cellKeys[0]] || workingAssignments[cellKeys[0]];
+            const problemSubjectId = firstAsgn?.subjectId;
+            const problemSubject = problemSubjectId ? subjectsById.get(problemSubjectId) : null;
 
-              const sectionCellKeys = Object.keys(workingAssignments).filter(
-                (ck) => splitCellKey(ck)[0] === sectionObj.id && ck !== targetKey
+            // Target the last assigned cell of this subject
+            const targetKey = cellKeys[cellKeys.length - 1];
+            const [, targetSlotId] = splitCellKey(targetKey);
+            const targetSlot = slotsById.get(targetSlotId);
+
+            const sectionCellKeys = Object.keys(workingAssignments).filter(
+              (ck) => splitCellKey(ck)[0] === sectionObj.id && ck !== targetKey
+            );
+
+            // Step 1: If an eligible subject is missing/under-scheduled, replace the excess/duplicate cell with it
+            const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
+            const subjectCounts = new Map();
+            sectionCellKeys.forEach((ck) => {
+              const sId = (workingDrafts[ck] || workingAssignments[ck])?.subjectId;
+              if (sId) subjectCounts.set(sId, (subjectCounts.get(sId) || 0) + 1);
+            });
+
+            const underQuotaSubjects = offeredSubjects.filter((sb) => {
+              const count = subjectCounts.get(sb.id) || 0;
+              const req = parseBoundedNumber(sb.classesPerWeek, 1, 12, 4);
+              return count < req;
+            });
+
+            const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
+
+            for (const repSubject of underQuotaSubjects) {
+              if (targetSlot && isSubjectRestrictedForSlot(repSubject, targetSlot, config.constraints, config, scheduleType)) continue;
+
+              const repTeacher = activeTeachers.find((t) =>
+                isTeacherEligible({
+                  teacher: t,
+                  subject: repSubject,
+                  section: sectionObj,
+                  slot: targetSlot,
+                  constraints: config.constraints,
+                  teacherBusyBySlot: busyMap,
+                  excludedSectionId: sectionObj.id,
+                })
               );
 
-              // 1. Try Intra-Section Day Swap
-              let swapSuccess = false;
-              for (const otherKey of sectionCellKeys) {
-                const [, otherSlotId] = splitCellKey(otherKey);
-                const otherSlot = slotsById.get(otherSlotId);
-                if (!otherSlot) continue;
-                const otherDay = otherSlot.day || "Monday";
-                if (otherDay === targetDay) continue; // Must be on a different day
-
-                const assignA = workingDrafts[targetKey] || workingAssignments[targetKey];
-                const assignB = workingDrafts[otherKey] || workingAssignments[otherKey];
-                if (!assignA || !assignB) continue;
-
-                const subA = subjectsById.get(assignA.subjectId);
-                const subB = subjectsById.get(assignB.subjectId);
-                if (!subA || !subB || subA.id === subB.id) continue;
-
-                // Check if subB is already scheduled on targetDay for this section
-                const subjectsOnTargetDay = sectionCellKeys
-                  .filter((ck) => {
-                    const [, sId] = splitCellKey(ck);
-                    const s = slotsById.get(sId);
-                    return s && (s.day || "Monday") === targetDay;
-                  })
-                  .map((ck) => (workingDrafts[ck] || workingAssignments[ck])?.subjectId);
-
-                if (subjectsOnTargetDay.includes(subB.id)) continue;
-
-                // Check if subA is already scheduled on otherDay for this section
-                const subjectsOnOtherDay = sectionCellKeys
-                  .filter((ck) => {
-                    const [, sId] = splitCellKey(ck);
-                    const s = slotsById.get(sId);
-                    return s && (s.day || "Monday") === otherDay && ck !== targetKey;
-                  })
-                  .map((ck) => (workingDrafts[ck] || workingAssignments[ck])?.subjectId);
-
-                if (subjectsOnOtherDay.includes(subA.id)) continue;
-
-                // Find eligible teachers for swapped slots
-                const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
-                let teacherA = facultyById.get(assignA.teacherId);
-                if (!teacherA || !isTeacherEligible({ teacher: teacherA, subject: subA, section: sectionObj, slot: otherSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id })) {
-                  teacherA = activeTeachers.find((t) => isTeacherEligible({ teacher: t, subject: subA, section: sectionObj, slot: otherSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id }));
-                }
-
-                let teacherB = facultyById.get(assignB.teacherId);
-                if (!teacherB || !isTeacherEligible({ teacher: teacherB, subject: subB, section: sectionObj, slot: targetSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id })) {
-                  teacherB = activeTeachers.find((t) => isTeacherEligible({ teacher: t, subject: subB, section: sectionObj, slot: targetSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id }));
-                }
-
-                if (teacherA && teacherB) {
-                  workingDrafts[targetKey] = { subjectId: subB.id, teacherId: teacherB.id };
-                  workingAssignments[targetKey] = { subjectId: subB.id, teacherId: teacherB.id, source: "auto-fix", updatedAt: new Date().toISOString() };
-                  workingDrafts[otherKey] = { subjectId: subA.id, teacherId: teacherA.id };
-                  workingAssignments[otherKey] = { subjectId: subA.id, teacherId: teacherA.id, source: "auto-fix", updatedAt: new Date().toISOString() };
-                  swapSuccess = true;
+              if (repTeacher) {
+                const testAssignments = {
+                  ...workingAssignments,
+                  [targetKey]: { subjectId: repSubject.id, teacherId: repTeacher.id, source: "auto-fix", updatedAt: new Date().toISOString() },
+                };
+                const testEval = getEvaluation(testAssignments);
+                if (testEval.conflicts.length < evaluation.conflicts.length) {
+                  workingDrafts[targetKey] = { subjectId: repSubject.id, teacherId: repTeacher.id };
+                  workingAssignments[targetKey] = testAssignments[targetKey];
+                  resolvedConflict = true;
                   break;
                 }
               }
+            }
 
-              if (swapSuccess) {
+            // Step 2: Unassign the excess cell if weekly quota is exceeded or duplicate
+            if (!resolvedConflict) {
+              const testAssignments = { ...workingAssignments };
+              delete testAssignments[targetKey];
+              const testEval = getEvaluation(testAssignments);
+              if (testEval.conflicts.length < evaluation.conflicts.length) {
+                delete workingDrafts[targetKey];
+                delete workingAssignments[targetKey];
                 resolvedConflict = true;
-                break;
               }
+            }
 
-              // 2. Try Reassigning to Under-scheduled / Missing Subject
-              const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
-              const subjectCounts = new Map();
-              sectionCellKeys.concat([targetKey]).forEach((ck) => {
-                const sId = (workingDrafts[ck] || workingAssignments[ck])?.subjectId;
-                if (sId) subjectCounts.set(sId, (subjectCounts.get(sId) || 0) + 1);
+            // Step 3: If it's a daily duplicate session and total weekly count is within quota, move to an open slot on another day
+            if (!resolvedConflict && message.includes("times on") && targetSlot && problemSubject) {
+              const validSlots = slots.filter((s) => isSlotValidForSection(sectionObj, s, scheduleType, config));
+              const otherDayEmptySlots = validSlots.filter((s) => {
+                if (s.day === targetSlot.day) return false;
+                const ck = createCellKey(sectionObj.id, s.id);
+                if (workingAssignments[ck]) return false;
+                const hasSubOnDay = sectionCellKeys.some((k) => {
+                  const [, sId] = splitCellKey(k);
+                  return slotsById.get(sId)?.day === s.day && (workingDrafts[k] || workingAssignments[k])?.subjectId === problemSubjectId;
+                });
+                return !hasSubOnDay;
               });
 
-              const underQuotaSubjects = offeredSubjects.filter((sb) => {
-                const count = subjectCounts.get(sb.id) || 0;
-                const req = parseBoundedNumber(sb.classesPerWeek, 1, 12, 4);
-                return count < req;
-              });
-
-              const candidateReplacements = underQuotaSubjects.length > 0 ? underQuotaSubjects : offeredSubjects.filter((sb) => !subjectCounts.has(sb.id));
-
-              for (const replacementSubject of candidateReplacements) {
-                const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
-                const replacementTeacher = activeTeachers.find((teacher) =>
+              for (const emptySlot of otherDayEmptySlots) {
+                const teacher = activeTeachers.find((t) =>
                   isTeacherEligible({
-                    teacher,
-                    subject: replacementSubject,
+                    teacher: t,
+                    subject: problemSubject,
                     section: sectionObj,
-                    slot: targetSlot,
+                    slot: emptySlot,
                     constraints: config.constraints,
                     teacherBusyBySlot: busyMap,
                     excludedSectionId: sectionObj.id,
                   })
                 );
 
-                if (replacementTeacher) {
-                  workingDrafts[targetKey] = { subjectId: replacementSubject.id, teacherId: replacementTeacher.id };
-                  workingAssignments[targetKey] = {
-                    subjectId: replacementSubject.id,
-                    teacherId: replacementTeacher.id,
-                    source: "auto-fix",
-                    updatedAt: new Date().toISOString(),
-                  };
-                  resolvedConflict = true;
-                  break;
+                if (teacher) {
+                  const newKey = createCellKey(sectionObj.id, emptySlot.id);
+                  const testAssignments = { ...workingAssignments };
+                  delete testAssignments[targetKey];
+                  testAssignments[newKey] = { subjectId: problemSubject.id, teacherId: teacher.id, source: "auto-fix", updatedAt: new Date().toISOString() };
+                  const testEval = getEvaluation(testAssignments);
+                  if (testEval.conflicts.length < evaluation.conflicts.length) {
+                    delete workingDrafts[targetKey];
+                    delete workingAssignments[targetKey];
+                    workingDrafts[newKey] = { subjectId: problemSubject.id, teacherId: teacher.id };
+                    workingAssignments[newKey] = testAssignments[newKey];
+                    resolvedConflict = true;
+                    break;
+                  }
                 }
               }
-
-              if (resolvedConflict) break;
             }
           }
 
@@ -1725,6 +1820,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
 
             if (sectionObj && slot && subjectObj) {
               const busyMap = buildTeacherBusyMap(workingAssignments, sectionsById, slotsById);
+              // Step 1: Try finding an available certified substitute teacher
               const replacementTeacher = activeTeachers.find(
                 (teacher) =>
                   teacher.id !== currentAssignment?.teacherId &&
@@ -1748,6 +1844,77 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
                   updatedAt: new Date().toISOString(),
                 };
                 changed = true;
+              }
+
+              // Step 2: Fallback: Move to an open slot in the section where current teacher is free
+              if (!changed && currentAssignment?.teacherId) {
+                const currentTeacher = facultyById.get(currentAssignment.teacherId);
+                const sectionSlots = slots.filter((s) => isSlotValidForSection(sectionObj, s, scheduleType, config));
+                const openSlots = sectionSlots.filter((s) => {
+                  const ck = createCellKey(sectionObj.id, s.id);
+                  return !workingAssignments[ck] && !busyMap.get(currentAssignment.teacherId)?.has(s.id);
+                });
+
+                for (const targetSlot of openSlots) {
+                  if (isSubjectRestrictedForSlot(subjectObj, targetSlot, config.constraints, config, scheduleType)) continue;
+                  if (!currentTeacher || !isTeacherEligible({ teacher: currentTeacher, subject: subjectObj, section: sectionObj, slot: targetSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id })) continue;
+
+                  const targetCellKey = createCellKey(sectionObj.id, targetSlot.id);
+                  const testAssignments = { ...workingAssignments };
+                  delete testAssignments[cellKey];
+                  testAssignments[targetCellKey] = { subjectId: subjectObj.id, teacherId: currentTeacher.id, source: "auto-fix", updatedAt: new Date().toISOString() };
+
+                  const testEval = getEvaluation(testAssignments);
+                  if (testEval.conflicts.length < evaluation.conflicts.length) {
+                    delete workingDrafts[cellKey];
+                    delete workingAssignments[cellKey];
+                    workingDrafts[targetCellKey] = { subjectId: subjectObj.id, teacherId: currentTeacher.id };
+                    workingAssignments[targetCellKey] = testAssignments[targetCellKey];
+                    changed = true;
+                    break;
+                  }
+                }
+              }
+
+              // Step 3: Fallback: Intra-section swap with another class in section where both teachers are free
+              if (!changed && currentAssignment?.teacherId) {
+                const currentTeacher = facultyById.get(currentAssignment.teacherId);
+                const sectionCells = Object.keys(workingAssignments).filter(
+                  (ck) => splitCellKey(ck)[0] === sectionObj.id && ck !== cellKey
+                );
+
+                for (const otherCk of sectionCells) {
+                  const [, otherSlotId] = splitCellKey(otherCk);
+                  const otherSlot = slotsById.get(otherSlotId);
+                  const otherAsgn = workingDrafts[otherCk] || workingAssignments[otherCk];
+                  if (!otherSlot || !otherAsgn || !otherAsgn.teacherId || !otherAsgn.subjectId) continue;
+                  if (otherAsgn.subjectId === subjectObj.id) continue;
+
+                  const otherSubj = subjectsById.get(otherAsgn.subjectId);
+                  const otherTeacher = facultyById.get(otherAsgn.teacherId);
+                  if (!otherSubj || !otherTeacher || !currentTeacher) continue;
+
+                  const curTeacherFreeAtOther = isTeacherEligible({ teacher: currentTeacher, subject: subjectObj, section: sectionObj, slot: otherSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id });
+                  const otherTeacherFreeAtCur = isTeacherEligible({ teacher: otherTeacher, subject: otherSubj, section: sectionObj, slot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: sectionObj.id });
+
+                  if (curTeacherFreeAtOther && otherTeacherFreeAtCur) {
+                    const testAssignments = {
+                      ...workingAssignments,
+                      [cellKey]: { subjectId: otherSubj.id, teacherId: otherTeacher.id, source: "auto-fix", updatedAt: new Date().toISOString() },
+                      [otherCk]: { subjectId: subjectObj.id, teacherId: currentTeacher.id, source: "auto-fix", updatedAt: new Date().toISOString() },
+                    };
+
+                    const testEval = getEvaluation(testAssignments);
+                    if (testEval.conflicts.length < evaluation.conflicts.length) {
+                      workingDrafts[cellKey] = { subjectId: otherSubj.id, teacherId: otherTeacher.id };
+                      workingAssignments[cellKey] = testAssignments[cellKey];
+                      workingDrafts[otherCk] = { subjectId: subjectObj.id, teacherId: currentTeacher.id };
+                      workingAssignments[otherCk] = testAssignments[otherCk];
+                      changed = true;
+                      break;
+                    }
+                  }
+                }
               }
             }
           }
@@ -2078,6 +2245,11 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       }
 
       if (underScheduledConflicts.length > 0 && capacityIssue) {
+        if (fixedCount > 0) {
+          showNotice(`Auto-fix resolved ${fixedCount} conflict(s). Note: ${capacityIssue.secName} requires ${capacityIssue.totalReq} weekly periods, but timetable physically only has ${capacityIssue.slotCount} slots (${capacityIssue.deficit} slot shortage).`, "info");
+        } else {
+          showNotice(`Timetable capacity shortage: ${capacityIssue.secName} requires ${capacityIssue.totalReq} weekly periods, but timetable physically only has ${capacityIssue.slotCount} slots (${capacityIssue.deficit} slot shortage). Please adjust periods in School Profile.`, "info");
+        }
         setActiveDrawerTab("conflicts");
         return;
       }
@@ -2371,7 +2543,15 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
     };
   };
 
-  const applyCellAssignment = ({ section, slot, subjectId, teacherId }) => {
+  const applyCellAssignment = ({
+    section,
+    slot,
+    subjectId,
+    teacherId,
+    coTeacherIds,
+    breakoutAssignments,
+    breakoutNote,
+  }) => {
     const now = new Date().toISOString();
     const baseSchedule = schedule || {
       id: `draft-${Date.now()}`,
@@ -2397,26 +2577,10 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       return;
     }
 
-    const teacher = facultyById.get(teacherId);
+    const resolvedTeacherId = teacherId || (breakoutAssignments && breakoutAssignments[0]?.teacherId);
+    const teacher = facultyById.get(resolvedTeacherId);
     if (!teacher) {
       showNotice("Selected teacher not found.", "error");
-      return;
-    }
-
-    const busyMap = buildTeacherBusyMap(baseSchedule.assignments || {}, sectionsById, slotsById);
-    const eligible = isTeacherEligible({
-      teacher,
-      subject: selectedSubject,
-      section,
-      slot,
-      constraints: config.constraints,
-      teacherBusyBySlot: busyMap,
-      excludedSectionId: section.id,
-      ignoreDoubleBooking: true,
-    });
-
-    if (!eligible) {
-      showNotice("Teacher is not eligible for this assignment.", "error");
       return;
     }
 
@@ -2426,6 +2590,9 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       [cellKey]: {
         subjectId: selectedSubject.id,
         teacherId: teacher.id,
+        coTeacherIds: Array.isArray(coTeacherIds) && coTeacherIds.length > 0 ? coTeacherIds : undefined,
+        breakoutAssignments: Array.isArray(breakoutAssignments) && breakoutAssignments.length > 0 ? breakoutAssignments : undefined,
+        breakoutNote: breakoutNote || undefined,
         source: "manual",
         updatedAt: now,
       },
@@ -2449,6 +2616,8 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
       teacherLoadPercent: evaluation.teacherLoadPercent,
       updatedAt: now,
     });
+
+    persistFacultyLoadPercent(evaluation.teacherLoadPercent);
 
     setCellEditorDrafts((prev) => ({
       ...prev,
@@ -2519,6 +2688,24 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
 
     const hasExistingAssignment = !!schedule?.assignments?.[cellKey];
     const existingAssignment = schedule?.assignments?.[cellKey];
+
+    const subjObj = subjectsById.get(subjectId);
+    const isMultiTeacher = isSubjectMultiTeacher(subjObj);
+
+    if (isMultiTeacher) {
+      setCellEditorDrafts((prev) => ({
+        ...prev,
+        [cellKey]: { subjectId, teacherId: existingAssignment?.teacherId || "" },
+      }));
+      setSpaBreakoutModal({
+        section,
+        slot,
+        cellKey,
+        subjectId,
+        assignment: existingAssignment,
+      });
+      return;
+    }
 
     // Try to auto-retain teacher if candidate teacher is eligible for the new subject
     let nextTeacherId = "";
@@ -2613,13 +2800,6 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
     applyCellAssignment({ section, slot, subjectId, teacherId });
   };
 
-  const metrics = [
-    { label: "Active Teachers", value: String(activeTeachersForSchedule.length) },
-    { label: "Total Sections", value: String(sections.length) },
-    { label: "Conflicts", value: String(conflictCount) },
-    { label: "Schedule Status", value: scheduleStatusLabel },
-  ];
-
   return (
     <div style={{ display: "grid", gap: 16 }}>
       {!hideControls && (
@@ -2633,134 +2813,413 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
             </p>
           </div>
 
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flexWrap: "wrap", width: "100%", justifyContent: "flex-start" }}>
-            <div style={{ display: "grid", gap: 8, minWidth: 320, flex: "1 1 320px", maxWidth: 400 }}>
-              <label style={{ fontSize: 12, color: "#5f6b90", fontWeight: 700 }}>Schedule Type</label>
-              <select
-                value={scheduleType}
-                onChange={(event) => setScheduleType(event.target.value)}
-                style={selectStyle(false)}
-                disabled={readOnly}
-              >
-                {filteredScheduleOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+              width: "100%",
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
+              borderRadius: 14,
+              padding: "16px 18px",
+              boxShadow: "0 1px 3px rgba(15, 23, 42, 0.05)",
+            }}
+          >
+            {/* Upper Row: Schedule Scope Selector + Live Status Badge + Utility Controls */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                borderBottom: "1px solid #f1f5f9",
+                paddingBottom: 12,
+              }}
+            >
+              {/* Left: Schedule Type Selector with Level Pill and Status Indicator */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flex: "1 1 340px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "#64748b", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                      Schedule Scope
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: "2px 8px",
+                        borderRadius: 99,
+                        background: isJhsSchedule ? "#e0e7ff" : "#fef3c7",
+                        color: isJhsSchedule ? "#3730a3" : "#92400e",
+                        border: isJhsSchedule ? "1px solid #c7d2fe" : "1px solid #fde68a",
+                      }}
+                    >
+                      {isJhsSchedule ? "JHS • Grades 7–10" : "SHS • Tracks & Strands"}
+                    </span>
+                  </div>
+                  <select
+                    value={scheduleType}
+                    onChange={(event) => setScheduleType(event.target.value)}
+                    style={{
+                      ...selectStyle(false),
+                      minWidth: 260,
+                      maxWidth: 380,
+                      fontWeight: 600,
+                      color: "#1e293b",
+                      borderColor: "#cbd5e1",
+                      padding: "8px 12px",
+                      height: 38,
+                    }}
+                    disabled={readOnly}
+                  >
+                    {filteredScheduleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Live Status Pill badge next to dropdown */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, alignSelf: "flex-end", height: 38, paddingBottom: 2 }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      padding: "5px 12px",
+                      borderRadius: 99,
+                      background:
+                        scheduleStatusLabel === "Published"
+                          ? "#ecfdf5"
+                          : scheduleStatusLabel === "Draft Saved"
+                          ? "#e0e7ff"
+                          : scheduleStatusLabel === "Draft (Unsaved)"
+                          ? "#fffbeb"
+                          : "#f1f5f9",
+                      color:
+                        scheduleStatusLabel === "Published"
+                          ? "#047857"
+                          : scheduleStatusLabel === "Draft Saved"
+                          ? "#3730a3"
+                          : scheduleStatusLabel === "Draft (Unsaved)"
+                          ? "#b45309"
+                          : "#64748b",
+                      border:
+                        scheduleStatusLabel === "Published"
+                          ? "1px solid #a7f3d0"
+                          : scheduleStatusLabel === "Draft Saved"
+                          ? "1px solid #c7d2fe"
+                          : scheduleStatusLabel === "Draft (Unsaved)"
+                          ? "1px solid #fde68a"
+                          : "1px solid #e2e8f0",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background:
+                          scheduleStatusLabel === "Published"
+                            ? "#10b981"
+                            : scheduleStatusLabel === "Draft Saved"
+                            ? "#4f46e5"
+                            : scheduleStatusLabel === "Draft (Unsaved)"
+                            ? "#f59e0b"
+                            : "#94a3b8",
+                      }}
+                    />
+                    {scheduleStatusLabel}
+                  </span>
+                </div>
+
+                {/* Active Teachers & Total Sections Badges */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, alignSelf: "flex-end", height: 38, paddingBottom: 2 }}>
+                  <div style={{ width: 1, height: 20, background: "#e2e8f0", margin: "0 2px" }} />
+
+                  <span
+                    title={`${activeTeachersForSchedule.length} active teachers eligible for ${isJhsSchedule ? "JHS" : "SHS"} workloads`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: "5px 12px",
+                      borderRadius: 99,
+                      background: "#f8fafc",
+                      color: "#475569",
+                      border: "1px solid #e2e8f0",
+                    }}
+                  >
+                    <span style={{ color: "#4f46e5", display: "inline-flex", alignItems: "center" }}>
+                      <TeachersCardIcon />
+                    </span>
+                    <span>
+                      <strong style={{ color: "#1e293b", fontWeight: 800, fontSize: 13 }}>{activeTeachersForSchedule.length}</strong> Teachers
+                    </span>
+                  </span>
+
+                  <span
+                    title={`${sections.length} total sections (${isJhsSchedule ? "Grades 7–10" : "SHS Tracks"})`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: "5px 12px",
+                      borderRadius: 99,
+                      background: "#f8fafc",
+                      color: "#475569",
+                      border: "1px solid #e2e8f0",
+                    }}
+                  >
+                    <span style={{ color: "#2563eb", display: "inline-flex", alignItems: "center" }}>
+                      <SectionsCardIcon />
+                    </span>
+                    <span>
+                      <strong style={{ color: "#1e293b", fontWeight: 800, fontSize: 13 }}>{sections.length}</strong> Sections
+                    </span>
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={handleGenerateSchedule} style={{ ...primaryActionStyle(), width: 120, textAlign: "center" }} disabled={readOnly}>
-                <ActionButtonLabel icon={<GenerateIcon />}>
-                  {schedule ? "Re-Generate" : "Generate"}
-                </ActionButtonLabel>
-              </button>
-              <button type="button" onClick={handleSaveDraft} style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }} disabled={readOnly}>
-                <ActionButtonLabel icon={<SaveIcon />}>Save</ActionButtonLabel>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveDrawerTab((prev) => (prev === "drafts" ? null : "drafts"))}
-                style={{
-                  ...secondaryActionStyle(),
-                  width: 120,
-                  textAlign: "center",
-                  background: activeDrawerTab === "drafts" ? "#e0e7ff" : "#f8fafc",
-                  borderColor: activeDrawerTab === "drafts" ? "#818cf8" : "#cbd5e1",
-                  color: activeDrawerTab === "drafts" ? "#3730a3" : "#475569",
-                  fontWeight: 700,
-                }}
-                disabled={readOnly}
-              >
-                <ActionButtonLabel icon={<DraftsIcon />}>Drafts ({draftsForCurrentSchedule.length})</ActionButtonLabel>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveDrawerTab((prev) => (prev === "conflicts" ? null : "conflicts"))}
-                disabled={readOnly}
-                style={{
-                  ...secondaryActionStyle(),
-                  background: activeDrawerTab === "conflicts"
-                    ? (conflictCount > 0 ? "#ffe4e6" : "#e0e7ff")
-                    : conflictCount > 0 ? "#fff1f2" : "#f8fafc",
-                  border: activeDrawerTab === "conflicts"
-                    ? (conflictCount > 0 ? "1px solid #f43f5e" : "1px solid #818cf8")
-                    : conflictCount > 0 ? "1px solid #fecdd3" : "1px solid #cbd5e1",
-                  color: activeDrawerTab === "conflicts"
-                    ? (conflictCount > 0 ? "#9f1239" : "#3730a3")
-                    : conflictCount > 0 ? "#be123c" : "#475569",
-                  fontWeight: 700,
-                  width: 130,
-                  textAlign: "center",
-                }}
-              >
-                <ActionButtonLabel icon={<WarningIcon />}>
-                  Conflicts ({conflictCount})
-                </ActionButtonLabel>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveDrawerTab((prev) => (prev === "restrictions" ? null : "restrictions"))}
-                disabled={readOnly}
-                style={{
-                  ...secondaryActionStyle(),
-                  background: activeDrawerTab === "restrictions" ? "#dbeafe" : "#eff6ff",
-                  border: activeDrawerTab === "restrictions" ? "1px solid #3b82f6" : "1px solid #bfdbfe",
-                  color: "#1e40af",
-                  fontWeight: 700,
-                  padding: "8px 14px",
-                  cursor: readOnly ? "not-allowed" : "pointer",
-                }}
-              >
-                Period Restrictions ({(effectiveTeacherRestrictions.length + subjectRestrictionsForDisplay.length)})
-              </button>
-              <button
-                type="button"
-                onClick={handlePublish}
-                disabled={readOnly}
-                title={readOnly ? "Read-only mode" : "Publish schedule"}
-                style={{
-                  ...secondaryActionStyle(),
-                  width: 120,
-                  textAlign: "center",
-                  opacity: readOnly ? 0.55 : 1,
-                  cursor: readOnly ? "not-allowed" : "pointer",
-                }}
-              >
-                <ActionButtonLabel icon={<PublishIcon />}>Publish</ActionButtonLabel>
-              </button>
-              <ConfirmationModal
-                open={confirmModal.open}
-                message={confirmModal.message}
-                onConfirm={confirmModal.onConfirm}
-                onCancel={confirmModal.onCancel}
-                title={confirmModal.title || "Publish Confirmation"}
-                confirmLabel={confirmModal.confirmLabel || "Publish Anyway"}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setDataRefreshToken((current) => current + 1);
-                  showNotice("Data refreshed from local storage.", "success");
-                }}
-                style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}
-                disabled={readOnly}
-              >
-                <ActionButtonLabel icon={<RefreshIcon />}>Refresh Data</ActionButtonLabel>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowSchedulingConfigurations((prev) => !prev)}
-                style={{ ...secondaryActionStyle(), width: 120, textAlign: "center" }}
-                aria-pressed={!showSchedulingConfigurations}
-                disabled={readOnly}
-              >
-                <ActionButtonLabel icon={showSchedulingConfigurations ? <HideConfigIcon /> : <ShowConfigIcon />}>
-                  {showSchedulingConfigurations ? "Hide Config" : "Show Config"}
-                </ActionButtonLabel>
-              </button>
+            {/* Lower Row: Clustered Action Groups */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              {/* Left Cluster: Engine Actions + Lifecycle + Refresh */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {/* Primary Action Button */}
+                <button
+                  type="button"
+                  onClick={handleGenerateSchedule}
+                  style={{
+                    ...primaryActionStyle(),
+                    padding: "9px 18px",
+                    background: "linear-gradient(135deg, #3B4197 0%, #1e247a 100%)",
+                    boxShadow: "0 3px 8px rgba(59, 65, 151, 0.3)",
+                    fontWeight: 800,
+                  }}
+                  disabled={readOnly}
+                >
+                  <ActionButtonLabel icon={<GenerateIcon />}>
+                    {schedule ? "Re-Generate" : "Generate Schedule"}
+                  </ActionButtonLabel>
+                </button>
+
+                <div style={{ width: 1, height: 26, background: "#e2e8f0", margin: "0 2px" }} />
+
+                {/* Save Draft Button */}
+                <button
+                  type="button"
+                  onClick={handleSaveDraft}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "9px 15px",
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    color: "#1e293b",
+                  }}
+                  disabled={readOnly}
+                  title="Save timetable state as a draft"
+                >
+                  <ActionButtonLabel icon={<SaveIcon />}>Save Draft</ActionButtonLabel>
+                </button>
+
+                {/* Publish Button */}
+                <button
+                  type="button"
+                  onClick={handlePublish}
+                  disabled={readOnly}
+                  title={readOnly ? "Read-only mode" : "Publish schedule for school viewing"}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "9px 16px",
+                    border: "1px solid #10b981",
+                    background: "#ecfdf5",
+                    color: "#065f46",
+                    fontWeight: 700,
+                    opacity: readOnly ? 0.55 : 1,
+                    cursor: readOnly ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <ActionButtonLabel icon={<PublishIcon />}>Publish</ActionButtonLabel>
+                </button>
+
+                {/* Refresh Data Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDataRefreshToken((current) => current + 1);
+                    showNotice("Data refreshed from local storage.", "success");
+                  }}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "9px 14px",
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    color: "#334155",
+                  }}
+                  disabled={readOnly}
+                  title="Reload teachers, sections and subjects from storage"
+                >
+                  <ActionButtonLabel icon={<RefreshIcon />}>Refresh Data</ActionButtonLabel>
+                </button>
+              </div>
+
+              {/* Right Cluster: Drawers & Inspectors */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {/* Drafts Drawer Trigger */}
+                <button
+                  type="button"
+                  onClick={() => setActiveDrawerTab((prev) => (prev === "drafts" ? null : "drafts"))}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "8px 14px",
+                    background: activeDrawerTab === "drafts" ? "#e0e7ff" : "#f8fafc",
+                    borderColor: activeDrawerTab === "drafts" ? "#818cf8" : "#e2e8f0",
+                    color: activeDrawerTab === "drafts" ? "#3730a3" : "#475569",
+                    fontWeight: 700,
+                  }}
+                  disabled={readOnly}
+                >
+                  <ActionButtonLabel icon={<DraftsIcon />}>
+                    <span>Drafts</span>
+                    <span
+                      style={{
+                        marginLeft: 4,
+                        padding: "1px 6px",
+                        borderRadius: 99,
+                        fontSize: 11,
+                        background: activeDrawerTab === "drafts" ? "#c7d2fe" : "#e2e8f0",
+                        color: activeDrawerTab === "drafts" ? "#312e81" : "#334155",
+                      }}
+                    >
+                      {draftsForCurrentSchedule.length}
+                    </span>
+                  </ActionButtonLabel>
+                </button>
+
+                {/* Conflicts Drawer Trigger */}
+                <button
+                  type="button"
+                  onClick={() => setActiveDrawerTab((prev) => (prev === "conflicts" ? null : "conflicts"))}
+                  disabled={readOnly}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "8px 14px",
+                    background:
+                      activeDrawerTab === "conflicts"
+                        ? (conflictCount > 0 ? "#ffe4e6" : "#dcfce7")
+                        : (conflictCount > 0 ? "#fff1f2" : "#f0fdf4"),
+                    border:
+                      activeDrawerTab === "conflicts"
+                        ? (conflictCount > 0 ? "1px solid #f43f5e" : "1px solid #22c55e")
+                        : (conflictCount > 0 ? "1px solid #fecdd3" : "1px solid #bbf7d0"),
+                    color: conflictCount > 0 ? "#9f1239" : "#15803d",
+                    fontWeight: 700,
+                  }}
+                  title={conflictCount > 0 ? `${conflictCount} conflicts detected` : "No conflicts detected"}
+                >
+                  <ActionButtonLabel icon={conflictCount > 0 ? <WarningIcon /> : <CheckCircleIcon />}>
+                    <span>Conflicts</span>
+                    <span
+                      style={{
+                        marginLeft: 4,
+                        padding: "1px 6px",
+                        borderRadius: 99,
+                        fontSize: 11,
+                        background: conflictCount > 0 ? "#fda4af" : "#bbf7d0",
+                        color: conflictCount > 0 ? "#881337" : "#14532d",
+                        fontWeight: 800,
+                      }}
+                    >
+                      {conflictCount}
+                    </span>
+                  </ActionButtonLabel>
+                </button>
+
+                {/* Period Restrictions Drawer Trigger */}
+                <button
+                  type="button"
+                  onClick={() => setActiveDrawerTab((prev) => (prev === "restrictions" ? null : "restrictions"))}
+                  disabled={readOnly}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "8px 14px",
+                    background: activeDrawerTab === "restrictions" ? "#dbeafe" : "#eff6ff",
+                    border: activeDrawerTab === "restrictions" ? "1px solid #3b82f6" : "1px solid #bfdbfe",
+                    color: "#1e40af",
+                    fontWeight: 700,
+                    cursor: readOnly ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <ActionButtonLabel icon={<RestrictionIcon />}>
+                    <span>Restrictions</span>
+                    <span
+                      style={{
+                        marginLeft: 4,
+                        padding: "1px 6px",
+                        borderRadius: 99,
+                        fontSize: 11,
+                        background: activeDrawerTab === "restrictions" ? "#bfdbfe" : "#dbeafe",
+                        color: "#1e3a8a",
+                      }}
+                    >
+                      {(effectiveTeacherRestrictions.length + subjectRestrictionsForDisplay.length)}
+                    </span>
+                  </ActionButtonLabel>
+                </button>
+
+                {/* SPA Breakout Settings Drawer Trigger */}
+                <button
+                  type="button"
+                  onClick={() => setActiveDrawerTab((prev) => (prev === "spa" ? null : "spa"))}
+                  disabled={readOnly}
+                  style={{
+                    ...secondaryActionStyle(),
+                    padding: "8px 14px",
+                    background: activeDrawerTab === "spa" ? "#f3e8ff" : "#faf5ff",
+                    border: activeDrawerTab === "spa" ? "1px solid #a855f7" : "1px solid #e9d5ff",
+                    color: "#6b21a8",
+                    fontWeight: 700,
+                    cursor: readOnly ? "not-allowed" : "pointer",
+                  }}
+                  title="Configure SPA Specialization streams and default breakout faculty"
+                >
+                  <ActionButtonLabel icon={<span style={{ fontSize: 14 }}>🎨</span>}>
+                    <span>SPA Breakout</span>
+                    <span
+                      style={{
+                        marginLeft: 4,
+                        padding: "1px 6px",
+                        borderRadius: 99,
+                        fontSize: 11,
+                        background: activeDrawerTab === "spa" ? "#e9d5ff" : "#f3e8ff",
+                        color: "#581c87",
+                      }}
+                    >
+                      {(config?.spaSettings?.specializations?.length || 3)} Streams
+                    </span>
+                  </ActionButtonLabel>
+                </button>
+              </div>
             </div>
+
+            <ConfirmationModal
+              open={confirmModal.open}
+              message={confirmModal.message}
+              onConfirm={confirmModal.onConfirm}
+              onCancel={confirmModal.onCancel}
+              title={confirmModal.title || "Publish Confirmation"}
+              confirmLabel={confirmModal.confirmLabel || "Publish Anyway"}
+            />
           </div>
         </div>
       )}
@@ -2786,6 +3245,37 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
           onLoad={(draftId) => {
             handleLoadDraft(draftId);
             setPreviewDraftModal(null);
+          }}
+        />
+      ) : null}
+
+      {/* SPA Breakout Assignment Modal */}
+      {spaBreakoutModal ? (
+        <SpaBreakoutModal
+          open={!!spaBreakoutModal}
+          modalData={spaBreakoutModal}
+          onClose={() => setSpaBreakoutModal(null)}
+          activeTeachers={activeTeachers}
+          teacherBusyBySlot={teacherBusyBySlot}
+          sectionsById={sectionsById}
+          facultyById={facultyById}
+          subjectsById={subjectsById}
+          config={config}
+          onApply={(breakoutData) => {
+            applyCellAssignment({
+              section: spaBreakoutModal.section,
+              slot: spaBreakoutModal.slot,
+              subjectId: spaBreakoutModal.subjectId,
+              teacherId: breakoutData.primaryTeacherId,
+              coTeacherIds: breakoutData.coTeacherIds,
+              breakoutAssignments: breakoutData.breakoutAssignments,
+              breakoutNote: breakoutData.breakoutNote,
+            });
+            setSpaBreakoutModal(null);
+          }}
+          onRemove={() => {
+            removeAssignmentFromCell(spaBreakoutModal.section, spaBreakoutModal.slot, true);
+            setSpaBreakoutModal(null);
           }}
         />
       ) : null}
@@ -2816,25 +3306,6 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
           <span>{notice.text}</span>
         </div>
       ) : null}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-        {metrics.map((metric) => (
-          <article
-            key={metric.label}
-            style={{
-              background: "#ffffff",
-              border: "1px solid #e3e7ef",
-              borderRadius: 12,
-              padding: 12,
-              display: "grid",
-              gap: 4,
-            }}
-          >
-            <p style={{ margin: 0, color: "#6a7697", fontSize: 12, fontWeight: 700 }}>{metric.label}</p>
-            <p style={{ margin: 0, color: "#24306f", fontSize: 20, fontWeight: 800 }}>{metric.value}</p>
-          </article>
-        ))}
-      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 12, minWidth: 0 }}>
@@ -3238,28 +3709,124 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
                                       ))}
                                     </select>
 
-                                    <select
-                                      value={cellDraft.teacherId}
-                                      onChange={(event) => handleCellTeacherChange(section, slot, event.target.value)}
-                                      style={cellEditorSelectStyle()}
-                                      disabled={!cellDraft.subjectId || readOnly}
-                                    >
-                                      <option value="">Select teacher</option>
-                                      {teacherOptions.map((option) => (
-                                        <option key={option.id} value={option.id} disabled={option.restricted}>
-                                          {option.restricted
-                                            ? `${option.name} (${option.restrictedReason || "Restricted"})`
-                                            : option.statusNote
-                                              ? `${option.name} (${option.statusNote})`
-                                              : option.name}
-                                        </option>
-                                      ))}
-                                    </select>
+                                    {(() => {
+                                      const draftSubj = subjectsById.get(cellDraft.subjectId);
+                                      const isMultiTeacherCell = isSubjectMultiTeacher(draftSubj);
+
+                                      if (isMultiTeacherCell) {
+                                        const streams = getSubjectBreakoutStreams(draftSubj, config);
+                                        return (
+                                          <div style={{ display: "grid", gap: 3 }}>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSpaBreakoutModal({
+                                                  section,
+                                                  slot,
+                                                  cellKey,
+                                                  subjectId: cellDraft.subjectId,
+                                                  assignment,
+                                                });
+                                              }}
+                                              style={{
+                                                padding: "5px 6px",
+                                                borderRadius: 6,
+                                                background: assignment?.breakoutAssignments?.length ? "#eef2ff" : "#f5f3ff",
+                                                border: assignment?.breakoutAssignments?.length ? "1px solid #818cf8" : "1px dashed #a855f7",
+                                                color: "#4338ca",
+                                                fontSize: 10.5,
+                                                fontWeight: 700,
+                                                cursor: "pointer",
+                                                textAlign: "center",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "center",
+                                                gap: 4,
+                                              }}
+                                              title="Open Breakout Modal to assign multiple distinct teachers"
+                                            >
+                                              <span>🎨</span>
+                                              <span>{assignment?.breakoutAssignments?.length ? `Edit ${assignment.breakoutAssignments.length} Teachers` : `Set ${streams.length} Teachers`}</span>
+                                            </button>
+                                            {assignment?.breakoutNote ? (
+                                              <span
+                                                title={assignment.breakoutNote}
+                                                style={{
+                                                  fontSize: 9,
+                                                  color: "#4f46e5",
+                                                  fontWeight: 600,
+                                                  overflow: "hidden",
+                                                  textOverflow: "ellipsis",
+                                                  whiteSpace: "nowrap",
+                                                  textAlign: "center"
+                                                }}
+                                              >
+                                                {assignment.breakoutNote}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        );
+                                      }
+
+                                      return (
+                                        <select
+                                          value={cellDraft.teacherId}
+                                          onChange={(event) => handleCellTeacherChange(section, slot, event.target.value)}
+                                          style={cellEditorSelectStyle()}
+                                          disabled={!cellDraft.subjectId || readOnly}
+                                        >
+                                          <option value="">Select teacher</option>
+                                          {teacherOptions.map((option) => (
+                                            <option key={option.id} value={option.id} disabled={option.restricted}>
+                                              {option.restricted
+                                                ? `${option.name} (${option.restrictedReason || "Restricted"})`
+                                                : option.statusNote
+                                                  ? `${option.name} (${option.statusNote})`
+                                                  : option.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      );
+                                    })()}
                                   </div>
                                 ) : assignment ? (
                                   <div style={{ display: "grid", gap: 2 }}>
                                     <span style={{ color: "#263475", fontSize: 11, fontWeight: 700 }}>{subject?.subjectName || "Subject"}</span>
-                                    <span style={{ color: "#51608d", fontSize: 11 }}>{teacher?.name || "Teacher"}</span>
+                                    {assignment.breakoutNote ? (
+                                      <span
+                                        title={`Click to edit SPA Breakout teachers:\n${assignment.breakoutNote}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSpaBreakoutModal({
+                                            section,
+                                            slot,
+                                            cellKey,
+                                            subjectId: assignment.subjectId,
+                                            assignment,
+                                          });
+                                        }}
+                                        style={{
+                                          color: "#3730a3",
+                                          fontSize: 9.5,
+                                          lineHeight: 1.25,
+                                          fontWeight: 600,
+                                          background: "#eef2ff",
+                                          padding: "3px 5px",
+                                          borderRadius: 4,
+                                          border: "1px solid #c7d2fe",
+                                          whiteSpace: "normal",
+                                          wordBreak: "break-word",
+                                          textAlign: "left",
+                                          cursor: "pointer",
+                                          display: "inline-block",
+                                        }}
+                                      >
+                                        🎨 {assignment.breakoutNote}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "#51608d", fontSize: 11 }}>{teacher?.name || "Teacher"}</span>
+                                    )}
                                   </div>
                                 ) : draftSubject ? (
                                   <div style={{ display: "grid", gap: 2 }}>
@@ -3296,1253 +3863,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
         </div>
       </div>
 
-      {/* Bottom inline conflicts card removed so only 1 side drawer conflict panel is used */}
-      {false && schedule?.conflicts?.length ? (
-        <div id="conflicts-card" style={{ background: "#fff7f8", border: "1px solid #f0c9cf", borderRadius: 12, padding: 12, position: 'relative' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h3 style={{ margin: 0, color: "#a44652", fontSize: 14 }}>Detected Conflicts ({schedule.conflicts.length})</h3>
-              <p style={{ margin: "6px 0 0", color: "#8a4a55", fontSize: 12, fontWeight: 600 }}>
-                Conflicting cells are highlighted in red in the schedule grid.
-              </p>
-            </div>
-            <button
-              type="button"
-              style={{ ...secondaryActionStyle(), minWidth: 90 }}
-              onClick={handleAutoFixAllConflicts}
-              title="Auto-fix all supported conflicts"
-            >
-              Auto-Fix All
-            </button>
-          </div>
-          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            {schedule.conflicts.map((conflict, index) => {
-              // Handler for Apply Fix button for supported conflict types
-              async function handleApplyFixConflict() {
-                const multipleBookingMatch = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
-                if (multipleBookingMatch) {
-                  const teacher = multipleBookingMatch[1];
-                  const period = multipleBookingMatch[3];
-                  const sectionsStr = multipleBookingMatch[4];
-                  const sectionNames = sectionsStr.split(/, ?/);
-                  const mode = conflictSuggestionMode[index] || 0;
-                  let sectionsToChange = [];
-                  if (sectionNames.length === 2) {
-                    sectionsToChange = mode % 2 === 0 ? [sectionNames[0]] : [sectionNames[1]];
-                  } else if (sectionNames.length === 3) {
-                    if (mode % 3 === 0) {
-                      sectionsToChange = [sectionNames[0], sectionNames[1]];
-                    } else if (mode % 3 === 1) {
-                      sectionsToChange = [sectionNames[1], sectionNames[2]];
-                    } else {
-                      sectionsToChange = [sectionNames[0], sectionNames[2]];
-                    }
-                  } else if (sectionNames.length > 3) {
-                    const keepIdx = mode % sectionNames.length;
-                    sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
-                  }
-
-                  function normalizeSectionString(str) {
-                    return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
-                  }
-                  function normalizePeriodLabel(str) {
-                    return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
-                  }
-
-                  let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
-                  if (!slot) {
-                    const periodNumMatch = period.match(/(\d+)/);
-                    if (periodNumMatch) {
-                      const periodNum = parseInt(periodNumMatch[1], 10);
-                      slot = slots.find((s) => String(s.period) === String(periodNum));
-                    }
-                  }
-                  if (!slot) return;
-
-                  let nextAssignments = { ...(schedule?.assignments || {}) };
-                  let nextDrafts = { ...(cellEditorDrafts || {}) };
-
-                  sectionsToChange.forEach((sectionName) => {
-                    let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
-                    if (!sectionObj) {
-                      sectionObj = sections.find((sec) => {
-                        const code = sec.code || '';
-                        const name = sec.name || '';
-                        const grade = sec.grade ? String(sec.grade) : '';
-                        return (
-                          normalizeSectionString(code) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(name) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
-                        );
-                      });
-                    }
-                    if (!sectionObj) return;
-
-                    const cellKey = createCellKey(sectionObj.id, slot.id);
-                    const draft = cellEditorDrafts?.[cellKey] || null;
-                    const subjectId = draft?.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null);
-                    if (!subjectId) return;
-                    const subject = subjectsById.get(subjectId);
-
-                    let availableTeachers = [];
-                    if (subject && slot) {
-                      availableTeachers = activeTeachers.filter((t) => {
-                        if (t.name === teacher) return false;
-                        return isTeacherEligible({
-                          teacher: t,
-                          subject,
-                          section: sectionObj,
-                          slot,
-                          constraints: config.constraints,
-                          teacherBusyBySlot,
-                          excludedSectionId: sectionObj.id,
-                        });
-                      });
-                    }
-
-                    const newTeacherId = availableTeachers.length > 0 ? availableTeachers[0].id : '';
-                    nextDrafts[cellKey] = { subjectId, teacherId: newTeacherId };
-                    nextAssignments[cellKey] = {
-                      subjectId,
-                      teacherId: newTeacherId,
-                      source: 'auto-fix',
-                      updatedAt: new Date().toISOString(),
-                    };
-                  });
-
-                  const evaluation = evaluateSchedule({
-                    assignments: nextAssignments,
-                    sections,
-                    slots,
-                    subjects,
-                    teachers: activeTeachers,
-                    scheduleType,
-                    config,
-                  });
-                  setCellEditorDrafts(nextDrafts);
-                  setSchedule((current) => ({
-                    ...current,
-                    assignments: nextAssignments,
-                    conflicts: evaluation.conflicts,
-                    conflictDetails: evaluation.conflictDetails,
-                    teacherLoadPercent: evaluation.teacherLoadPercent,
-                    updatedAt: new Date().toISOString(),
-                  }));
-                  return;
-                }
-
-                const specializedConflictMatch = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
-                if (specializedConflictMatch) {
-                  const sectionLabel = specializedConflictMatch[1];
-                  const mode = conflictSuggestionMode[index] || 0;
-
-                  function findSectionForSpecializedFix(label) {
-                    let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(label).toLowerCase());
-                    if (!sectionObj) {
-                      sectionObj = sections.find((sec) => {
-                        const code = sec.code || "";
-                        const name = sec.name || "";
-                        const grade = sec.grade ? String(sec.grade) : "";
-                        return (
-                          sanitizeText(code).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                          sanitizeText(name).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                          sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                          sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(label).toLowerCase()
-                        );
-                      });
-                    }
-                    return sectionObj;
-                  }
-
-                  const sectionObj = findSectionForSpecializedFix(sectionLabel);
-                  if (!sectionObj) {
-                    return;
-                  }
-
-                  const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
-                  const specializedEntries = Array.isArray(conflictDetail?.cellKeys)
-                    ? conflictDetail.cellKeys
-                      .map((cellKey) => {
-                        const [, slotId] = splitCellKey(cellKey);
-                        const slot = slotsById.get(slotId);
-                        const draft = cellEditorDrafts?.[cellKey] || null;
-                        const assignment = draft?.subjectId || draft?.teacherId
-                          ? {
-                            subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                            teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                          }
-                          : (schedule?.assignments?.[cellKey] || null);
-                        const subjectObj = assignment?.subjectId ? subjectsById.get(assignment.subjectId) : null;
-                        return { cellKey, slot, assignment, subjectObj };
-                      })
-                      .filter((entry) => {
-                        const type = String(entry?.subjectObj?.subjectType || "").toLowerCase();
-                        return Boolean(entry?.cellKey) && type === "specialized";
-                      })
-                    : [];
-
-                  if (specializedEntries.length <= 1) {
-                    return;
-                  }
-
-                  const sectionCellKeys = Array.from(new Set([
-                    ...Object.keys(schedule?.assignments || {}),
-                    ...Object.keys(cellEditorDrafts || {}),
-                  ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
-
-                  const assignedSubjectIds = new Set();
-                  sectionCellKeys.forEach((cellKey) => {
-                    const draft = cellEditorDrafts?.[cellKey] || null;
-                    const assignment = draft?.subjectId || draft?.teacherId
-                      ? {
-                        subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                        teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                      }
-                      : (schedule?.assignments?.[cellKey] || null);
-                    if (assignment?.subjectId) {
-                      assignedSubjectIds.add(assignment.subjectId);
-                    }
-                  });
-
-                  const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
-                  const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
-
-                  const options = specializedEntries.flatMap((keepSubjectEntry) =>
-                    specializedEntries.map((keepPeriodEntry) => ({
-                      keepSubjectEntry,
-                      keepPeriodEntry,
-                    }))
-                  );
-
-                  if (options.length === 0) {
-                    return;
-                  }
-
-                  const selectedOption = options[mode % options.length];
-                  const keepSubjectEntry = selectedOption.keepSubjectEntry;
-                  const keepPeriodEntry = selectedOption.keepPeriodEntry;
-                  const reassignEntries = specializedEntries.filter((entry) => entry.cellKey !== keepPeriodEntry.cellKey);
-
-                  let nextAssignments = { ...(schedule?.assignments || {}) };
-                  let nextDrafts = { ...(cellEditorDrafts || {}) };
-
-                  function pickTeacherId({ preferredTeacherId, subject, slot }) {
-                    if (!subject || !slot) {
-                      return "";
-                    }
-
-                    const preferredTeacher = preferredTeacherId ? facultyById.get(preferredTeacherId) : null;
-                    if (
-                      preferredTeacher &&
-                      isTeacherEligible({
-                        teacher: preferredTeacher,
-                        subject,
-                        section: sectionObj,
-                        slot,
-                        constraints: config.constraints,
-                        teacherBusyBySlot,
-                        excludedSectionId: sectionObj.id,
-                      })
-                    ) {
-                      return preferredTeacher.id;
-                    }
-
-                    const fallback = activeTeachers.find((teacher) =>
-                      isTeacherEligible({
-                        teacher,
-                        subject,
-                        section: sectionObj,
-                        slot,
-                        constraints: config.constraints,
-                        teacherBusyBySlot,
-                        excludedSectionId: sectionObj.id,
-                      })
-                    );
-
-                    return fallback ? fallback.id : "";
-                  }
-
-                  const keepCellKey = keepPeriodEntry.cellKey;
-                  const keepSlot = keepPeriodEntry.slot;
-                  const keepSubjectId = keepSubjectEntry?.assignment?.subjectId || keepSubjectEntry?.subjectObj?.id || null;
-                  if (keepCellKey && keepSubjectId) {
-                    const keepSubjectObj = subjectsById.get(keepSubjectId);
-                    const keepTeacherId = pickTeacherId({
-                      preferredTeacherId: keepPeriodEntry?.assignment?.teacherId || "",
-                      subject: keepSubjectObj,
-                      slot: keepSlot,
-                    });
-
-                    nextDrafts[keepCellKey] = { subjectId: keepSubjectId, teacherId: keepTeacherId };
-                    nextAssignments[keepCellKey] = {
-                      subjectId: keepSubjectId,
-                      teacherId: keepTeacherId,
-                      source: 'auto-fix',
-                      updatedAt: new Date().toISOString(),
-                    };
-                  }
-
-                  reassignEntries.forEach((entry, replacementIndex) => {
-                    const replacementSubject = missingSubjects[replacementIndex] || missingSubjects[0] || null;
-                    if (!replacementSubject || !entry?.cellKey) {
-                      return;
-                    }
-
-                    const newTeacherId = pickTeacherId({
-                      preferredTeacherId: entry?.assignment?.teacherId || "",
-                      subject: replacementSubject,
-                      slot: entry?.slot,
-                    });
-
-                    nextDrafts[entry.cellKey] = { subjectId: replacementSubject.id, teacherId: newTeacherId };
-                    nextAssignments[entry.cellKey] = {
-                      subjectId: replacementSubject.id,
-                      teacherId: newTeacherId,
-                      source: 'auto-fix',
-                      updatedAt: new Date().toISOString(),
-                    };
-                  });
-
-                  const evaluation = evaluateSchedule({
-                    assignments: nextAssignments,
-                    sections,
-                    slots,
-                    subjects,
-                    teachers: activeTeachers,
-                    scheduleType,
-                    config,
-                  });
-
-                  setCellEditorDrafts(nextDrafts);
-                  setSchedule((current) => ({
-                    ...current,
-                    assignments: nextAssignments,
-                    conflicts: evaluation.conflicts,
-                    conflictDetails: evaluation.conflictDetails,
-                    teacherLoadPercent: evaluation.teacherLoadPercent,
-                    updatedAt: new Date().toISOString(),
-                  }));
-                  return;
-                }
-
-                const duplicateSubjectMatch = conflict.match(/^(.*?) is duplicated in multiple periods for (.*?)\.$/i);
-                if (!duplicateSubjectMatch) {
-                  return;
-                }
-
-                const sectionLabel = duplicateSubjectMatch[2];
-                const mode = conflictSuggestionMode[index] || 0;
-
-                function findSectionForDuplicateFix(label) {
-                  let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(label).toLowerCase());
-                  if (!sectionObj) {
-                    sectionObj = sections.find((sec) => {
-                      const code = sec.code || "";
-                      const name = sec.name || "";
-                      const grade = sec.grade ? String(sec.grade) : "";
-                      return (
-                        sanitizeText(code).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                        sanitizeText(name).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                        sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(label).toLowerCase() ||
-                        sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(label).toLowerCase()
-                      );
-                    });
-                  }
-                  return sectionObj;
-                }
-
-                const sectionObj = findSectionForDuplicateFix(sectionLabel);
-                if (!sectionObj) {
-                  return;
-                }
-
-                const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
-                const duplicateEntries = Array.isArray(conflictDetail?.cellKeys)
-                  ? conflictDetail.cellKeys
-                    .map((cellKey) => {
-                      const [, slotId] = splitCellKey(cellKey);
-                      const slot = slotsById.get(slotId);
-                      return {
-                        cellKey,
-                        slot,
-                      };
-                    })
-                    .filter((entry) => Boolean(entry.cellKey))
-                  : [];
-
-                if (duplicateEntries.length <= 1) {
-                  return;
-                }
-
-                const keepIndex = mode % duplicateEntries.length;
-                const targetEntries = duplicateEntries.filter((_, entryIndex) => entryIndex !== keepIndex);
-                let nextAssignments = { ...(schedule?.assignments || {}) };
-                let nextDrafts = { ...(cellEditorDrafts || {}) };
-
-                const sectionCellKeys = Array.from(new Set([
-                  ...Object.keys(schedule?.assignments || {}),
-                  ...Object.keys(cellEditorDrafts || {}),
-                ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id);
-
-                const assignedSubjectIds = new Set();
-                const subjectCounts = new Map();
-                sectionCellKeys.forEach((cellKey) => {
-                  const draft = cellEditorDrafts?.[cellKey] || null;
-                  const assignment = draft?.subjectId || draft?.teacherId
-                    ? {
-                      subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                      teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                    }
-                    : (schedule?.assignments?.[cellKey] || null);
-                  if (assignment?.subjectId) {
-                    assignedSubjectIds.add(assignment.subjectId);
-                    subjectCounts.set(assignment.subjectId, (subjectCounts.get(assignment.subjectId) || 0) + 1);
-                  }
-                });
-
-                const offeredSubjects = getSubjectsForSection(sectionObj, subjects, scheduleType);
-                const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
-                const underQuotaSubjects = offeredSubjects.filter((sb) => {
-                  const count = subjectCounts.get(sb.id) || 0;
-                  const req = parseBoundedNumber(sb.classesPerWeek, 1, 12, 4);
-                  return count < req;
-                });
-
-                const candidateReplacements = missingSubjects.length > 0
-                  ? missingSubjects
-                  : (underQuotaSubjects.length > 0 ? underQuotaSubjects : offeredSubjects);
-
-                targetEntries.forEach((entry, replacementIndex) => {
-                  const replacementSubject = candidateReplacements[replacementIndex % candidateReplacements.length] || candidateReplacements[0] || null;
-                  if (!replacementSubject) {
-                    return;
-                  }
-
-                  const cellKey = entry.cellKey;
-                  const slot = entry.slot;
-                  const draft = cellEditorDrafts?.[cellKey] || null;
-                  const currentAssignment = draft?.subjectId || draft?.teacherId
-                    ? {
-                      subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                      teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                    }
-                    : (schedule?.assignments?.[cellKey] || null);
-
-                  let newTeacherId = currentAssignment?.teacherId || '';
-                  const currentTeacher = newTeacherId ? facultyById.get(newTeacherId) : null;
-                  const canKeepTeacher = slot && currentTeacher
-                    ? isTeacherEligible({
-                      teacher: currentTeacher,
-                      subject: replacementSubject,
-                      section: sectionObj,
-                      slot,
-                      constraints: config.constraints,
-                      teacherBusyBySlot,
-                      excludedSectionId: sectionObj.id,
-                    })
-                    : false;
-
-                  if (!canKeepTeacher) {
-                    const fallbackTeacher = slot
-                      ? activeTeachers.find((teacher) =>
-                        isTeacherEligible({
-                          teacher,
-                          subject: replacementSubject,
-                          section: sectionObj,
-                          slot,
-                          constraints: config.constraints,
-                          teacherBusyBySlot,
-                          excludedSectionId: sectionObj.id,
-                        })
-                      )
-                      : null;
-                    newTeacherId = fallbackTeacher ? fallbackTeacher.id : '';
-                  }
-
-                  nextDrafts[cellKey] = { subjectId: replacementSubject.id, teacherId: newTeacherId };
-                  nextAssignments[cellKey] = {
-                    subjectId: replacementSubject.id,
-                    teacherId: newTeacherId,
-                    source: 'auto-fix',
-                    updatedAt: new Date().toISOString(),
-                  };
-                });
-
-                const evaluation = evaluateSchedule({
-                  assignments: nextAssignments,
-                  sections,
-                  slots,
-                  subjects,
-                  teachers: activeTeachers,
-                  scheduleType,
-                  config,
-                });
-
-                setCellEditorDrafts(nextDrafts);
-                setSchedule((current) => ({
-                  ...current,
-                  assignments: nextAssignments,
-                  conflicts: evaluation.conflicts,
-                  conflictDetails: evaluation.conflictDetails,
-                  teacherLoadPercent: evaluation.teacherLoadPercent,
-                  updatedAt: new Date().toISOString(),
-                }));
-              }
-              // Dynamic, explicit suggestions: fully resolve multiple-booking conflicts
-              let suggestions = [];
-              let isMultipleBooking = false;
-              let debugInfo = null;
-              if (/is (double|triple|multiple)-booked at (.+) for (.+)/i.test(conflict)) {
-                const match = conflict.match(/^(.*?) is (double|triple|multiple)-booked at (.+) for (.+)\.$/i);
-                if (match) {
-                  isMultipleBooking = true;
-                  const teacher = match[1];
-                  const period = match[3];
-                  const sectionsStr = match[4];
-                  const sectionNames = sectionsStr.split(/, ?/);
-                  // Build suggestions as before
-                  if (sectionNames.length === 2) {
-                    suggestions.push(`Assign a different teacher to ${sectionNames[0]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[1]} at that period.`);
-                    suggestions.push(`Assign a different teacher to ${sectionNames[1]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[0]} at that period.`);
-                  } else if (sectionNames.length === 3) {
-                    suggestions.push(`Assign different teachers to ${sectionNames[0]} and ${sectionNames[1]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[2]} at that period.`);
-                    suggestions.push(`Assign different teachers to ${sectionNames[1]} and ${sectionNames[2]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[0]} at that period.`);
-                    suggestions.push(`Assign different teachers to ${sectionNames[0]} and ${sectionNames[2]} at ${period}, so ${teacher} is only scheduled for ${sectionNames[1]} at that period.`);
-                  } else if (sectionNames.length > 3) {
-                    for (let i = 0; i < sectionNames.length; i++) {
-                      const keepSection = sectionNames[i];
-                      const reassignSections = sectionNames.filter((_, idx) => idx !== i);
-                      suggestions.push(`Assign different teachers to ${reassignSections.join(", ")} at ${period}, so ${teacher} is only scheduled for ${keepSection} at that period.`);
-                    }
-                  }
-                  // Build debug info for the current suggestion
-                  const mode = conflictSuggestionMode[index] || 0;
-                  let sectionsToChange = [];
-                  let sectionToKeep = null;
-                  if (sectionNames.length === 2) {
-                    // Only one to change, one to keep
-                    if (mode % 2 === 0) {
-                      sectionsToChange = [sectionNames[0]];
-                      sectionToKeep = sectionNames[1];
-                    } else {
-                      sectionsToChange = [sectionNames[1]];
-                      sectionToKeep = sectionNames[0];
-                    }
-                  } else if (sectionNames.length === 3) {
-                    if (mode % 3 === 0) {
-                      sectionsToChange = [sectionNames[0], sectionNames[1]];
-                      sectionToKeep = sectionNames[2];
-                    } else if (mode % 3 === 1) {
-                      sectionsToChange = [sectionNames[1], sectionNames[2]];
-                      sectionToKeep = sectionNames[0];
-                    } else {
-                      sectionsToChange = [sectionNames[0], sectionNames[2]];
-                      sectionToKeep = sectionNames[1];
-                    }
-                  } else if (sectionNames.length > 3) {
-                    const keepIdx = mode % sectionNames.length;
-                    sectionToKeep = sectionNames[keepIdx];
-                    sectionsToChange = sectionNames.filter((_, idx) => idx !== keepIdx);
-                  }
-                  // Find slot by period label
-                  // Robustly match period label to slot (normalize both)
-                  function normalizePeriodLabel(str) {
-                    return String(str).replace(/\s+/g, '').replace(/[-–—]/g, '').replace(/\./g, '').toLowerCase();
-                  }
-                  let slot = slots.find((s) => normalizePeriodLabel(s.label) === normalizePeriodLabel(period));
-                  // Fallback: try to match by period number (e.g., "1st Period" => slot with period: 1)
-                  if (!slot) {
-                    const periodNumMatch = period.match(/(\d+)/);
-                    if (periodNumMatch) {
-                      const periodNum = parseInt(periodNumMatch[1], 10);
-                      slot = slots.find((s) => String(s.period) === String(periodNum));
-                    }
-                  }
-                  debugInfo = [];
-                  debugInfo.push(`[DEBUG]`);
-                  debugInfo.push(`Conflict: ${conflict}`);
-                  debugInfo.push(`Period: ${period}`);
-                  debugInfo.push(`Sections to change: ${sectionsToChange.join(", ")}`);
-                  // Helper: normalize a string for loose matching
-                  function normalizeSectionString(str) {
-                    return String(str).replace(/\s+/g, '').replace(/-/g, '').toLowerCase();
-                  }
-                  sectionsToChange.forEach((sectionName) => {
-                    // Use the full sections list for matching
-                    let sectionObj = sections.find((sec) => normalizeSectionString(formatSectionDisplayName(sec)) === normalizeSectionString(sectionName));
-                    if (!sectionObj) {
-                      // Try matching by code or name only
-                      sectionObj = sections.find((sec) => {
-                        const code = sec.code || '';
-                        const name = sec.name || '';
-                        const grade = sec.grade ? String(sec.grade) : '';
-                        return (
-                          normalizeSectionString(code) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(name) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(`${grade}${name}`) === normalizeSectionString(sectionName) ||
-                          normalizeSectionString(`${grade}-${name}`) === normalizeSectionString(sectionName)
-                        );
-                      });
-                    }
-                    if (!sectionObj) {
-                      debugInfo.push(`  ${sectionName}: [Section not found in data]`);
-                      return;
-                    }
-                    let cellKey = null;
-                    let assignment = null;
-                    let subject = null;
-                    let slotId = slot ? slot.id : '(no slot)';
-                    let sectionId = sectionObj.id || '(no section id)';
-                    let draft = null;
-                    if (slot) {
-                      cellKey = createCellKey(sectionObj.id, slot.id);
-                      // Use draft if present, else assignment
-                      draft = cellEditorDrafts?.[cellKey] || null;
-                      if (draft && (draft.subjectId || draft.teacherId)) {
-                        assignment = {
-                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                          source: 'draft',
-                          updatedAt: null
-                        };
-                      } else {
-                        assignment = schedule?.assignments?.[cellKey] || null;
-                      }
-                      subject = assignment && assignment.subjectId ? subjectsById.get(assignment.subjectId) : null;
-                    }
-                    // Find available teachers for this subject and slot
-                    let availableTeachers = [];
-                    if (subject && slot) {
-                      availableTeachers = activeTeachers.filter((t) => {
-                        if (t.name === teacher) return false; // Exclude conflicted teacher
-                        return isTeacherEligible({
-                          teacher: t,
-                          subject,
-                          section: sectionObj,
-                          slot,
-                          constraints: config.constraints,
-                          teacherBusyBySlot,
-                          excludedSectionId: sectionObj.id,
-                        });
-                      });
-                    }
-                    debugInfo.push(`  ${sectionName}:`);
-                    debugInfo.push(`    Section ID: ${sectionId}`);
-                    debugInfo.push(`    Slot ID: ${slotId}`);
-                    debugInfo.push(`    CellKey: ${cellKey || '(no id)'}`);
-                    debugInfo.push(`    Assignment: ${assignment ? JSON.stringify(assignment) : 'null'}`);
-                    debugInfo.push(`    Assigned Subject: ${subject ? subject.subjectName : '(none)'}`);
-                    debugInfo.push(`    Assigned Teacher: ${assignment ? (facultyById.get(assignment.teacherId)?.name || '(none)') : '(none)'}`);
-                    debugInfo.push(`    Available Teachers: ${availableTeachers.length > 0 ? availableTeachers.map(t => t.name).join(', ') : '(none)'}`);
-                    // Show assignment keys for this cell
-                    if (schedule && schedule.assignments && cellKey) {
-                      debugInfo.push(`    Assignment keys: ${Object.keys(schedule.assignments).filter(k => k === cellKey).join(', ')}`);
-                    }
-                  });
-                  // (Removed debug line for all assignment keys)
-                  debugInfo.push(`Section to keep: ${sectionToKeep}`);
-                }
-              }
-              // Fallback to previous logic for other conflicts
-              if (!isMultipleBooking) {
-                const mode = conflictSuggestionMode[index] || 0;
-                // Unavailable teacher
-                if (/(.+) is unavailable\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) (\d+.*?): (.*?) is unavailable\.$/i);
-                  if (match) {
-                    const sectionPeriod = match[1] + ' ' + match[2];
-                    const teacher = match[3];
-                    suggestions = [
-                      `${teacher} is not available for ${sectionPeriod}. Assign a different teacher who is available at this time.`,
-                      `Move this subject in ${sectionPeriod} to a period when ${teacher} is available.`,
-                      `Assign a substitute teacher for ${sectionPeriod} to cover for ${teacher}.`,
-                      `Reschedule ${teacher}'s other commitments to make them available for ${sectionPeriod}.`,
-                    ];
-                  } else {
-                    suggestions = [
-                      "The assigned teacher is unavailable. Assign a different teacher.",
-                      "Move this subject to a period when the teacher is available.",
-                      "Assign a substitute teacher for this period.",
-                    ];
-                  }
-                } else if (/(.+) is restricted for this period\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) (\d+.*?): (.*?) is restricted for this period\.$/i);
-                  if (match) {
-                    const sectionPeriod = match[1] + ' ' + match[2];
-                    const teacher = match[3];
-                    suggestions = [
-                      `${teacher} cannot be assigned to ${sectionPeriod} due to a restriction. Assign a different teacher.`,
-                      `Move this subject in ${sectionPeriod} to a period that is not restricted for ${teacher}.`,
-                      `Request an exception to the restriction for ${teacher} at ${sectionPeriod}.`,
-                    ];
-                  } else {
-                    suggestions = [
-                      "The assigned teacher is restricted for this period. Assign a different teacher.",
-                      "Move this subject to a period without restrictions.",
-                    ];
-                  }
-                } else if (/(.+) is restricted for this period\./i.test(conflict)) {
-                  suggestions = [
-                    "The subject is restricted for this period. Move this subject to a different period.",
-                    "Adjust the subject's restrictions to allow this period.",
-                  ];
-                } else if (/is duplicated in multiple periods for (.+)\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) is duplicated in multiple periods for (.*?)\.$/i);
-                  if (match) {
-                    const subject = match[1];
-                    const section = match[2];
-                    function findSectionForDuplicateDebug(sectionLabel) {
-                      let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(sectionLabel).toLowerCase());
-                      if (!sectionObj) {
-                        sectionObj = sections.find((sec) => {
-                          const code = sec.code || "";
-                          const name = sec.name || "";
-                          const grade = sec.grade ? String(sec.grade) : "";
-                          return (
-                            sanitizeText(code).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(name).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase()
-                          );
-                        });
-                      }
-                      return sectionObj;
-                    }
-
-                    const sectionObj = findSectionForDuplicateDebug(section);
-                    const offeredSubjects = sectionObj ? getSubjectsForSection(sectionObj, subjects, scheduleType) : [];
-                    const sectionCellKeys = sectionObj
-                      ? Array.from(new Set([
-                        ...Object.keys(schedule?.assignments || {}),
-                        ...Object.keys(cellEditorDrafts || {}),
-                      ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id)
-                      : [];
-
-                    const assignedSubjectMap = new Map();
-                    sectionCellKeys.forEach((cellKey) => {
-                      const [sectionId, slotId] = splitCellKey(cellKey);
-                      if (!sectionObj || sectionId !== sectionObj.id) {
-                        return;
-                      }
-
-                      const draft = cellEditorDrafts?.[cellKey] || null;
-                      const assignment = draft?.subjectId || draft?.teacherId
-                        ? {
-                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                          source: "draft",
-                        }
-                        : (schedule?.assignments?.[cellKey] || null);
-
-                      if (!assignment?.subjectId) {
-                        return;
-                      }
-
-                      const existing = assignedSubjectMap.get(assignment.subjectId) || {
-                        label: subjectsById.get(assignment.subjectId)?.subjectName || subjectsById.get(assignment.subjectId)?.subjectCode || assignment.subjectId,
-                        periods: [],
-                        cellKeys: [],
-                        teachers: [],
-                      };
-                      const slot = slotsById.get(slotId);
-                      const periodLabel = slot ? formatPeriodOrdinalLabel(slot) : slotId;
-                      const teacherLabel = assignment.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
-
-                      existing.periods.push(periodLabel);
-                      existing.cellKeys.push(cellKey);
-                      if (!existing.teachers.includes(teacherLabel)) {
-                        existing.teachers.push(teacherLabel);
-                      }
-                      assignedSubjectMap.set(assignment.subjectId, existing);
-                    });
-
-                    const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectMap.has(subjectItem.id));
-                    const missingSubjectNames = missingSubjects
-                      .map((subjectItem) => sanitizeText(subjectItem?.subjectName))
-                      .filter(Boolean);
-
-                    function formatNaturalList(items) {
-                      const safeItems = (items || []).map((item) => sanitizeText(item)).filter(Boolean);
-                      if (safeItems.length === 0) {
-                        return "the missing subject";
-                      }
-
-                      if (safeItems.length === 1) {
-                        return safeItems[0];
-                      }
-
-                      if (safeItems.length === 2) {
-                        return `${safeItems[0]} and ${safeItems[1]}`;
-                      }
-
-                      return `${safeItems.slice(0, -1).join(", ")}, and ${safeItems[safeItems.length - 1]}`;
-                    }
-                    const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
-                    const duplicatePeriods = Array.isArray(conflictDetail?.cellKeys)
-                      ? conflictDetail.cellKeys
-                        .map((cellKey) => {
-                          const [, slotId] = splitCellKey(cellKey);
-                          const slot = slotsById.get(slotId);
-                          return {
-                            cellKey,
-                            slot,
-                            label: slot ? formatPeriodOrdinalLabel(slot) : slotId,
-                          };
-                        })
-                        .filter((entry) => Boolean(entry.cellKey))
-                      : [];
-
-                    if (duplicatePeriods.length > 0) {
-                      suggestions = duplicatePeriods.map((keepEntry, duplicateIndex) => {
-                        const otherPeriods = duplicatePeriods
-                          .filter((_, otherIndex) => otherIndex !== duplicateIndex)
-                          .map((entry) => entry.label);
-                        const subjectsToAssign = otherPeriods.map((_, idx) => missingSubjectNames[idx] || "a missing subject");
-                        const missingListText = formatNaturalList(subjectsToAssign);
-
-                        if (otherPeriods.length === 0) {
-                          return `This section does not have ${formatNaturalList(missingSubjectNames)}. Keep ${subject} at ${keepEntry.label}.`;
-                        }
-
-                        if (otherPeriods.length === 1) {
-                          return `This section does not have ${missingListText}. Keep ${subject} at ${keepEntry.label}, and assign ${subjectsToAssign[0]} at ${otherPeriods[0]}.`;
-                        }
-
-                        const assignmentsText = formatNaturalList(subjectsToAssign.map((subjectName, idx) => `${subjectName} at ${otherPeriods[idx]}`));
-                        return `This section does not have ${missingListText}. Keep ${subject} at ${keepEntry.label}, and assign ${assignmentsText}.`;
-                      });
-                      const currentMode = conflictSuggestionMode[index] || 0;
-                      const activeSuggestion = suggestions[currentMode % suggestions.length] || "";
-                      const debugLines = [
-                        "[DEBUG] Duplicate Subject Conflict",
-                        `Section: ${sectionObj ? formatConflictSectionName(sectionObj) : section}`,
-                        `Duplicated Subject: ${subject}`,
-                        "Periods where subject is duplicated:",
-                      ];
-
-                      duplicatePeriods.forEach((entry, periodIndex) => {
-                        const draft = cellEditorDrafts?.[entry.cellKey] || null;
-                        const assignment = draft?.subjectId || draft?.teacherId
-                          ? {
-                            subjectId: draft.subjectId || (schedule?.assignments?.[entry.cellKey]?.subjectId ?? null),
-                            teacherId: draft.teacherId || (schedule?.assignments?.[entry.cellKey]?.teacherId ?? null),
-                            source: "draft",
-                          }
-                          : (schedule?.assignments?.[entry.cellKey] || null);
-                        const assignedSubject = assignment?.subjectId ? (subjectsById.get(assignment.subjectId)?.subjectName || assignment.subjectId) : "(none)";
-                        const assignedTeacher = assignment?.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
-                        debugLines.push(`  ${periodIndex + 1}. Period: ${entry.label}`);
-                        debugLines.push(`     CellKey: ${entry.cellKey}`);
-                        debugLines.push(`     Assignment: ${assignment ? JSON.stringify(assignment) : "null"}`);
-                        debugLines.push(`     Assigned Subject: ${assignedSubject}`);
-                        debugLines.push(`     Assigned Teacher: ${assignedTeacher}`);
-                      });
-
-                      if (sectionObj) {
-                        debugLines.push(`Subject offerings for ${getScheduleTypeLabel(scheduleType)}:`);
-                        if (offeredSubjects.length === 0) {
-                          debugLines.push("  [No subject offerings found for this section and schedule type]");
-                        } else {
-                          offeredSubjects.forEach((subjectItem) => {
-                            debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
-                          });
-                        }
-
-                        debugLines.push("Assigned subjects in this section:");
-                        if (assignedSubjectMap.size === 0) {
-                          debugLines.push("  [No assigned subjects found]");
-                        } else {
-                          Array.from(assignedSubjectMap.values()).forEach((entry) => {
-                            debugLines.push(`  - ${entry.label}`);
-                            debugLines.push(`    Periods: ${entry.periods.join(", ")}`);
-                            debugLines.push(`    CellKeys: ${entry.cellKeys.join(", ")}`);
-                            debugLines.push(`    Teachers: ${entry.teachers.join(", ")}`);
-                          });
-                        }
-
-                        debugLines.push("Missing subjects in this section:");
-                        if (missingSubjects.length === 0) {
-                          debugLines.push("  [No missing subjects]");
-                        } else {
-                          missingSubjects.forEach((subjectItem) => {
-                            debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
-                          });
-                        }
-                      } else {
-                        debugLines.push("Subject offerings for this schedule type:");
-                        debugLines.push("  [Section not found in data, so offerings and missing subjects could not be derived]");
-                      }
-
-                      debugLines.push(`Current suggested fix shown: ${activeSuggestion}`);
-                      debugInfo = debugLines;
-                    } else {
-                      suggestions = [
-                        `${subject} is assigned more than once for ${section}. Remove the duplicate assignment(s) so that this subject only appears once per section.`,
-                        `Keep only one assignment of ${subject} for ${section} and remove the rest.`,
-                        `Reassign one of the duplicate periods to a different subject.`,
-                      ];
-                    }
-
-                    if (!debugInfo) {
-                      debugInfo = [
-                        "[DEBUG] Duplicate Subject Conflict",
-                        `Section: ${section}`,
-                        `Duplicated Subject: ${subject}`,
-                        "Periods where subject is duplicated:",
-                        "  [No duplicate period data found in conflict details]",
-                        `Current suggested fix shown: ${suggestions[conflictSuggestionMode[index] || 0] || "(none)"}`,
-                      ];
-                    }
-                  }
-                } else if (/lacks subject expertise for (.+)\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) lacks subject expertise for (.*?)\.$/i);
-                  if (match) {
-                    const teacher = match[1];
-                    const subject = match[2];
-                    suggestions = [
-                      `${teacher} does not have the required expertise to teach ${subject}. Assign a teacher who is qualified for this subject.`,
-                      `Assign a different teacher with expertise in ${subject}.`,
-                      `Provide training to ${teacher} so they can teach ${subject} in the future.`,
-                    ];
-                  }
-                } else if (/does not match Grade (\d+)/i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) does not match Grade (\d+)\.$/i);
-                  if (match) {
-                    const teacher = match[1];
-                    const grade = match[2];
-                    suggestions = [
-                      `${teacher} is not qualified to teach Grade ${grade}. Assign a teacher who is qualified for Grade ${grade}.`,
-                      `Assign a teacher with Grade ${grade} qualifications.`,
-                      `Move this assignment to a grade that matches ${teacher}'s qualifications.`,
-                    ];
-                  }
-                } else if (/has more than one specialized subject assigned \((.+)\)\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) has more than one specialized subject assigned \((.*?)\)\.$/i);
-                  if (match) {
-                    const section = match[1];
-                    function findSectionForSpecializedFix(sectionLabel) {
-                      let sectionObj = sections.find((sec) => sanitizeText(formatConflictSectionName(sec)).toLowerCase() === sanitizeText(sectionLabel).toLowerCase());
-                      if (!sectionObj) {
-                        sectionObj = sections.find((sec) => {
-                          const code = sec.code || "";
-                          const name = sec.name || "";
-                          const grade = sec.grade ? String(sec.grade) : "";
-                          return (
-                            sanitizeText(code).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(name).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(`${grade}${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase() ||
-                            sanitizeText(`${grade}-${name}`).toLowerCase() === sanitizeText(sectionLabel).toLowerCase()
-                          );
-                        });
-                      }
-                      return sectionObj;
-                    }
-
-                    function formatNaturalList(items) {
-                      const safeItems = (items || []).map((item) => sanitizeText(item)).filter(Boolean);
-                      if (safeItems.length === 0) {
-                        return "the missing subject";
-                      }
-
-                      if (safeItems.length === 1) {
-                        return safeItems[0];
-                      }
-
-                      if (safeItems.length === 2) {
-                        return `${safeItems[0]} and ${safeItems[1]}`;
-                      }
-
-                      return `${safeItems.slice(0, -1).join(", ")}, and ${safeItems[safeItems.length - 1]}`;
-                    }
-
-                    const sectionObj = findSectionForSpecializedFix(section);
-                    const conflictDetail = (conflictDetailsForDisplay || []).find((entry) => sanitizeText(entry?.message) === sanitizeText(conflict));
-                    const specializedEntries = Array.isArray(conflictDetail?.cellKeys)
-                      ? conflictDetail.cellKeys
-                        .map((cellKey) => {
-                          const [, slotId] = splitCellKey(cellKey);
-                          const slot = slotsById.get(slotId);
-                          const draft = cellEditorDrafts?.[cellKey] || null;
-                          const assignment = draft?.subjectId || draft?.teacherId
-                            ? {
-                              subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                              teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                              source: "draft",
-                            }
-                            : (schedule?.assignments?.[cellKey] || null);
-                          const subjectObj = assignment?.subjectId ? subjectsById.get(assignment.subjectId) : null;
-                          return {
-                            cellKey,
-                            slot,
-                            label: slot ? formatPeriodOrdinalLabel(slot) : slotId,
-                            assignment,
-                            subjectObj,
-                          };
-                        })
-                        .filter((entry) => {
-                          const type = String(entry?.subjectObj?.subjectType || "").toLowerCase();
-                          return Boolean(entry?.cellKey) && type === "specialized";
-                        })
-                      : [];
-
-                    const offeredSubjects = sectionObj ? getSubjectsForSection(sectionObj, subjects, scheduleType) : [];
-                    const sectionCellKeys = sectionObj
-                      ? Array.from(new Set([
-                        ...Object.keys(schedule?.assignments || {}),
-                        ...Object.keys(cellEditorDrafts || {}),
-                      ])).filter((cellKey) => splitCellKey(cellKey)[0] === sectionObj.id)
-                      : [];
-
-                    const assignedSubjectIds = new Set();
-                    sectionCellKeys.forEach((cellKey) => {
-                      const draft = cellEditorDrafts?.[cellKey] || null;
-                      const assignment = draft?.subjectId || draft?.teacherId
-                        ? {
-                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                        }
-                        : (schedule?.assignments?.[cellKey] || null);
-                      if (assignment?.subjectId) {
-                        assignedSubjectIds.add(assignment.subjectId);
-                      }
-                    });
-
-                    const missingSubjects = offeredSubjects.filter((subjectItem) => !assignedSubjectIds.has(subjectItem.id));
-                    const missingSubjectNames = missingSubjects
-                      .map((subjectItem) => sanitizeText(subjectItem?.subjectName))
-                      .filter(Boolean);
-                    const assignedSubjectMap = new Map();
-                    sectionCellKeys.forEach((cellKey) => {
-                      const [, slotId] = splitCellKey(cellKey);
-                      const slot = slotsById.get(slotId);
-                      const draft = cellEditorDrafts?.[cellKey] || null;
-                      const assignment = draft?.subjectId || draft?.teacherId
-                        ? {
-                          subjectId: draft.subjectId || (schedule?.assignments?.[cellKey]?.subjectId ?? null),
-                          teacherId: draft.teacherId || (schedule?.assignments?.[cellKey]?.teacherId ?? null),
-                          source: "draft",
-                        }
-                        : (schedule?.assignments?.[cellKey] || null);
-                      if (!assignment?.subjectId) {
-                        return;
-                      }
-
-                      const subjectObj = subjectsById.get(assignment.subjectId);
-                      const subjectLabel = subjectObj?.subjectName || subjectObj?.subjectCode || assignment.subjectId;
-                      const periodLabel = slot ? formatPeriodOrdinalLabel(slot) : slotId;
-                      const teacherLabel = assignment.teacherId ? (facultyById.get(assignment.teacherId)?.name || assignment.teacherId) : "(none)";
-                      const existing = assignedSubjectMap.get(assignment.subjectId) || {
-                        label: subjectLabel,
-                        periods: [],
-                        cellKeys: [],
-                        teachers: [],
-                      };
-
-                      existing.periods.push(periodLabel);
-                      existing.cellKeys.push(cellKey);
-                      if (!existing.teachers.includes(teacherLabel)) {
-                        existing.teachers.push(teacherLabel);
-                      }
-                      assignedSubjectMap.set(assignment.subjectId, existing);
-                    });
-
-                    if (specializedEntries.length > 0) {
-                      suggestions = specializedEntries.flatMap((keepSubjectEntry) => {
-                        const keptSpecializedLabel = keepSubjectEntry?.subjectObj?.subjectName || keepSubjectEntry?.subjectObj?.subjectCode || "specialized subject";
-
-                        return specializedEntries.map((keepPeriodEntry) => {
-                          const reassignEntries = specializedEntries.filter((entry) => entry.cellKey !== keepPeriodEntry.cellKey);
-                          const subjectsToAssign = reassignEntries.map((_, assignIndex) => missingSubjectNames[assignIndex] || "a missing subject");
-                          const missingListText = formatNaturalList(subjectsToAssign);
-
-                          if (reassignEntries.length === 0) {
-                            return `A special section should only have atmost one specialized subject. This section does not have ${formatNaturalList(missingSubjectNames)}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}.`;
-                          }
-
-                          if (reassignEntries.length === 1) {
-                            return `A special section should only have atmost one specialized subject. This section does not have ${missingListText}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}, and assign ${subjectsToAssign[0]} at ${reassignEntries[0].label}.`;
-                          }
-
-                          const assignmentsText = formatNaturalList(reassignEntries.map((entry, assignIndex) => `${subjectsToAssign[assignIndex]} at ${entry.label}`));
-                          return `A special section should only have atmost one specialized subject. This section does not have ${missingListText}. Keep ${keptSpecializedLabel} at ${keepPeriodEntry.label}, and assign ${assignmentsText}.`;
-                        });
-                      });
-
-                      const currentMode = conflictSuggestionMode[index] || 0;
-                      const activeSuggestion = suggestions[currentMode % suggestions.length] || "";
-                      const debugLines = [
-                        "[DEBUG] Multiple Specialized Subject Conflict",
-                        `Section: ${sectionObj ? formatConflictSectionName(sectionObj) : section}`,
-                        "Specialized subjects involved:",
-                      ];
-
-                      specializedEntries.forEach((entry, entryIndex) => {
-                        const subjectLabel = entry?.subjectObj?.subjectName || entry?.subjectObj?.subjectCode || "(unknown subject)";
-                        const teacherLabel = entry?.assignment?.teacherId
-                          ? (facultyById.get(entry.assignment.teacherId)?.name || entry.assignment.teacherId)
-                          : "(none)";
-                        debugLines.push(`  ${entryIndex + 1}. ${subjectLabel}`);
-                        debugLines.push(`     Period: ${entry.label}`);
-                        debugLines.push(`     CellKey: ${entry.cellKey}`);
-                        debugLines.push(`     Assignment: ${entry.assignment ? JSON.stringify(entry.assignment) : "null"}`);
-                        debugLines.push(`     Assigned Teacher: ${teacherLabel}`);
-                      });
-
-                      debugLines.push(`Subject offerings for ${getScheduleTypeLabel(scheduleType)}:`);
-                      if (offeredSubjects.length === 0) {
-                        debugLines.push("  [No subject offerings found for this section and schedule type]");
-                      } else {
-                        offeredSubjects.forEach((subjectItem) => {
-                          debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
-                        });
-                      }
-
-                      debugLines.push("Assigned subjects in this section:");
-                      if (assignedSubjectMap.size === 0) {
-                        debugLines.push("  [No assigned subjects found]");
-                      } else {
-                        Array.from(assignedSubjectMap.values()).forEach((entry) => {
-                          debugLines.push(`  - ${entry.label}`);
-                          debugLines.push(`    Periods: ${entry.periods.join(", ")}`);
-                          debugLines.push(`    CellKeys: ${entry.cellKeys.join(", ")}`);
-                          debugLines.push(`    Teachers: ${entry.teachers.join(", ")}`);
-                        });
-                      }
-
-                      debugLines.push("Missing subjects in this section:");
-                      if (missingSubjects.length === 0) {
-                        debugLines.push("  [No missing subjects]");
-                      } else {
-                        missingSubjects.forEach((subjectItem) => {
-                          debugLines.push(`  - ${subjectItem.subjectName}${subjectItem.subjectCode ? ` (${subjectItem.subjectCode})` : ""}`);
-                        });
-                      }
-
-                      debugLines.push(`Current suggested fix shown: ${activeSuggestion}`);
-                      debugInfo = debugLines;
-                    } else {
-                      const subjects = match[2];
-                      suggestions = [
-                        `${section} has more than one specialized subject assigned: ${subjects}. Remove one of these specialized subjects so that only one is assigned to this section.`,
-                        `Review the specialized subjects assigned to ${section} and keep only the most appropriate one.`,
-                        `Consult the curriculum guidelines to determine which specialized subject should remain.`,
-                      ];
-
-                      debugInfo = [
-                        "[DEBUG] Multiple Specialized Subject Conflict",
-                        `Section: ${section}`,
-                        "Specialized subjects involved:",
-                        `  ${subjects}`,
-                        `Current suggested fix shown: ${suggestions[conflictSuggestionMode[index] || 0] || "(none)"}`,
-                      ];
-                    }
-                  }
-                } else if (/Invalid assignment reference in (.+)\./i.test(conflict)) {
-                  const match = conflict.match(/^Invalid assignment reference in (.*?)\.$/i);
-                  if (match) {
-                    const ref = match[1];
-                    suggestions = [
-                      `There is an invalid assignment for ${ref.replace(/-/g, ' ')}. Please review and correct or remove this assignment.`,
-                      `Remove or update the invalid assignment for ${ref.replace(/-/g, ' ')} to resolve this issue.`,
-                      `Check the assignment data for errors or inconsistencies in ${ref.replace(/-/g, ' ')}.`,
-                    ];
-                  }
-                } else if (/period not valid for section settings\./i.test(conflict)) {
-                  const match = conflict.match(/^(.*?) (\d+.*?): period not valid for section settings\.$/i);
-                  if (match) {
-                    const section = match[1];
-                    const period = match[2];
-                    suggestions = [
-                      `The ${period} is not a valid period for ${section} based on its section settings. Move this assignment to a valid period for this section.`,
-                      `Check the section settings for ${section} and assign this subject to a valid period.`,
-                      `Adjust the section's period configuration to allow for this assignment, if appropriate.`,
-                    ];
-                  } else {
-                    suggestions = [
-                      "This period is not valid for the section. Move the assignment to a valid period.",
-                      "Assign this subject to a valid period for the section.",
-                    ];
-                  }
-                } else {
-                  suggestions = [
-                    "Review this conflict and adjust assignments as needed.",
-                    "Consult the scheduling guidelines or contact an administrator for further assistance.",
-                  ];
-                }
-              }
-              // Determine which suggestion to show
-              const mode = conflictSuggestionMode[index] || 0;
-              const suggestionToShow = suggestions[mode % suggestions.length];
-              return (
-                <div
-                  key={`${conflict}-${index}`}
-                  style={{
-                    border: "1.5px dashed #e53935",
-                    borderRadius: 10,
-                    background: "#fff7f8",
-                    padding: 12,
-                    color: "#b71c1c",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 16,
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, justifyContent: 'center' }}>
-                    <div style={{ wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{conflict}</div>
-                    <div style={{ color: "#7a8bb7", fontSize: 12, fontWeight: 500, wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{suggestionToShow}</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      type="button"
-                      style={{
-                        border: 'none',
-                        borderRadius: 999,
-                        minWidth: 110,
-                        padding: '6px 18px',
-                        background: '#1a3a8c',
-                        color: '#fff',
-                        fontWeight: 700,
-                        fontSize: 13,
-                        cursor: 'pointer',
-                        boxShadow: '0 2px 8px rgba(26,58,140,0.08)',
-                        opacity: 1,
-                        transition: 'background 0.2s',
-                      }}
-                      onClick={handleApplyFixConflict}
-                      title="Apply this fix"
-                    >
-                      Apply Fix
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        border: 'none',
-                        borderRadius: 999,
-                        minWidth: 110,
-                        padding: '6px 18px',
-                        background: '#eaf0fa',
-                        color: '#1a3a8c',
-                        fontWeight: 700,
-                        fontSize: 13,
-                        cursor: 'pointer',
-                        boxShadow: '0 2px 8px rgba(26,58,140,0.08)',
-                        opacity: 0.7,
-                      }}
-                      onClick={() => setConflictSuggestionMode((prev) => ({ ...prev, [index]: (prev[index] || 0) + 1 }))}
-                      title="See other options"
-                    >
-                      See Other Option
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      {/* Conflicts and recommendations are managed in ScheduleDrawerPanel */}
 
       <ScheduleDrawerPanel
         activeDrawerTab={activeDrawerTab}
@@ -4556,6 +3877,21 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
         smallDangerStyle={smallDangerStyle}
         schedule={schedule}
         conflictsForDisplay={conflictsForDisplay}
+        conflictDetailsForDisplay={conflictDetailsForDisplay}
+        sections={sections}
+        slots={slots}
+        subjects={subjects}
+        activeTeachers={activeTeachers}
+        facultyById={facultyById}
+        subjectsById={subjectsById}
+        slotsById={slotsById}
+        sectionsById={sectionsById}
+        config={config}
+        scheduleType={scheduleType}
+        cellEditorDrafts={cellEditorDrafts}
+        setCellEditorDrafts={setCellEditorDrafts}
+        setSchedule={setSchedule}
+        showNotice={showNotice}
         handleAutoFixAllConflicts={handleAutoFixAllConflicts}
         secondaryActionStyle={secondaryActionStyle}
         effectiveTeacherRestrictions={effectiveTeacherRestrictions}
@@ -4581,6 +3917,7 @@ export default function ScheduleGenerator({ readOnly = false, hideControls = fal
         notice={notice}
         capacityIssues={capacityIssues}
         handleQuickIncreasePeriods={handleQuickIncreasePeriods}
+        handleSaveSpaSettings={handleSaveSpaSettings}
       />
     </div>
   );
@@ -5346,9 +4683,142 @@ function generateSchedule({ scheduleType, sections, slots, subjects, activeTeach
       const permLabel = isPermanentTeacher(teacher) ? "Permanent / Regular" : "Non-Permanent";
       const loadVal = (teacherLoad.get(teacher.id) || 0) + 1;
 
+      // Check if this subject requires multi-teacher breakout (e.g. SPA, SPS, TVL workshop, or custom multi-teacher)
+      const isMultiTeacher = isSubjectMultiTeacher(subj);
+
+      let coTeacherIds = [];
+      let breakoutNote = "";
+      let breakoutAssignments = [];
+
+      if (isMultiTeacher) {
+        const configuredStreams = getSubjectBreakoutStreams(subj, config);
+
+        const chosenStreams = [];
+        const usedTeacherIds = new Set();
+
+        configuredStreams.forEach((stream, streamIdx) => {
+          let pickedTeacher = null;
+
+          // 1. Priority 1 (Designated Specialist): Check if configured default teacher is free & valid
+          if (stream.defaultTeacherId && !usedTeacherIds.has(stream.defaultTeacherId)) {
+            const defT = activeTeachers.find((t) => t.id === stream.defaultTeacherId);
+            if (defT) {
+              const busyMap = teacherBusyBySlot.get(defT.id);
+              const isBusy = busyMap && busyMap.has(targetSlot.id);
+              const isRestricted = matchesUnavailablePeriod(targetSlot, defT.unavailablePeriods);
+              if (!isBusy && !isRestricted) {
+                pickedTeacher = defT;
+              }
+            }
+          }
+
+          // 2. Priority 2 (Stream-Level Specialization / Major Match - ANY free teacher with that major):
+          const qualificationTarget = (stream.requiredMajor && stream.requiredMajor !== "auto")
+            ? stream.requiredMajor
+            : stream.name;
+
+          if (!pickedTeacher && qualificationTarget) {
+            const specializedCandidates = activeTeachers.filter((t) => {
+              if (usedTeacherIds.has(t.id)) return false;
+              if (!doesTeacherMatchSubject(t, subj)) return false;
+              if (!doesTeacherMatchStream(t, qualificationTarget)) return false;
+              const busyMap = teacherBusyBySlot.get(t.id);
+              if (busyMap && busyMap.has(targetSlot.id)) return false;
+              if (matchesUnavailablePeriod(targetSlot, t.unavailablePeriods)) return false;
+              return true;
+            });
+            if (specializedCandidates.length > 0) {
+              // Lowest workload first, with random distribution among equally-loaded candidates
+              specializedCandidates.sort((a, b) => {
+                const loadA = teacherLoad.get(a.id) || 0;
+                const loadB = teacherLoad.get(b.id) || 0;
+                if (loadA !== loadB) return loadA - loadB;
+                return Math.random() - 0.5;
+              });
+              pickedTeacher = specializedCandidates[0];
+            }
+          }
+
+          // 3. Priority 3 (Candidate Reuse): If first stream and initial 'teacher' from outer scope is free and not used:
+          if (!pickedTeacher && streamIdx === 0 && teacher && !usedTeacherIds.has(teacher.id)) {
+            const busyMap = teacherBusyBySlot.get(teacher.id);
+            const isBusy = busyMap && busyMap.has(targetSlot.id);
+            const isRestricted = matchesUnavailablePeriod(targetSlot, teacher.unavailablePeriods);
+            if (!isBusy && !isRestricted) {
+              pickedTeacher = teacher;
+            }
+          }
+
+          // 4. Priority 4 (Department / Subject Fallback): find any available qualified department teacher free at targetSlot
+          if (!pickedTeacher) {
+            const fallbackCandidates = activeTeachers.filter((t) => {
+              if (usedTeacherIds.has(t.id)) return false;
+              if (!doesTeacherMatchSubject(t, subj)) return false;
+              const busyMap = teacherBusyBySlot.get(t.id);
+              if (busyMap && busyMap.has(targetSlot.id)) return false;
+              if (matchesUnavailablePeriod(targetSlot, t.unavailablePeriods)) return false;
+              return true;
+            });
+            if (fallbackCandidates.length > 0) {
+              fallbackCandidates.sort((a, b) => {
+                const loadA = teacherLoad.get(a.id) || 0;
+                const loadB = teacherLoad.get(b.id) || 0;
+                if (loadA !== loadB) return loadA - loadB;
+                return Math.random() - 0.5;
+              });
+              pickedTeacher = fallbackCandidates[0];
+            }
+          }
+
+          if (pickedTeacher) {
+            usedTeacherIds.add(pickedTeacher.id);
+            chosenStreams.push({
+              stream: stream.name || `Specialization ${streamIdx + 1}`,
+              teacherId: pickedTeacher.id,
+              teacherName: pickedTeacher.name,
+              teacherObj: pickedTeacher,
+            });
+          }
+        });
+
+        if (chosenStreams.length > 0) {
+          teacher = chosenStreams[0].teacherObj;
+          breakoutAssignments = chosenStreams.map((cs) => ({
+            stream: cs.stream,
+            teacherId: cs.teacherId,
+            teacherName: cs.teacherName,
+          }));
+
+          coTeacherIds = chosenStreams.slice(1).map((cs) => cs.teacherId);
+
+          breakoutNote = breakoutAssignments
+            .map((b) => `${b.stream.toUpperCase()} – ${b.teacherName}`)
+            .join("; ");
+
+          // Mark all co-teachers busy and credit their teaching loads
+          chosenStreams.slice(1).forEach((cs) => {
+            const coT = cs.teacherObj;
+            const coBusy = teacherBusyBySlot.get(coT.id) || new Map();
+            coBusy.set(targetSlot.id, section.id);
+            teacherBusyBySlot.set(coT.id, coBusy);
+
+            const coLoad = (teacherLoad.get(coT.id) || 0) + 1;
+            teacherLoad.set(coT.id, coLoad);
+
+            const prepKey = getSubjectPreparationKey(subj, section);
+            const prepsSet = teacherAssignedPreps.get(coT.id) || new Set();
+            prepsSet.add(prepKey);
+            teacherAssignedPreps.set(coT.id, prepsSet);
+          });
+        }
+      }
+
       assignments[cellKey] = {
         subjectId: subj.id,
         teacherId: teacher.id,
+        coTeacherIds: coTeacherIds.length ? coTeacherIds : undefined,
+        breakoutAssignments: breakoutAssignments.length ? breakoutAssignments : undefined,
+        breakoutNote: breakoutNote || undefined,
         source: "auto",
         auditInfo: `${tierLabel} • ${permLabel} • ${loadVal} periods load`,
         updatedAt: new Date().toISOString(),
@@ -5890,12 +5360,27 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
 
   Object.entries(assignments || {}).forEach(([cellKey, assignment]) => {
     const [sectionId, slotId] = splitCellKey(cellKey);
-    const teacherId = assignment.teacherId;
-    if (!teacherId) return;
-    if (!teacherSlotAssignments.has(teacherId)) teacherSlotAssignments.set(teacherId, new Map());
-    const slotMap = teacherSlotAssignments.get(teacherId);
-    if (!slotMap.has(slotId)) slotMap.set(slotId, []);
-    slotMap.get(slotId).push({ sectionId, cellKey });
+    if (!assignment) return;
+
+    const assignedTeacherIds = [];
+    if (assignment.teacherId) assignedTeacherIds.push(assignment.teacherId);
+    if (Array.isArray(assignment.coTeacherIds)) {
+      assignment.coTeacherIds.forEach((id) => {
+        if (id && !assignedTeacherIds.includes(id)) assignedTeacherIds.push(id);
+      });
+    }
+    if (Array.isArray(assignment.breakoutAssignments)) {
+      assignment.breakoutAssignments.forEach((b) => {
+        if (b?.teacherId && !assignedTeacherIds.includes(b.teacherId)) assignedTeacherIds.push(b.teacherId);
+      });
+    }
+
+    assignedTeacherIds.forEach((teacherId) => {
+      if (!teacherSlotAssignments.has(teacherId)) teacherSlotAssignments.set(teacherId, new Map());
+      const slotMap = teacherSlotAssignments.get(teacherId);
+      if (!slotMap.has(slotId)) slotMap.set(slotId, []);
+      slotMap.get(slotId).push({ sectionId, cellKey });
+    });
   });
 
   // Second pass: process assignments and detect conflicts
@@ -5957,32 +5442,61 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
       );
     }
 
-    // Multiple-booking detection
+    // Multiple-booking detection across all assigned teachers (primary and co-teachers)
     if (config.constraints.enforceNoDoubleBooking) {
-      const slotMap = teacherSlotAssignments.get(teacher.id);
-      const assignmentsInSlot = slotMap ? slotMap.get(slot.id) : [];
-      if (assignmentsInSlot && assignmentsInSlot.length > 1) {
-        // Only generate the conflict once per slot per teacher
-        if (assignmentsInSlot[0].cellKey === cellKey) {
-          const sectionLabels = assignmentsInSlot.map(({ sectionId }) => {
-            const sec = sectionsById.get(sectionId);
-            return sec ? formatConflictSectionName(sec) : sectionId;
-          });
-          const involvedCellKeys = assignmentsInSlot.map(({ cellKey }) => cellKey);
-          let conflictType = '';
-          if (assignmentsInSlot.length === 2) {
-            conflictType = 'double-booked';
-          } else if (assignmentsInSlot.length === 3) {
-            conflictType = 'triple-booked';
-          } else {
-            conflictType = 'multiple-booked';
-          }
-          pushConflict(
-            `${teacher.name} is ${conflictType} at ${formatPeriodOrdinalLabel(slot)} for ${sectionLabels.join(", ")}.`,
-            involvedCellKeys
-          );
-        }
+      const allAssignedTeacherIdsInCell = [assignment.teacherId];
+      if (Array.isArray(assignment.coTeacherIds)) {
+        assignment.coTeacherIds.forEach((id) => {
+          if (id && !allAssignedTeacherIdsInCell.includes(id)) allAssignedTeacherIdsInCell.push(id);
+        });
       }
+
+      allAssignedTeacherIdsInCell.forEach((tId) => {
+        const slotMap = teacherSlotAssignments.get(tId);
+        const assignmentsInSlot = slotMap ? slotMap.get(slot.id) : [];
+        if (assignmentsInSlot && assignmentsInSlot.length > 1) {
+          if (assignmentsInSlot[0].cellKey === cellKey) {
+            const tObj = teachersById.get(tId);
+            const tName = tObj?.name || tId;
+            const sectionLabels = assignmentsInSlot.map(({ sectionId }) => {
+              const sec = sectionsById.get(sectionId);
+              return sec ? formatConflictSectionName(sec) : sectionId;
+            });
+            const involvedCellKeys = assignmentsInSlot.map(({ cellKey }) => cellKey);
+            let conflictType = '';
+            if (assignmentsInSlot.length === 2) {
+              conflictType = 'double-booked';
+            } else if (assignmentsInSlot.length === 3) {
+              conflictType = 'triple-booked';
+            } else {
+              conflictType = 'multiple-booked';
+            }
+            pushConflict(
+              `${tName} is ${conflictType} at ${formatPeriodOrdinalLabel(slot)} across sections: ${sectionLabels.join(", ")}.`,
+              involvedCellKeys
+            );
+          }
+        }
+      });
+    }
+
+    // Intra-cell duplicate teacher detection for breakout streams (e.g. same teacher assigned to multiple SPA streams in 1 period)
+    if (Array.isArray(assignment.breakoutAssignments) && assignment.breakoutAssignments.length > 1) {
+      const seenStreamsByTeacher = new Map();
+      assignment.breakoutAssignments.forEach((b) => {
+        if (b?.teacherId) {
+          if (seenStreamsByTeacher.has(b.teacherId)) {
+            const firstStream = seenStreamsByTeacher.get(b.teacherId);
+            const tObj = teachersById.get(b.teacherId);
+            pushConflict(
+              `${section.name} at ${formatPeriodOrdinalLabel(slot)}: ${tObj?.name || b.teacherId} is assigned to multiple streams (${firstStream} & ${b.stream}) during the same period.`,
+              [currentCellKey]
+            );
+          } else {
+            seenStreamsByTeacher.set(b.teacherId, b.stream);
+          }
+        }
+      });
     }
 
     // DepEd DO 005, s. 2024: Class adviser's HGP period (1 period/wk) is absorbed in their 5.0h advising credit
@@ -5993,6 +5507,15 @@ function evaluateSchedule({ assignments, sections, slots, subjects, teachers, sc
     const isAdvisoryHGP = isTeacherAdviser && isHomeroomOrAdvisorySubject(subject);
     if (!isAdvisoryHGP) {
       teacherLoadCount.set(teacher.id, (teacherLoadCount.get(teacher.id) || 0) + 1);
+
+      // Also credit teaching load for any co-teachers or breakout teachers (e.g. SPA Specialization)
+      if (Array.isArray(assignment.coTeacherIds)) {
+        assignment.coTeacherIds.forEach((coId) => {
+          if (coId && coId !== teacher.id) {
+            teacherLoadCount.set(coId, (teacherLoadCount.get(coId) || 0) + 1);
+          }
+        });
+      }
     }
 
     const sectionSubjects = sectionSubjectUsage.get(section.id) || new Map();
@@ -6342,8 +5865,12 @@ function getSubjectsForSection(section, subjects, scheduleType) {
         return classification === "SPA";
       }
 
-      // 5. ICT: SPJ and SP-STEM sections ONLY
-      if (code === "ICT" || name.toUpperCase() === "ICT") {
+      // 5. ICT: SPJ and SP-STEM sections ONLY (differentiated: 4x for SPJ, 3x for SP-STEM)
+      if (code.startsWith("ICT") || name.toUpperCase().includes("ICT")) {
+        const isSpjOnly = lowerScope.includes("spj") && !lowerScope.includes("stem");
+        const isStemOnly = (lowerScope.includes("stem") || lowerScope.includes("ste")) && !lowerScope.includes("spj");
+        if (isSpjOnly) return classification === "SPJ";
+        if (isStemOnly) return classification === "SP-STEM";
         return classification === "SPJ" || classification === "SP-STEM";
       }
 
@@ -6397,7 +5924,13 @@ function getSubjectsForSection(section, subjects, scheduleType) {
     return sortSubjectsByTypeAndName(matched);
   }
 
-  const targetSemester = scheduleType === "shs-first" ? "first semester" : "last semester";
+  const isTrimester = scheduleType.startsWith("shs-term");
+  let targetTerm = "";
+  if (scheduleType === "shs-term1") targetTerm = "term 1";
+  else if (scheduleType === "shs-term2") targetTerm = "term 2";
+  else if (scheduleType === "shs-term3") targetTerm = "term 3";
+  else if (scheduleType === "shs-first") targetTerm = "first semester";
+  else targetTerm = "last semester";
 
   const filtered = subjects.filter((subject) => {
     if (subject.schoolLevel !== "shs") {
@@ -6405,7 +5938,18 @@ function getSubjectsForSection(section, subjects, scheduleType) {
     }
 
     const subjectSemester = String(subject.semester || "").toLowerCase();
-    if (subjectSemester !== targetSemester) {
+    const isYearRound = subjectSemester.includes("all") || subjectSemester.includes("3 term") || subjectSemester.includes("year");
+
+    let isTermMatch = false;
+    if (isYearRound) {
+      isTermMatch = true;
+    } else if (isTrimester) {
+      isTermMatch = subjectSemester.includes(targetTerm);
+    } else {
+      isTermMatch = subjectSemester.includes(targetTerm) || (targetTerm === "last semester" && (subjectSemester.includes("second") || subjectSemester.includes("2")));
+    }
+
+    if (!isTermMatch) {
       return false;
     }
 
@@ -6422,11 +5966,13 @@ function getSubjectsForSection(section, subjects, scheduleType) {
     const strand = String(subject.strand || "").toUpperCase().trim();
     const secTrack = String(section.track || "").toUpperCase().trim();
     const secCluster = String(section.cluster || "").toUpperCase().trim();
-    const isStrandMatch = !!strand && (
+    const isStrandMatch = !strand || (
       strand === secTrack ||
       secCluster.includes(strand) ||
       strand.includes(secCluster.split(" ")[0]) ||
-      secTrack.includes(strand)
+      secTrack.includes(strand) ||
+      (secTrack === "TECHPRO" && (strand.includes("TECHPRO") || strand.includes("TVL"))) ||
+      (secTrack === "ACADEMIC" && !strand.includes("TECHPRO") && !strand.includes("TVL"))
     );
 
     const sectionNameLower = String(section.name || "").trim().toLowerCase();
@@ -7264,16 +6810,16 @@ function checkExpertiseMatch(list, subject) {
 
     // 4. ICT, Computer, Programming, CSS -> TLE / TVL
     if (
-      (name.includes("ict") || name.includes("computer") || code === "ict") &&
-      (entry.includes("tle") || entry.includes("tvl") || entry.includes("ict") || entry.includes("technology") || entry.includes("livelihood"))
+      (name.includes("ict") || name.includes("computer") || code.includes("ict")) &&
+      (entry.includes("tle") || entry.includes("tvl") || entry.includes("ict") || entry.includes("technology") || entry.includes("livelihood") || entry.includes("computer"))
     ) {
       return true;
     }
 
-    // 5. SPA Specialization, Visual Arts, Music, Dance, Theater -> MAPEH
+    // 5. SPA Specialization, Visual Arts, Music, Dance, Theater, Media Arts -> MAPEH
     if (
-      (name.includes("spa") || name.includes("arts") || name.includes("music") || code === "spaspec" || code.includes("spa")) &&
-      (entry.includes("mapeh") || entry.includes("music") || entry.includes("arts") || entry.includes("pe") || entry.includes("health") || entry.includes("spa"))
+      (name.includes("spa") || name.includes("arts") || name.includes("music") || name.includes("dance") || name.includes("media") || code === "spaspec" || code.includes("spa")) &&
+      (entry.includes("mapeh") || entry.includes("music") || entry.includes("arts") || entry.includes("pe") || entry.includes("health") || entry.includes("spa") || entry.includes("dance") || entry.includes("theater") || entry.includes("media"))
     ) {
       return true;
     }
@@ -7298,6 +6844,40 @@ function checkExpertiseMatch(list, subject) {
   });
 }
 
+export function doesTeacherMatchStream(teacher, streamName) {
+  if (!teacher || !streamName) return false;
+  const cleanStream = sanitizeText(streamName).toLowerCase();
+  if (
+    !cleanStream ||
+    cleanStream === "stream" ||
+    cleanStream === "specialization" ||
+    cleanStream.startsWith("stream ") ||
+    cleanStream.startsWith("specialization ")
+  ) {
+    return false;
+  }
+
+  const streamWords = cleanStream.split(/[\s/&,-]+/).filter((w) => w.length >= 3);
+
+  const fieldsToCheck = [
+    teacher.major,
+    teacher.minor,
+    teacher.specialization,
+    teacher.degree,
+    teacher.department,
+    ...(Array.isArray(teacher.subjectExpertise) ? teacher.subjectExpertise : []),
+    ...(Array.isArray(teacher.primaryExpertise) ? teacher.primaryExpertise : []),
+    ...(Array.isArray(teacher.secondaryExpertise) ? teacher.secondaryExpertise : []),
+  ].filter(Boolean);
+
+  return fieldsToCheck.some((raw) => {
+    const text = sanitizeText(raw).toLowerCase();
+    if (!text) return false;
+    if (text.includes(cleanStream) || cleanStream.includes(text)) return true;
+    return streamWords.some((w) => text.includes(w) || w.includes(text));
+  });
+}
+
 export function isHomeroomOrAdvisorySubject(subject) {
   if (!subject) return false;
   const code = sanitizeText(subject?.subjectCode).toUpperCase();
@@ -7314,6 +6894,49 @@ export function isHomeroomOrAdvisorySubject(subject) {
     name.includes("guidance program") ||
     name.includes("advisory")
   );
+}
+
+export function isSubjectMultiTeacher(subject) {
+  if (!subject) return false;
+  if (subject.teachingMode === "breakout" || Number(subject.requiredTeachers) > 1) return true;
+  if (Array.isArray(subject.breakoutStreams) && subject.breakoutStreams.length > 1) return true;
+  const code = sanitizeText(subject?.subjectCode).toUpperCase();
+  const name = sanitizeText(subject?.subjectName).toLowerCase();
+  return code === "SPASPEC" || name.includes("spa specialization");
+}
+
+export function getSubjectBreakoutStreams(subject, config) {
+  if (!subject) return [];
+  if (Array.isArray(subject.breakoutStreams) && subject.breakoutStreams.length > 0) {
+    return subject.breakoutStreams.map((s, idx) => ({
+      name: typeof s === "string" ? s : s.name || `Stream ${idx + 1}`,
+      requiredMajor: typeof s === "object" ? s.requiredMajor || "" : "",
+      defaultTeacherId: typeof s === "object" ? s.defaultTeacherId || "" : "",
+    }));
+  }
+  if (typeof subject.breakoutStreams === "string" && subject.breakoutStreams.trim()) {
+    return subject.breakoutStreams.split(",").map((s) => ({
+      name: s.trim(),
+      defaultTeacherId: "",
+    })).filter((s) => s.name);
+  }
+  const code = sanitizeText(subject?.subjectCode).toUpperCase();
+  const name = sanitizeText(subject?.subjectName).toLowerCase();
+  if (code === "SPASPEC" || name.includes("spa specialization")) {
+    return (config?.spaSettings?.specializations && Array.isArray(config.spaSettings.specializations) && config.spaSettings.specializations.length > 0)
+      ? config.spaSettings.specializations
+      : [
+          { name: "Media Arts", defaultTeacherId: "EMP-2026-051" },
+          { name: "Dance Arts", defaultTeacherId: "EMP-2026-052" },
+          { name: "Instrumental Music", defaultTeacherId: "EMP-2026-053" },
+        ];
+  }
+  const count = Math.max(2, Number(subject.requiredTeachers) || 2);
+  const result = [];
+  for (let i = 1; i <= count; i++) {
+    result.push({ name: `Stream ${i}`, defaultTeacherId: "" });
+  }
+  return result;
 }
 
 function getTeacherExpertiseTier(teacher, subject) {
@@ -7346,13 +6969,28 @@ function buildTeacherBusyMap(assignments, sectionsById, slotsById) {
 
   Object.entries(assignments || {}).forEach(([cellKey, value]) => {
     const [sectionId, slotId] = splitCellKey(cellKey);
-    if (!sectionsById.has(sectionId) || !slotsById.has(slotId) || !value?.teacherId) {
+    if (!sectionsById.has(sectionId) || !slotsById.has(slotId) || !value) {
       return;
     }
 
-    const teacherMap = teacherBusyBySlot.get(value.teacherId) || new Map();
-    teacherMap.set(slotId, sectionId);
-    teacherBusyBySlot.set(value.teacherId, teacherMap);
+    const assignedTeachers = [];
+    if (value.teacherId) assignedTeachers.push(value.teacherId);
+    if (Array.isArray(value.coTeacherIds)) {
+      value.coTeacherIds.forEach((id) => {
+        if (id && !assignedTeachers.includes(id)) assignedTeachers.push(id);
+      });
+    }
+    if (Array.isArray(value.breakoutAssignments)) {
+      value.breakoutAssignments.forEach((b) => {
+        if (b?.teacherId && !assignedTeachers.includes(b.teacherId)) assignedTeachers.push(b.teacherId);
+      });
+    }
+
+    assignedTeachers.forEach((tId) => {
+      const teacherMap = teacherBusyBySlot.get(tId) || new Map();
+      teacherMap.set(slotId, sectionId);
+      teacherBusyBySlot.set(tId, teacherMap);
+    });
   });
 
   return teacherBusyBySlot;
@@ -7439,6 +7077,7 @@ function dispatchFacultyUpdatedEvent() {
   }
 
   window.dispatchEvent(new Event("turotugma:faculty-updated"));
+  window.dispatchEvent(new Event("turotugma_faculty_updated"));
 }
 
 function buildEffectiveTeacherRestrictions(configRestrictions, facultyList) {
@@ -7622,10 +7261,23 @@ function loadScheduleConfig() {
       : [],
   };
 
+  const parsedSpaSettings = saved.spaSettings && typeof saved.spaSettings === "object"
+    ? {
+        requiredCount: parseBoundedNumber(saved.spaSettings.requiredCount, 1, 6, 3),
+        specializations: Array.isArray(saved.spaSettings.specializations) && saved.spaSettings.specializations.length > 0
+          ? saved.spaSettings.specializations.map((s) => ({
+              name: sanitizeText(s?.name) || "Specialization",
+              defaultTeacherId: sanitizeText(s?.defaultTeacherId) || "",
+            }))
+          : DEFAULT_CONFIG.spaSettings.specializations,
+      }
+    : DEFAULT_CONFIG.spaSettings;
+
   return {
     jhs: parsedJhs,
     shs: parsedShs,
     constraints: rootConstraints,
+    spaSettings: parsedSpaSettings,
   };
 }
 
@@ -8190,6 +7842,77 @@ function ShowConfigIcon() {
   );
 }
 
+function RestrictionIcon() {
+  return (
+    <ActionIcon>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </ActionIcon>
+  );
+}
+
+function CheckCircleIcon() {
+  return (
+    <ActionIcon>
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+      <polyline points="22 4 12 14.01 9 11.01" />
+    </ActionIcon>
+  );
+}
+
+function TeachersCardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+function SectionsCardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+
+function ShieldCheckCardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <polyline points="9 12 11 14 15 10" />
+    </svg>
+  );
+}
+
+function ShieldAlertCardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+  );
+}
+
+function StatusCardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+      <path d="M9 16l2 2 4-4" />
+    </svg>
+  );
+}
+
 function actionButtonLabelStyle() {
   return {
     display: "inline-flex",
@@ -8279,6 +8002,584 @@ function smallDangerStyle() {
   };
 }
 
+function getConflictResolutions({
+  conflict,
+  conflictDetail,
+  index,
+  optionIndex = 0,
+  sections,
+  slots,
+  subjects,
+  activeTeachers,
+  facultyById,
+  subjectsById,
+  slotsById,
+  sectionsById,
+  config,
+  scheduleType,
+  schedule,
+  cellEditorDrafts,
+}) {
+  const currentAssignments = { ...(schedule?.assignments || {}) };
+  const currentDrafts = { ...(cellEditorDrafts || {}) };
+  const cellKeys = Array.isArray(conflictDetail?.cellKeys) ? conflictDetail.cellKeys : [];
+  const message = String(conflict || conflictDetail?.message || "");
+
+  const options = [];
+  let category = "Schedule Conflict";
+  let severity = "critical";
+
+  const busyMap = buildTeacherBusyMap(currentAssignments, sectionsById, slotsById);
+
+  // 1. TEACHER MULTIPLE-BOOKING / DOUBLE-BOOKING
+  const isMultipleBooking =
+    message.includes("double-booked") ||
+    message.includes("triple-booked") ||
+    message.includes("multiple-booked") ||
+    message.includes("booked at");
+
+  if (isMultipleBooking) {
+    category = "Teacher Double-Booking";
+    severity = "critical";
+
+    cellKeys.forEach((cellKey) => {
+      const [secId, slotId] = splitCellKey(cellKey);
+      const section = sectionsById.get(secId);
+      const slot = slotsById.get(slotId);
+      const asgn = currentDrafts[cellKey] || currentAssignments[cellKey];
+      const subject = asgn?.subjectId ? subjectsById.get(asgn.subjectId) : null;
+      const currentTeacher = asgn?.teacherId ? facultyById.get(asgn.teacherId) : null;
+
+      if (!section || !slot || !subject || !currentTeacher) return;
+
+      // Option A: Substitute with another qualified teacher for this section
+      const candidates = activeTeachers.filter(
+        (t) =>
+          t.id !== currentTeacher.id &&
+          isTeacherEligible({
+            teacher: t,
+            subject,
+            section,
+            slot,
+            constraints: config.constraints,
+            teacherBusyBySlot: busyMap,
+            excludedSectionId: section.id,
+          })
+      );
+
+      candidates.slice(0, 2).forEach((cand) => {
+        options.push({
+          label: `Substitute with ${cand.name}`,
+          description: `Assign ${cand.name} to teach ${subject.subjectCode || subject.subjectName} for ${section.name} at ${slot.label}.`,
+          apply: () => {
+            const nextAssignments = {
+              ...currentAssignments,
+              [cellKey]: { subjectId: subject.id, teacherId: cand.id, source: "conflict-fix", updatedAt: new Date().toISOString() },
+            };
+            const nextDrafts = { ...currentDrafts, [cellKey]: { subjectId: subject.id, teacherId: cand.id } };
+            return { nextAssignments, nextDrafts };
+          },
+        });
+      });
+
+      // Option B: Move this section's subject to an open slot where currentTeacher is free
+      const validSlots = slots.filter((s) => isSlotValidForSection(section, s, scheduleType, config));
+      const openSlots = validSlots.filter((s) => {
+        const ck = createCellKey(section.id, s.id);
+        return !currentAssignments[ck] && !busyMap.get(currentTeacher.id)?.has(s.id);
+      });
+
+      openSlots.slice(0, 2).forEach((openSlot) => {
+        if (!isSubjectRestrictedForSlot(subject, openSlot, config.constraints, config, scheduleType)) {
+          options.push({
+            label: `Move class to ${openSlot.label}`,
+            description: `Relocate ${subject.subjectCode || subject.subjectName} for ${section.name} to ${openSlot.label} where ${currentTeacher.name} is free.`,
+            apply: () => {
+              const targetKey = createCellKey(section.id, openSlot.id);
+              const nextAssignments = { ...currentAssignments };
+              delete nextAssignments[cellKey];
+              nextAssignments[targetKey] = { subjectId: subject.id, teacherId: currentTeacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() };
+              const nextDrafts = { ...currentDrafts };
+              delete nextDrafts[cellKey];
+              nextDrafts[targetKey] = { subjectId: subject.id, teacherId: currentTeacher.id };
+              return { nextAssignments, nextDrafts };
+            },
+          });
+        }
+      });
+
+      // Option C: Intra-section swap with another period in this section
+      const otherSectionCells = Object.keys(currentAssignments).filter(
+        (ck) => splitCellKey(ck)[0] === section.id && ck !== cellKey
+      );
+
+      for (const otherCk of otherSectionCells.slice(0, 5)) {
+        const [, otherSlotId] = splitCellKey(otherCk);
+        const otherSlot = slotsById.get(otherSlotId);
+        const otherAsgn = currentDrafts[otherCk] || currentAssignments[otherCk];
+        const otherSubj = otherAsgn?.subjectId ? subjectsById.get(otherAsgn.subjectId) : null;
+        const otherTeacher = otherAsgn?.teacherId ? facultyById.get(otherAsgn.teacherId) : null;
+
+        if (!otherSlot || !otherSubj || !otherTeacher) continue;
+        if (otherSubj.id === subject.id) continue;
+
+        const curTeacherFreeAtOther = isTeacherEligible({ teacher: currentTeacher, subject, section, slot: otherSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: section.id });
+        const otherTeacherFreeAtCur = isTeacherEligible({ teacher: otherTeacher, subject: otherSubj, section, slot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: section.id });
+
+        if (curTeacherFreeAtOther && otherTeacherFreeAtCur) {
+          options.push({
+            label: `Swap with ${otherSubj.subjectCode || otherSubj.subjectName} (${otherSlot.label})`,
+            description: `Swap periods within ${section.name}: move ${subject.subjectCode || subject.subjectName} to ${otherSlot.label} and ${otherSubj.subjectCode || otherSubj.subjectName} to ${slot.label}.`,
+            apply: () => {
+              const nextAssignments = {
+                ...currentAssignments,
+                [cellKey]: { subjectId: otherSubj.id, teacherId: otherTeacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() },
+                [otherCk]: { subjectId: subject.id, teacherId: currentTeacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() },
+              };
+              const nextDrafts = {
+                ...currentDrafts,
+                [cellKey]: { subjectId: otherSubj.id, teacherId: otherTeacher.id },
+                [otherCk]: { subjectId: subject.id, teacherId: currentTeacher.id },
+              };
+              return { nextAssignments, nextDrafts };
+            },
+          });
+          break;
+        }
+      }
+    });
+
+    if (cellKeys.length > 1) {
+      const fallbackKey = cellKeys[cellKeys.length - 1];
+      const [fSecId, fSlotId] = splitCellKey(fallbackKey);
+      const fSec = sectionsById.get(fSecId);
+      const fSlot = slotsById.get(fSlotId);
+      options.push({
+        label: `Unassign ${fSec?.name || 'Section'} at ${fSlot?.label || 'Slot'}`,
+        description: `Clear this cell to immediately eliminate the clash and reschedule manually.`,
+        apply: () => {
+          const nextAssignments = { ...currentAssignments };
+          delete nextAssignments[fallbackKey];
+          const nextDrafts = { ...currentDrafts };
+          delete nextDrafts[fallbackKey];
+          return { nextAssignments, nextDrafts };
+        },
+      });
+    }
+  }
+
+  // 2. UNDER-SCHEDULED SUBJECT (Missing required recurring daily periods)
+  else if (message.includes("required recurring daily period")) {
+    category = "Missing Weekly Period";
+    severity = "critical";
+
+    const match = message.match(/^(.*?):s*(.*?)s+hass+(d+)s+ofs+(d+)s+required recurring daily period/i);
+    let targetSection = null;
+    let targetSubject = null;
+
+    if (match) {
+      const secLabel = match[1].trim();
+      const subLabel = match[2].trim();
+
+      targetSection = sections.find((s) =>
+        formatConflictSectionName(s).toLowerCase() === secLabel.toLowerCase() ||
+        s.name.toLowerCase() === secLabel.toLowerCase() ||
+        s.code?.toLowerCase() === secLabel.toLowerCase()
+      );
+
+      if (targetSection) {
+        const eligibleSubjs = getSubjectsForSection(targetSection, subjects, scheduleType);
+        targetSubject = eligibleSubjs.find(
+          (s) =>
+            (s.subjectName || "").toLowerCase() === subLabel.toLowerCase() ||
+            (s.subjectCode || "").toLowerCase() === subLabel.toLowerCase()
+        );
+      }
+    }
+
+    if (targetSection && targetSubject) {
+      const sectionCellKeys = Object.keys(currentAssignments).filter((ck) => splitCellKey(ck)[0] === targetSection.id);
+      const validSlots = slots.filter((s) => isSlotValidForSection(targetSection, s, scheduleType, config));
+      const emptySlots = validSlots.filter((s) => !currentAssignments[createCellKey(targetSection.id, s.id)]);
+
+      let assignedTeacher = null;
+      sectionCellKeys.forEach((ck) => {
+        const a = currentAssignments[ck];
+        if (a?.subjectId === targetSubject.id && a?.teacherId) {
+          assignedTeacher = facultyById.get(a.teacherId);
+        }
+      });
+
+      for (const emptySlot of emptySlots) {
+        let teacher = assignedTeacher && isTeacherEligible({ teacher: assignedTeacher, subject: targetSubject, section: targetSection, slot: emptySlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: targetSection.id }) ? assignedTeacher : null;
+        if (!teacher) {
+          teacher = activeTeachers.find((t) => isTeacherEligible({ teacher: t, subject: targetSubject, section: targetSection, slot: emptySlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: targetSection.id }));
+        }
+
+        if (teacher) {
+          options.push({
+            label: `Schedule in open slot (${emptySlot.label})`,
+            description: `Assign ${targetSubject.subjectCode || targetSubject.subjectName} with ${teacher.name} into ${emptySlot.label}.`,
+            apply: () => {
+              const newKey = createCellKey(targetSection.id, emptySlot.id);
+              const nextAssignments = { ...currentAssignments, [newKey]: { subjectId: targetSubject.id, teacherId: teacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() } };
+              const nextDrafts = { ...currentDrafts, [newKey]: { subjectId: targetSubject.id, teacherId: teacher.id } };
+              return { nextAssignments, nextDrafts };
+            },
+          });
+          if (options.length >= 2) break;
+        }
+      }
+
+      const subjectUsage = new Map();
+      sectionCellKeys.forEach((ck) => {
+        const a = currentAssignments[ck];
+        if (a?.subjectId) subjectUsage.set(a.subjectId, (subjectUsage.get(a.subjectId) || 0) + 1);
+      });
+
+      for (const [sId, count] of subjectUsage.entries()) {
+        const otherSubj = subjectsById.get(sId);
+        const req = parseBoundedNumber(otherSubj?.classesPerWeek, 1, 12, 4);
+        if (count > req) {
+          const repKey = sectionCellKeys.find((ck) => currentAssignments[ck]?.subjectId === sId);
+          if (repKey) {
+            const [, rSlotId] = splitCellKey(repKey);
+            const rSlot = slotsById.get(rSlotId);
+            let teacher = assignedTeacher && isTeacherEligible({ teacher: assignedTeacher, subject: targetSubject, section: targetSection, slot: rSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: targetSection.id }) ? assignedTeacher : null;
+            if (!teacher) {
+              teacher = activeTeachers.find((t) => isTeacherEligible({ teacher: t, subject: targetSubject, section: targetSection, slot: rSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: targetSection.id }));
+            }
+            if (teacher && rSlot) {
+              options.push({
+                label: `Replace excess ${otherSubj.subjectCode || otherSubj.subjectName} at ${rSlot.label}`,
+                description: `Replace surplus session of ${otherSubj.subjectCode || otherSubj.subjectName} with missing ${targetSubject.subjectCode || targetSubject.subjectName} (assigned to ${teacher.name}).`,
+                apply: () => {
+                  const nextAssignments = { ...currentAssignments, [repKey]: { subjectId: targetSubject.id, teacherId: teacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() } };
+                  const nextDrafts = { ...currentDrafts, [repKey]: { subjectId: targetSubject.id, teacherId: teacher.id } };
+                  return { nextAssignments, nextDrafts };
+                },
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 3. WEEKLY QUOTA EXCEEDED (Over-scheduled subject)
+  else if (message.includes("exceeding required") || message.includes("classes per week")) {
+    category = "Subject Over-Scheduled";
+    severity = "warning";
+
+    if (cellKeys.length > 0) {
+      const lastKey = cellKeys[cellKeys.length - 1];
+      const [secId, slotId] = splitCellKey(lastKey);
+      const section = sectionsById.get(secId);
+      const slot = slotsById.get(slotId);
+      const asgn = currentAssignments[lastKey];
+      const subject = asgn?.subjectId ? subjectsById.get(asgn.subjectId) : null;
+
+      if (section && slot && subject) {
+        const sectionCells = Object.keys(currentAssignments).filter((ck) => splitCellKey(ck)[0] === section.id);
+        const offered = getSubjectsForSection(section, subjects, scheduleType);
+        const subCounts = new Map();
+        sectionCells.forEach((ck) => {
+          const a = currentAssignments[ck];
+          if (a?.subjectId) subCounts.set(a.subjectId, (subCounts.get(a.subjectId) || 0) + 1);
+        });
+        const missingSubj = offered.find((s) => (subCounts.get(s.id) || 0) < parseBoundedNumber(s.classesPerWeek, 1, 12, 4));
+
+        if (missingSubj) {
+          const teacher = activeTeachers.find((t) => isTeacherEligible({ teacher: t, subject: missingSubj, section, slot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: section.id }));
+          if (teacher) {
+            options.push({
+              label: `Replace with missing ${missingSubj.subjectCode || missingSubj.subjectName}`,
+              description: `Change period ${slot.label} from surplus ${subject.subjectCode || subject.subjectName} to required ${missingSubj.subjectCode || missingSubj.subjectName} with ${teacher.name}.`,
+              apply: () => {
+                const nextAssignments = { ...currentAssignments, [lastKey]: { subjectId: missingSubj.id, teacherId: teacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() } };
+                const nextDrafts = { ...currentDrafts, [lastKey]: { subjectId: missingSubj.id, teacherId: teacher.id } };
+                return { nextAssignments, nextDrafts };
+              },
+            });
+          }
+        }
+
+        options.push({
+          label: `Unassign excess period at ${slot.label}`,
+          description: `Remove this surplus assignment to adhere strictly to the subject's weekly period quota.`,
+          apply: () => {
+            const nextAssignments = { ...currentAssignments };
+            delete nextAssignments[lastKey];
+            const nextDrafts = { ...currentDrafts };
+            delete nextDrafts[lastKey];
+            return { nextAssignments, nextDrafts };
+          },
+        });
+      }
+    }
+  }
+
+  // 4. SAME-DAY DUPLICATE SUBJECT
+  else if (message.includes("times on") && message.includes("scheduled")) {
+    category = "Daily Duplicate Session";
+    severity = "warning";
+
+    if (cellKeys.length > 1) {
+      const duplicateKey = cellKeys[cellKeys.length - 1];
+      const [secId, slotId] = splitCellKey(duplicateKey);
+      const section = sectionsById.get(secId);
+      const currentSlot = slotsById.get(slotId);
+      const asgn = currentAssignments[duplicateKey];
+      const subject = asgn?.subjectId ? subjectsById.get(asgn.subjectId) : null;
+      const teacher = asgn?.teacherId ? facultyById.get(asgn.teacherId) : null;
+
+      if (section && currentSlot && subject) {
+        const validSlots = slots.filter((s) => isSlotValidForSection(section, s, scheduleType, config));
+        const otherDayEmptySlots = validSlots.filter((s) => {
+          if (s.day === currentSlot.day) return false;
+          const ck = createCellKey(section.id, s.id);
+          if (currentAssignments[ck]) return false;
+          const sectionCells = Object.keys(currentAssignments).filter((k) => splitCellKey(k)[0] === section.id);
+          const hasSubOnDay = sectionCells.some((k) => {
+            const [, sId] = splitCellKey(k);
+            return slotsById.get(sId)?.day === s.day && currentAssignments[k]?.subjectId === subject.id;
+          });
+          return !hasSubOnDay;
+        });
+
+        for (const targetSlot of otherDayEmptySlots) {
+          let t = teacher && isTeacherEligible({ teacher, subject, section, slot: targetSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: section.id }) ? teacher : null;
+          if (!t) {
+            t = activeTeachers.find((tch) => isTeacherEligible({ teacher: tch, subject, section, slot: targetSlot, constraints: config.constraints, teacherBusyBySlot: busyMap, excludedSectionId: section.id }));
+          }
+          if (t) {
+            options.push({
+              label: `Move to ${targetSlot.day} (${targetSlot.label})`,
+              description: `Move the duplicate session to ${targetSlot.day} at ${targetSlot.label} where the section has no session of this subject yet.`,
+              apply: () => {
+                const targetKey = createCellKey(section.id, targetSlot.id);
+                const nextAssignments = { ...currentAssignments };
+                delete nextAssignments[duplicateKey];
+                nextAssignments[targetKey] = { subjectId: subject.id, teacherId: t.id, source: "conflict-fix", updatedAt: new Date().toISOString() };
+                const nextDrafts = { ...currentDrafts };
+                delete nextDrafts[duplicateKey];
+                nextDrafts[targetKey] = { subjectId: subject.id, teacherId: t.id };
+                return { nextAssignments, nextDrafts };
+              },
+            });
+            if (options.length >= 2) break;
+          }
+        }
+
+        options.push({
+          label: `Clear duplicate session at ${currentSlot.label}`,
+          description: `Unassign this duplicate session to prevent exceeding max daily sessions.`,
+          apply: () => {
+            const nextAssignments = { ...currentAssignments };
+            delete nextAssignments[duplicateKey];
+            const nextDrafts = { ...currentDrafts };
+            delete nextDrafts[duplicateKey];
+            return { nextAssignments, nextDrafts };
+          },
+        });
+      }
+    }
+  }
+
+  // 5. TEACHER RESTRICTION / UNAVAILABLE PERIOD / EXPERTISE / GRADE MISMATCH
+  else if (
+    message.includes("restricted for this period") ||
+    message.includes("is unavailable") ||
+    message.includes("lacks subject expertise") ||
+    message.includes("does not match Grade")
+  ) {
+    category = message.includes("restricted")
+      ? "Teacher Restricted Period"
+      : message.includes("unavailable")
+      ? "Teacher Unavailable"
+      : message.includes("expertise")
+      ? "Teacher Expertise Mismatch"
+      : "Teacher Grade Mismatch";
+    severity = "critical";
+
+    if (cellKeys.length > 0) {
+      const cellKey = cellKeys[0];
+      const [secId, slotId] = splitCellKey(cellKey);
+      const section = sectionsById.get(secId);
+      const slot = slotsById.get(slotId);
+      const asgn = currentAssignments[cellKey];
+      const subject = asgn?.subjectId ? subjectsById.get(asgn.subjectId) : null;
+      const currentTeacher = asgn?.teacherId ? facultyById.get(asgn.teacherId) : null;
+
+      if (section && slot && subject) {
+        const candidates = activeTeachers.filter(
+          (t) =>
+            (!currentTeacher || t.id !== currentTeacher.id) &&
+            isTeacherEligible({
+              teacher: t,
+              subject,
+              section,
+              slot,
+              constraints: config.constraints,
+              teacherBusyBySlot: busyMap,
+              excludedSectionId: section.id,
+            })
+        );
+
+        candidates.slice(0, 2).forEach((cand) => {
+          options.push({
+            label: `Assign qualified teacher (${cand.name})`,
+            description: `Replace teacher with ${cand.name} who is certified and available at ${slot.label}.`,
+            apply: () => {
+              const nextAssignments = { ...currentAssignments, [cellKey]: { subjectId: subject.id, teacherId: cand.id, source: "conflict-fix", updatedAt: new Date().toISOString() } };
+              const nextDrafts = { ...currentDrafts, [cellKey]: { subjectId: subject.id, teacherId: cand.id } };
+              return { nextAssignments, nextDrafts };
+            },
+          });
+        });
+
+        if (currentTeacher && (message.includes("restricted") || message.includes("unavailable"))) {
+          const validSlots = slots.filter((s) => isSlotValidForSection(section, s, scheduleType, config));
+          const openSlots = validSlots.filter((s) => {
+            const ck = createCellKey(section.id, s.id);
+            if (currentAssignments[ck]) return false;
+            if (matchesRestrictedPeriod(s, getTeacherRestrictedPeriods(currentTeacher.id, config.constraints))) return false;
+            if (matchesUnavailablePeriod(s, currentTeacher.unavailablePeriods)) return false;
+            return !busyMap.get(currentTeacher.id)?.has(s.id);
+          });
+
+          if (openSlots.length > 0) {
+            const openSlot = openSlots[0];
+            options.push({
+              label: `Move class to ${openSlot.label}`,
+              description: `Shift ${subject.subjectCode || subject.subjectName} to ${openSlot.label} where ${currentTeacher.name} has no restriction.`,
+              apply: () => {
+                const newKey = createCellKey(section.id, openSlot.id);
+                const nextAssignments = { ...currentAssignments };
+                delete nextAssignments[cellKey];
+                nextAssignments[newKey] = { subjectId: subject.id, teacherId: currentTeacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() };
+                const nextDrafts = { ...currentDrafts };
+                delete nextDrafts[cellKey];
+                nextDrafts[newKey] = { subjectId: subject.id, teacherId: currentTeacher.id };
+                return { nextAssignments, nextDrafts };
+              },
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 6. SUBJECT NOT ELIGIBLE FOR SECTION
+  else if (message.includes("is not eligible for this section")) {
+    category = "Section Eligibility Mismatch";
+    severity = "critical";
+
+    if (cellKeys.length > 0) {
+      const cellKey = cellKeys[0];
+      const [secId, slotId] = splitCellKey(cellKey);
+      const section = sectionsById.get(secId);
+      const slot = slotsById.get(slotId);
+
+      if (section && slot) {
+        const sectionCellKeys = Object.keys(currentAssignments).filter(
+          (ck) => splitCellKey(ck)[0] === section.id && ck !== cellKey
+        );
+        const eligibleSubjs = getSubjectsForSection(section, subjects, scheduleType);
+        const subjectCounts = new Map();
+        sectionCellKeys.forEach((ck) => {
+          const a = currentDrafts[ck] || currentAssignments[ck];
+          if (a?.subjectId) {
+            subjectCounts.set(a.subjectId, (subjectCounts.get(a.subjectId) || 0) + 1);
+          }
+        });
+
+        // Find eligible subjects that are actually under-scheduled for this section
+        const underScheduledEligible = eligibleSubjs.filter((s) => {
+          const count = subjectCounts.get(s.id) || 0;
+          const req = parseBoundedNumber(s.classesPerWeek, 1, 12, 4);
+          return count < req;
+        });
+
+        for (const repSubj of underScheduledEligible) {
+          const repTeacher = activeTeachers.find((t) =>
+            isTeacherEligible({
+              teacher: t,
+              subject: repSubj,
+              section,
+              slot,
+              constraints: config.constraints,
+              teacherBusyBySlot: busyMap,
+              excludedSectionId: section.id,
+            })
+          );
+          if (repTeacher) {
+            options.push({
+              label: `Replace with missing ${repSubj.subjectCode || repSubj.subjectName}`,
+              description: `Assign required curriculum subject ${repSubj.subjectCode || repSubj.subjectName} with ${repTeacher.name}.`,
+              apply: () => {
+                const nextAssignments = { ...currentAssignments, [cellKey]: { subjectId: repSubj.id, teacherId: repTeacher.id, source: "conflict-fix", updatedAt: new Date().toISOString() } };
+                const nextDrafts = { ...currentDrafts, [cellKey]: { subjectId: repSubj.id, teacherId: repTeacher.id } };
+                return { nextAssignments, nextDrafts };
+              },
+            });
+            break;
+          }
+        }
+
+        // Always provide clear option
+        options.push({
+          label: `Clear ineligible assignment at ${slot.label}`,
+          description: `Unassign this slot to completely eliminate the curriculum violation.`,
+          apply: () => {
+            const nextAssignments = { ...currentAssignments };
+            delete nextAssignments[cellKey];
+            const nextDrafts = { ...currentDrafts };
+            delete nextDrafts[cellKey];
+            return { nextAssignments, nextDrafts };
+          },
+        });
+      }
+    }
+  }
+
+  // Fallback if no specific options were produced
+  if (options.length === 0) {
+    if (cellKeys.length > 0) {
+      options.push({
+        label: `Clear cell assignment`,
+        description: `Unassign this conflicting period so it can be rescheduled without violations.`,
+        apply: () => {
+          const nextAssignments = { ...currentAssignments };
+          cellKeys.forEach((ck) => delete nextAssignments[ck]);
+          const nextDrafts = { ...currentDrafts };
+          cellKeys.forEach((ck) => delete nextDrafts[ck]);
+          return { nextAssignments, nextDrafts };
+        },
+      });
+    } else {
+      options.push({
+        label: `Re-evaluate Schedule`,
+        description: `Verify current constraint status.`,
+        apply: () => ({ nextAssignments: currentAssignments, nextDrafts: currentDrafts }),
+      });
+    }
+  }
+
+  const safeOptionIndex = options.length > 0 ? ((optionIndex % options.length) + options.length) % options.length : 0;
+  const activeOption = options[safeOptionIndex] || options[0];
+
+  return {
+    category,
+    severity,
+    options,
+    optionCount: options.length,
+    activeOptionIndex: safeOptionIndex,
+    activeOption,
+  };
+}
+
 function ScheduleDrawerPanel({
   activeDrawerTab,
   setActiveDrawerTab,
@@ -8291,6 +8592,21 @@ function ScheduleDrawerPanel({
   smallDangerStyle,
   schedule,
   conflictsForDisplay,
+  conflictDetailsForDisplay = [],
+  sections = [],
+  slots = [],
+  subjects = [],
+  activeTeachers = [],
+  facultyById = new Map(),
+  subjectsById = new Map(),
+  slotsById = new Map(),
+  sectionsById = new Map(),
+  config = {},
+  scheduleType = "jhs",
+  cellEditorDrafts = {},
+  setCellEditorDrafts,
+  setSchedule,
+  showNotice = () => {},
   handleAutoFixAllConflicts,
   secondaryActionStyle,
   effectiveTeacherRestrictions,
@@ -8316,7 +8632,10 @@ function ScheduleDrawerPanel({
   notice,
   capacityIssues = [],
   handleQuickIncreasePeriods,
+  handleSaveSpaSettings,
 }) {
+  const [conflictOptionIndex, setConflictOptionIndex] = useState({});
+
   if (!activeDrawerTab) return null;
 
   const conflictCount = conflictsForDisplay ? conflictsForDisplay.length : (schedule?.conflicts?.length || 0);
@@ -8459,6 +8778,28 @@ function ScheduleDrawerPanel({
             >
               Period Restrictions <span style={{ background: "#dbeafe", color: "#1e40af", fontSize: 11, padding: "1px 6px", borderRadius: 99 }}>{restrictionCount}</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveDrawerTab("spa")}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "8px 8px 0 0",
+                border: "1px solid",
+                borderColor: activeDrawerTab === "spa" ? "#d8b4fe" : "transparent",
+                borderBottom: activeDrawerTab === "spa" ? "2px solid #9333ea" : "none",
+                background: activeDrawerTab === "spa" ? "#ffffff" : "transparent",
+                color: activeDrawerTab === "spa" ? "#7e22ce" : "#64748b",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              SPA Specialization <span style={{ background: "#f3e8ff", color: "#6b21a8", fontSize: 11, padding: "1px 6px", borderRadius: 99 }}>{(config?.spaSettings?.specializations?.length || 3)} Streams</span>
+            </button>
           </div>
         </div>
 
@@ -8536,6 +8877,28 @@ function ScheduleDrawerPanel({
                   </button>
                 ) : null}
               </div>
+
+              {notice?.text ? (
+                <div
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 8,
+                    background: notice.type === "error" ? "#fef2f2" : "#f0fdf4",
+                    border: notice.type === "error" ? "1px solid #fecdd3" : "1px solid #bbf7d0",
+                    color: notice.type === "error" ? "#991b1b" : "#166534",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    marginBottom: 12,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+                  }}
+                >
+                  <span>{notice.type === "error" ? "⚠️" : "✓"}</span>
+                  <span>{notice.text}</span>
+                </div>
+              ) : null}
 
               {/* Timetable Capacity Deficit Diagnostic Card */}
               {hasAssignments && capacityIssues.length > 0 && conflictsForDisplay.some((c) => c.includes("required recurring daily period")) && (
@@ -8650,15 +9013,169 @@ function ScheduleDrawerPanel({
                   </div>
                 )
               ) : (
-                <div style={{ display: "grid", gap: 10 }}>
-                  {conflictsForDisplay.map((conflict, index) => (
-                    <div key={index} style={{ border: "1px solid #fecdd3", borderRadius: 10, padding: 12, background: "#fff1f2" }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                        <span style={{ color: "#e11d48", fontWeight: 800, fontSize: 14 }}>!</span>
-                        <p style={{ margin: 0, color: "#991b1b", fontSize: 13, fontWeight: 600, lineHeight: 1.4 }}>{conflict}</p>
+                <div style={{ display: "grid", gap: 12 }}>
+                  {conflictsForDisplay.map((conflict, index) => {
+                    const conflictDetail = (conflictDetailsForDisplay || []).find(
+                      (entry) => sanitizeText(entry?.message) === sanitizeText(conflict)
+                    );
+                    const currentOptionIdx = conflictOptionIndex[index] || 0;
+                    const resolution = getConflictResolutions({
+                      conflict,
+                      conflictDetail,
+                      index,
+                      optionIndex: currentOptionIdx,
+                      sections,
+                      slots,
+                      subjects,
+                      activeTeachers,
+                      facultyById,
+                      subjectsById,
+                      slotsById,
+                      sectionsById,
+                      config,
+                      scheduleType,
+                      schedule,
+                      cellEditorDrafts,
+                    });
+
+                    const handleApplyThisFix = () => {
+                      if (!resolution.activeOption || !resolution.activeOption.apply) return;
+                      const { nextAssignments, nextDrafts } = resolution.activeOption.apply();
+                      const evaluation = evaluateSchedule({
+                        assignments: nextAssignments,
+                        sections,
+                        slots,
+                        subjects,
+                        teachers: activeTeachers,
+                        scheduleType,
+                        config,
+                      });
+                      if (setCellEditorDrafts) setCellEditorDrafts(nextDrafts);
+                      if (setSchedule) {
+                        setSchedule((current) => ({
+                          ...current,
+                          assignments: nextAssignments,
+                          conflicts: evaluation.conflicts,
+                          conflictDetails: evaluation.conflictDetails,
+                          teacherLoadPercent: evaluation.teacherLoadPercent,
+                          updatedAt: new Date().toISOString(),
+                        }));
+                      }
+                      if (showNotice) {
+                        showNotice(`Applied fix: ${resolution.activeOption.label}`, "success");
+                      }
+                    };
+
+                    return (
+                      <div
+                        key={index}
+                        style={{
+                          border: "1px solid " + (resolution.severity === "critical" ? "#fca5a5" : "#fcd34d"),
+                          borderRadius: 12,
+                          padding: "14px 16px",
+                          background: resolution.severity === "critical" ? "#fff5f5" : "#fffbeb",
+                          boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 10,
+                        }}
+                      >
+                        {/* Header: Chip + Category */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              padding: "2px 8px",
+                              borderRadius: 6,
+                              background: resolution.severity === "critical" ? "#fee2e2" : "#fef3c7",
+                              color: resolution.severity === "critical" ? "#991b1b" : "#92400e",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.5px",
+                            }}
+                          >
+                            {resolution.category}
+                          </span>
+                          {resolution.optionCount > 1 ? (
+                            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>
+                              Option {resolution.activeOptionIndex + 1} of {resolution.optionCount}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {/* Conflict description */}
+                        <p style={{ margin: 0, color: "#1e293b", fontSize: 13, fontWeight: 600, lineHeight: 1.45 }}>
+                          {conflict}
+                        </p>
+
+                        {/* Recommended Solution Card */}
+                        {resolution.activeOption ? (
+                          <div
+                            style={{
+                              background: "#ffffff",
+                              border: "1px solid #e2e8f0",
+                              borderRadius: 8,
+                              padding: "10px 12px",
+                              fontSize: 12,
+                              color: "#334155",
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                              <span style={{ color: "#3B4197", fontWeight: 700 }}>💡 Recommended Solution:</span>
+                              <span style={{ fontWeight: 700, color: "#1e293b" }}>{resolution.activeOption.label}</span>
+                            </div>
+                            <p style={{ margin: 0, color: "#475569" }}>{resolution.activeOption.description}</p>
+                          </div>
+                        ) : null}
+
+                        {/* Action Buttons */}
+                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 2 }}>
+                          {resolution.optionCount > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setConflictOptionIndex((prev) => ({
+                                  ...prev,
+                                  [index]: (prev[index] || 0) + 1,
+                                }))
+                              }
+                              style={{
+                                padding: "6px 12px",
+                                background: "#ffffff",
+                                border: "1px solid #cbd5e1",
+                                borderRadius: 6,
+                                color: "#334155",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}
+                            >
+                              See Other Option ({resolution.optionCount})
+                            </button>
+                          ) : null}
+
+                          <button
+                            type="button"
+                            onClick={handleApplyThisFix}
+                            style={{
+                              padding: "6px 14px",
+                              background: "linear-gradient(135deg, #3B4197 0%, #2563eb 100%)",
+                              color: "#ffffff",
+                              border: "none",
+                              borderRadius: 6,
+                              fontSize: 12,
+                              fontWeight: 700,
+                              cursor: "pointer",
+                              boxShadow: "0 2px 4px rgba(59, 65, 151, 0.2)",
+                            }}
+                          >
+                            Apply Fix
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -9274,6 +9791,15 @@ function PeriodRestrictionsContent({
             </div>
           </div>
         )}
+
+        {activeDrawerTab === "spa" && (
+          <SpaSpecializationDrawerContent
+            config={config}
+            activeTeachers={activeTeachers}
+            facultyById={facultyById}
+            onSave={handleSaveSpaSettings}
+          />
+        )}
       </div>
     </div>
   );
@@ -9290,6 +9816,793 @@ function DraftTimetablePreviewModal({ open, draft, onClose, onLoad }) {
       onClose={onClose}
       onLoadDraft={onLoad}
     />
+  );
+}
+
+function SpaSpecializationDrawerContent({ config, activeTeachers = [], facultyById = new Map(), onSave }) {
+  const initialSpecializations = (config?.spaSettings?.specializations && Array.isArray(config.spaSettings.specializations) && config.spaSettings.specializations.length > 0)
+    ? config.spaSettings.specializations
+    : [
+        { name: "Media Arts", defaultTeacherId: "EMP-2026-051" },
+        { name: "Dance Arts", defaultTeacherId: "EMP-2026-052" },
+        { name: "Instrumental Music", defaultTeacherId: "EMP-2026-053" },
+      ];
+
+  const [specializations, setSpecializations] = useState(initialSpecializations);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Group teachers: MAPEH/SPA specialists first, then others
+  const mapehTeachers = activeTeachers.filter((t) => {
+    const dept = String(t.department || "").toLowerCase();
+    const spec = String(t.specialization || "").toLowerCase();
+    return dept.includes("mapeh") || dept.includes("art") || dept.includes("music") ||
+           spec.includes("mapeh") || spec.includes("art") || spec.includes("music") || spec.includes("dance");
+  });
+  const otherTeachers = activeTeachers.filter((t) => !mapehTeachers.some((m) => m.id === t.id));
+
+  const handleNameChange = (index, newName) => {
+    setSpecializations((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], name: newName };
+      return next;
+    });
+    setSaveSuccess(false);
+  };
+
+  const handleTeacherChange = (index, newTeacherId) => {
+    setSpecializations((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], defaultTeacherId: newTeacherId };
+      return next;
+    });
+    setSaveSuccess(false);
+  };
+
+  const handleAddStream = () => {
+    setSpecializations((prev) => [
+      ...prev,
+      { name: `Specialization ${prev.length + 1}`, defaultTeacherId: "" },
+    ]);
+    setSaveSuccess(false);
+  };
+
+  const handleRemoveStream = (index) => {
+    if (specializations.length <= 1) return;
+    setSpecializations((prev) => prev.filter((_, i) => i !== index));
+    setSaveSuccess(false);
+  };
+
+  const handleResetDefaults = () => {
+    setSpecializations([
+      { name: "Media Arts", defaultTeacherId: "EMP-2026-051" },
+      { name: "Dance Arts", defaultTeacherId: "EMP-2026-052" },
+      { name: "Instrumental Music", defaultTeacherId: "EMP-2026-053" },
+    ]);
+    setSaveSuccess(false);
+  };
+
+  // Check duplicate teachers among configured defaults
+  const teacherIds = specializations.map((s) => s.defaultTeacherId).filter(Boolean);
+  const hasDuplicateDefaults = new Set(teacherIds).size !== teacherIds.length;
+  const hasEmptyNames = specializations.some((s) => !s.name.trim());
+
+  const handleSave = () => {
+    if (hasEmptyNames || hasDuplicateDefaults) return;
+    onSave({
+      requiredCount: specializations.length,
+      specializations: specializations.map((s) => ({
+        name: s.name.trim(),
+        defaultTeacherId: s.defaultTeacherId || "",
+      })),
+    });
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h3 style={{ margin: 0, color: "#1f2c6f", fontSize: 16, fontWeight: 700 }}>
+            🎨 SPA Specialization Curriculum Setup
+          </h3>
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 99,
+              background: "#ede9fe",
+              color: "#6d28d9",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {specializations.length} Streams Active
+          </span>
+        </div>
+        <p style={{ margin: 0, color: "#64748b", fontSize: 12, lineHeight: 1.5 }}>
+          Under DepEd Special Program in the Arts (SPA), multiple specialization arts streams run concurrently during the single scheduled SPA Specialization period. Configure your school's specialization streams and preferred default faculty below.
+        </p>
+      </div>
+
+      <div
+        style={{
+          background: "#faf5ff",
+          border: "1px solid #e9d5ff",
+          borderRadius: 10,
+          padding: "12px 14px",
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+        }}
+      >
+        <span style={{ fontSize: 18 }}>💡</span>
+        <div style={{ fontSize: 12, color: "#581c87", lineHeight: 1.4 }}>
+          <strong>Zero Double-Booking Guarantee:</strong> When auto-generating or manually plotting schedules, each stream is allocated a distinct teacher. The generator checks both slot busy-states across all sections and teacher restrictions so no teacher is double-booked.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>Specialization Streams & Faculty:</span>
+          <button
+            type="button"
+            onClick={handleAddStream}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 6,
+              background: "#7c3aed",
+              border: "none",
+              color: "#ffffff",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            + Add Stream
+          </button>
+        </div>
+
+        {specializations.map((stream, idx) => (
+          <div
+            key={idx}
+            style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid #e2e8f0",
+              background: "#ffffff",
+              display: "grid",
+              gap: 8,
+              boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                Stream #{idx + 1}
+              </span>
+              {specializations.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveStream(idx)}
+                  style={{
+                    padding: "3px 8px",
+                    borderRadius: 4,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#dc2626",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  title="Remove this stream"
+                >
+                  ✕ Remove
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 10 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 3 }}>
+                  Stream Name
+                </label>
+                <input
+                  type="text"
+                  value={stream.name}
+                  onChange={(e) => handleNameChange(idx, e.target.value)}
+                  placeholder="e.g. Media Arts, Dance Arts"
+                  style={{
+                    width: "100%",
+                    padding: "7px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#1e293b",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 3 }}>
+                  Default Assigned Faculty
+                </label>
+                <select
+                  value={stream.defaultTeacherId}
+                  onChange={(e) => handleTeacherChange(idx, e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "7px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 12,
+                    color: "#1e293b",
+                    boxSizing: "border-box",
+                  }}
+                >
+                  <option value="">-- Auto-Assign Available Faculty --</option>
+                  <optgroup label="MAPEH / Arts Specialists (Recommended)">
+                    {mapehTeachers.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} {t.specialization ? `(${t.specialization})` : `(${t.department || "MAPEH"})`}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Other Faculty">
+                    {otherTeachers.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} ({t.department || "General"})
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {hasDuplicateDefaults && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 12 }}>
+          ⚠️ Notice: The same default teacher is selected for multiple streams. While auto-generation will automatically pick an alternative teacher to avoid double-booking, it is recommended to assign distinct default teachers.
+        </div>
+      )}
+
+      {hasEmptyNames && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 12 }}>
+          ❌ Error: All stream names must be filled out before saving.
+        </div>
+      )}
+
+      {saveSuccess && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12, fontWeight: 700 }}>
+          ✓ SPA Specialization configuration saved successfully!
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, justifyContent: "space-between", marginTop: 8 }}>
+        <button
+          type="button"
+          onClick={handleResetDefaults}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 6,
+            background: "#f1f5f9",
+            border: "1px solid #cbd5e1",
+            color: "#475569",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Reset to 3 Streams Default
+        </button>
+
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={hasEmptyNames}
+          style={{
+            padding: "8px 20px",
+            borderRadius: 6,
+            background: hasEmptyNames ? "#cbd5e1" : "linear-gradient(135deg, #7c3aed, #4f46e5)",
+            border: "none",
+            color: "#ffffff",
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: hasEmptyNames ? "not-allowed" : "pointer",
+            boxShadow: hasEmptyNames ? "none" : "0 4px 12px rgba(124, 58, 237, 0.3)",
+          }}
+        >
+          Save SPA Configuration
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SpaBreakoutModal({
+  open,
+  modalData,
+  onClose,
+  activeTeachers = [],
+  teacherBusyBySlot = new Map(),
+  sectionsById = new Map(),
+  facultyById = new Map(),
+  subjectsById = new Map(),
+  config = {},
+  onApply,
+  onRemove,
+}) {
+  if (!open || !modalData) return null;
+
+  const { section, slot, cellKey, subjectId, assignment } = modalData;
+  const subject = subjectsById.get(subjectId);
+  const subjectName = subject?.subjectName || subject?.subjectCode || "Specialization Breakout";
+
+  // Initial streams from assignment, subject definition, or config
+  const defaultStreams = getSubjectBreakoutStreams(subject, config);
+
+  const getInitialStreams = () => {
+    if (assignment?.breakoutAssignments && Array.isArray(assignment.breakoutAssignments) && assignment.breakoutAssignments.length > 0) {
+      return assignment.breakoutAssignments.map((b, idx) => ({
+        id: `stream-${idx}-${Date.now()}`,
+        name: b.stream || `Specialization ${idx + 1}`,
+        teacherId: b.teacherId || "",
+      }));
+    }
+
+    const assignedIds = new Set();
+    return defaultStreams.map((s, idx) => {
+      let tId = "";
+      if (s.defaultTeacherId && !assignedIds.has(s.defaultTeacherId)) {
+        const busySec = teacherBusyBySlot.get(s.defaultTeacherId)?.get(slot.id);
+        const isBusyElsewhere = busySec && busySec !== section.id;
+        const tObj = facultyById.get(s.defaultTeacherId);
+        const isRestricted = tObj ? matchesUnavailablePeriod(slot, tObj.unavailablePeriods) : false;
+        if (!isBusyElsewhere && !isRestricted) {
+          tId = s.defaultTeacherId;
+          assignedIds.add(tId);
+        }
+      }
+      return {
+        id: `stream-${idx}-${Date.now()}`,
+        name: s.name,
+        teacherId: tId,
+      };
+    });
+  };
+
+  const [streams, setStreams] = useState(getInitialStreams);
+
+  // Group teachers into MAPEH/Arts specialists and others
+  const mapehTeachers = activeTeachers.filter((t) => {
+    const dept = String(t.department || "").toLowerCase();
+    const spec = String(t.specialization || "").toLowerCase();
+    return dept.includes("mapeh") || dept.includes("art") || dept.includes("music") ||
+           spec.includes("mapeh") || spec.includes("art") || spec.includes("music") || spec.includes("dance");
+  });
+  const otherTeachers = activeTeachers.filter((t) => !mapehTeachers.some((m) => m.id === t.id));
+
+  const handleStreamNameChange = (index, newName) => {
+    setStreams((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], name: newName };
+      return next;
+    });
+  };
+
+  const handleStreamTeacherChange = (index, newTeacherId) => {
+    setStreams((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], teacherId: newTeacherId };
+      return next;
+    });
+  };
+
+  const handleAddStream = () => {
+    setStreams((prev) => [
+      ...prev,
+      {
+        id: `stream-${prev.length}-${Date.now()}`,
+        name: `Specialization ${prev.length + 1}`,
+        teacherId: "",
+      },
+    ]);
+  };
+
+  const handleRemoveStream = (index) => {
+    if (streams.length <= 1) return;
+    setStreams((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Validation
+  const selectedTeacherIds = streams.map((s) => s.teacherId).filter(Boolean);
+  const hasDuplicates = new Set(selectedTeacherIds).size !== selectedTeacherIds.length;
+  const allStreamsHaveTeacher = streams.every((s) => !!s.teacherId);
+  const allStreamNamesValid = streams.every((s) => s.name.trim().length > 0);
+
+  // Check double-booking across sections for each stream
+  const doubleBookedStreams = streams.map((s, idx) => {
+    if (!s.teacherId) return null;
+    const busySecId = teacherBusyBySlot.get(s.teacherId)?.get(slot.id);
+    if (busySecId && busySecId !== section.id) {
+      const busySec = sectionsById.get(busySecId);
+      const tObj = facultyById.get(s.teacherId);
+      return {
+        streamName: s.name,
+        teacherName: tObj?.name || s.teacherId,
+        sectionName: busySec?.name || busySecId,
+      };
+    }
+    return null;
+  }).filter(Boolean);
+
+  const canApply = allStreamsHaveTeacher && allStreamNamesValid && !hasDuplicates && doubleBookedStreams.length === 0;
+
+  const handleApplyClick = () => {
+    if (!canApply) return;
+
+    const breakoutAssignments = streams.map((s) => {
+      const t = facultyById.get(s.teacherId) || activeTeachers.find((item) => item.id === s.teacherId);
+      return {
+        stream: s.name.trim(),
+        teacherId: s.teacherId,
+        teacherName: t?.name || s.teacherId,
+      };
+    });
+
+    const primaryTeacherId = breakoutAssignments[0].teacherId;
+    const coTeacherIds = breakoutAssignments.slice(1).map((b) => b.teacherId);
+    const breakoutNote = breakoutAssignments.map((b) => `${b.stream.toUpperCase()} – ${b.teacherName}`).join("; ");
+
+    onApply({
+      primaryTeacherId,
+      coTeacherIds,
+      breakoutAssignments,
+      breakoutNote,
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 99999,
+        background: "rgba(15, 23, 42, 0.65)",
+        backdropFilter: "blur(4px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          background: "#ffffff",
+          borderRadius: 16,
+          boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+          width: "100%",
+          maxWidth: 680,
+          maxHeight: "90vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            padding: "18px 24px",
+            background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)",
+            color: "#ffffff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 20 }}>🎨</span>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#ffffff" }}>
+                {subjectName} Breakout Assignment
+              </h2>
+            </div>
+            <div style={{ display: "flex", gap: 8, fontSize: 12, color: "#c7d2fe" }}>
+              <span style={{ fontWeight: 600 }}>{section.name} (Grade {section.grade})</span>
+              <span>•</span>
+              <span>{slot.label} ({slot.startTime} – {slot.endTime})</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "rgba(255, 255, 255, 0.15)",
+              border: "none",
+              color: "#ffffff",
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              fontSize: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Info Banner */}
+        <div style={{ padding: "12px 24px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+          <p style={{ margin: 0, fontSize: 12, color: "#475569", lineHeight: 1.45 }}>
+            Under DepEd curriculum guidelines, this subject divides into concurrent streams running simultaneously in this period. Assign <strong>one distinct teacher per stream</strong>. Double-booking between streams or across sections is strictly blocked.
+          </p>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1, display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>
+              Specialization Streams ({streams.length} Total):
+            </span>
+            <button
+              type="button"
+              onClick={handleAddStream}
+              style={{
+                padding: "5px 12px",
+                borderRadius: 6,
+                background: "#f3e8ff",
+                border: "1px solid #d8b4fe",
+                color: "#7e22ce",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              + Add Stream
+            </button>
+          </div>
+
+          {streams.map((stream, idx) => (
+            <div
+              key={stream.id || idx}
+              style={{
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "1px solid #e2e8f0",
+                background: "#fafafa",
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#6366f1", textTransform: "uppercase" }}>
+                  Stream #{idx + 1}
+                </span>
+                {streams.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveStream(idx)}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      color: "#dc2626",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✕ Remove
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 10 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 3 }}>
+                    Stream Name
+                  </label>
+                  <input
+                    type="text"
+                    value={stream.name}
+                    onChange={(e) => handleStreamNameChange(idx, e.target.value)}
+                    placeholder="e.g. Media Arts, Dance Arts"
+                    style={{
+                      width: "100%",
+                      padding: "7px 10px",
+                      borderRadius: 6,
+                      border: "1px solid #cbd5e1",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#1e293b",
+                      boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 3 }}>
+                    Assigned Teacher
+                  </label>
+                  <select
+                    value={stream.teacherId}
+                    onChange={(e) => handleStreamTeacherChange(idx, e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "7px 10px",
+                      borderRadius: 6,
+                      border: "1px solid #cbd5e1",
+                      fontSize: 12,
+                      color: "#1e293b",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value="">-- Select Teacher --</option>
+                    <optgroup label="MAPEH / Arts Specialists">
+                      {mapehTeachers.map((t) => {
+                        const isUsedInOtherStream = streams.some((s, si) => si !== idx && s.teacherId === t.id);
+                        const busySecId = teacherBusyBySlot.get(t.id)?.get(slot.id);
+                        const isDoubleBooked = busySecId && busySecId !== section.id;
+                        const isRestricted = matchesUnavailablePeriod(slot, t.unavailablePeriods);
+                        const isDisabled = isUsedInOtherStream || isDoubleBooked || isRestricted;
+
+                        let note = "";
+                        if (isUsedInOtherStream) {
+                          const otherS = streams.find((s, si) => si !== idx && s.teacherId === t.id);
+                          note = `Selected in ${otherS?.name || "another stream"}`;
+                        } else if (isDoubleBooked) {
+                          note = `Double-booked in ${sectionsById.get(busySecId)?.name || busySecId}`;
+                        } else if (isRestricted) {
+                          note = "Unavailable / Restricted";
+                        }
+
+                        return (
+                          <option key={t.id} value={t.id} disabled={isDisabled}>
+                            {t.name} {t.specialization ? `(${t.specialization})` : ""} {note ? `— [${note}]` : ""}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                    <optgroup label="Other Faculty">
+                      {otherTeachers.map((t) => {
+                        const isUsedInOtherStream = streams.some((s, si) => si !== idx && s.teacherId === t.id);
+                        const busySecId = teacherBusyBySlot.get(t.id)?.get(slot.id);
+                        const isDoubleBooked = busySecId && busySecId !== section.id;
+                        const isRestricted = matchesUnavailablePeriod(slot, t.unavailablePeriods);
+                        const isDisabled = isUsedInOtherStream || isDoubleBooked || isRestricted;
+
+                        let note = "";
+                        if (isUsedInOtherStream) {
+                          const otherS = streams.find((s, si) => si !== idx && s.teacherId === t.id);
+                          note = `Selected in ${otherS?.name || "another stream"}`;
+                        } else if (isDoubleBooked) {
+                          note = `Double-booked in ${sectionsById.get(busySecId)?.name || busySecId}`;
+                        } else if (isRestricted) {
+                          note = "Unavailable / Restricted";
+                        }
+
+                        return (
+                          <option key={t.id} value={t.id} disabled={isDisabled}>
+                            {t.name} ({t.department || "Faculty"}) {note ? `— [${note}]` : ""}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Real-time Status / Validation Messages */}
+          {hasDuplicates && (
+            <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 12, fontWeight: 600 }}>
+              ❌ Duplicate Teacher Error: Each specialization stream must have a different teacher during this period.
+            </div>
+          )}
+
+          {doubleBookedStreams.length > 0 && (
+            <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 12, fontWeight: 600 }}>
+              ❌ Double-Booking Detected: {doubleBookedStreams.map((d) => `${d.teacherName} (${d.streamName}) is already teaching ${d.sectionName} at this time.`).join(" ")}
+            </div>
+          )}
+
+          {!allStreamsHaveTeacher && (
+            <div style={{ padding: "8px 12px", borderRadius: 6, background: "#fffbeb", border: "1px solid #fef3c7", color: "#b45309", fontSize: 12, fontWeight: 600 }}>
+              ⚠ Please assign a dedicated teacher to each of the {streams.length} specialization streams.
+            </div>
+          )}
+
+          {canApply && (
+            <div style={{ padding: "8px 12px", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12, fontWeight: 700 }}>
+              ✓ All {streams.length} streams assigned with distinct, conflict-free faculty. Ready to apply!
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            padding: "16px 24px",
+            background: "#f8fafc",
+            borderTop: "1px solid #e2e8f0",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          {assignment ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                color: "#dc2626",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Clear Assignment
+            </button>
+          ) : <div />}
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                background: "#ffffff",
+                border: "1px solid #cbd5e1",
+                color: "#475569",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleApplyClick}
+              disabled={!canApply}
+              style={{
+                padding: "8px 20px",
+                borderRadius: 6,
+                background: canApply ? "linear-gradient(135deg, #4f46e5, #7c3aed)" : "#cbd5e1",
+                border: "none",
+                color: "#ffffff",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: canApply ? "pointer" : "not-allowed",
+                boxShadow: canApply ? "0 4px 12px rgba(79, 70, 229, 0.3)" : "none",
+              }}
+            >
+              Apply Breakout Assignment ({streams.length} Teachers)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
