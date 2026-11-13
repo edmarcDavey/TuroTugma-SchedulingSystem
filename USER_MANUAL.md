@@ -41,15 +41,23 @@ The system balances three core objectives:
 ## 3. Core Modules Guide
 
 ### 3.1. School Profile & Settings
-- **Session Types**: Configure Regular Sessions (e.g., Mon–Thu) and Shortened Sessions (e.g., Friday).
-- **Period Calculation & Bell Schedules**: Define period counts (typically 7–8 periods for Regular, 6–7 for Shortened), start/end times, and period durations (45–60 minutes).
-- **DepEd Breaks**: Set standardized Morning Break (20 mins), Lunch Break (60 mins), and optional Afternoon Break.
-- **Constraints Configuration**: Toggle automatic enforcement of:
-  - No Teacher Double-Booking
-  - Teacher Unavailable Periods
-  - Teacher Expertise & Grade Matching
-  - Student Core Subject Daily Balancing
-  - Placement Rules (Homeroom / Class Adviser locks)
+The **Scheduling Configurations** panel organizes configuration into four clean, unnumbered administrative domains:
+- **School Operating Hours**: Defines official school opening and closing times (`Daily Start Time` and `Daily End Time`).
+- **Session & Calendar Settings**: 
+  - Dynamic Session Modes (Regular vs. Shortened Sessions with interactive day-by-day calendar pills).
+  - Bell Schedule engine: Period durations (45–60 mins), period calculation modes (Manual vs. Auto-Calculate), and DepEd standardized breaks (Morning Break 20m, Lunch 60m, Afternoon 15m) with drag-and-drop chronological timeline reordering.
+- **Scheduling Engine & Constraints**: Structured into three distinct operational cards:
+    - Teacher assignment priority policy:
+      - **Consolidated Plantilla Loading (Recommended)**: Consolidates sections onto regular teachers until they achieve the 20–25h DepEd Balanced quota (4–5 sections/teacher), directly eliminating underload.
+      - **Capacity-Based Allocation**: Spreads teaching periods evenly across all available faculty.
+      - **Prioritize Permanent Faculty**: Prioritizes permanent before provisional/contractual staff.
+      - **Hybrid Weighted Priority**: 30% Permanent, 70% capacity distribution.
+    - Weekly teaching period cap with dynamic contact hour conversion badge (e.g., `24 periods ≈ 24.0 contact hrs/wk | DepEd DO 005 Balanced`).
+    - **DepEd DO 005 Advisory (5h) & Major Ancillary (4h) Load Relief Offsets**: Automatically deducts classroom teaching requirements for Class Advisers (-1 class / 5h credit) and Major Coordinators (DRRM, ICT, Property Custodian: 4h credit) so teachers remain within balanced limits.
+    - **Distinct Subject Preparations Cap**: Enforces an explicit limit on distinct curriculum preparations (e.g., Max 2–3 preps per teacher) to prevent preparation fatigue.
+  - **Anti-Conflict Hard Constraints**: Enforces No Double-Booking, respects Teacher Unavailable Periods, and enforces verified Subject Expertise and Grade Level certifications.
+  - **Curricular & Institutional Routines**: Spreads core academic subjects across days to avoid cognitive overload, and reserves Flag Ceremony and Room Maintenance / Cleaners routines.
+- **Subject Placement Rules**: Controls subject-specific period constraints (Homeroom Guidance Monday Period 1 lock, contiguous double-period rules, and preferred time-of-day placements).
 
 ### 3.2. Sections Management
 - **Grade 7 to 10 (JHS)**:
@@ -119,14 +127,29 @@ During automated schedule generation, the scheduler allocates teachers using a *
 3. **Tier 3 (Candidate Reuse)**: For the primary stream, the candidate teacher assigned to the parent subject is reused if free.
 4. **Tier 4 (Department Fallback)**: If no specific sub-specialist is available, the engine automatically selects any available teacher from the parent department (e.g., MAPEH, Araling Panlipunan, TLE) sorted by lowest workload, guaranteeing zero double-booking and zero unscheduled periods.
 
-#### 3. Manual Grid Editing & Verification
-- In the manual grid editor, selecting any multi-teacher subject opens an interactive **"Set / Edit X Teachers"** button and dedicated modal rather than a single teacher dropdown.
-- Existing assignments feature an interactive breakout badge (e.g., `ECONOMICS – Maria Santos; HISTORY – Juan Dela Cruz`). Clicking the badge opens the breakout assignment modal.
-- The modal performs real-time validation:
-  - **No Duplicate Stream Teachers**: A teacher selected for Stream 1 cannot be selected for Stream 2 in the same period.
-  - **No Section Double-Booking**: Teachers currently scheduled in other sections at that period are disabled and labeled with the conflicting section name.
-  - **Restriction Enforcement**: Teachers with blocked unavailable periods are disabled.
-  - Applying the breakout assignment updates teaching load percentages and re-evaluates all schedule constraints automatically.
+#### 3. Unified Manual Grid Editing & Verification
+- In the manual grid editor, all timetable cells use a clean, standardized teacher selector dropdown.
+- Cells display the scheduled subject and the assigned faculty member cleanly, with full real-time conflict checking and unavailable period validation.
+- All faculty assignment updates automatically recalculate teacher workloads and enforce DepEd DO 005 statutory contact limits.
+
+### 3.6. Schedule Generator & Consolidated Plantilla Balanced Allocation
+When generating or re-generating a timetable, the system executes a three-phase allocation engine:
+1. **Pass 0 (Consolidated Plantilla Course Pre-Allocation)**:
+   - Prioritizes **Permanent / Regular** faculty members, consolidating their teaching assignments across 4 to 5 section courses within their specialization (18–25 contact periods/week, 4–5 classes).
+   - Replaces fragmented 1-section assignments with full teaching loads, eliminating widespread underload (`< 20h`) and ensuring faculty achieve the **Balanced Target Load (DepEd DO 005, s. 2024)**.
+   - Designates 1 unique regular Class Adviser per section for Monday Period 1 Homeroom Guidance (HGP), ensuring zero double-bookings.
+2. **Pass 1 & 2 (Conflict-Free Latin-Square Slot Allocation)**:
+   - Rotates subject periods across sections so multi-section regular teachers never double-book.
+   - Automatically maintains curriculum slot continuity and daily subject quotas with 0 conflicts.
+3. **Instant Generation Summary Feedback Overlay**:
+   - **Executive Metrics**: Pops up immediately upon schedule generation with a clean TuroTugma Blue glassmorphic backdrop.
+   - **4 Key Operational Metrics**:
+     1. **Periods Scheduled**: Total periods allocated across all section templates (100% curriculum placement, e.g. 678/678 periods).
+     2. **Workload Balance (DO 005)**: Count of teachers achieving the statutory Balanced target load (20–25h/wk) and confirmed 0 Overload count.
+     3. **Conflict Engine**: Live count of unresolved conflicts with verified 0 double-bookings.
+     4. **Faculty Deployed**: Count of active teaching staff deployed vs. staff reserved for full-time ancillary/administrative duties.
+   - **Auto-Dismiss & Hover Pause**: Displays for 6 seconds with a shrinking progress countdown bar. Hovering over the overlay pauses the timer, allowing administrators to inspect the numbers.
+   - **One-Click Publish Shortcut**: Direct **"Publish Schedule"** button to immediately commit compliant timetables without navigating through menus.
 
 ---
 
@@ -224,6 +247,156 @@ For full administrative control, schedulers can manually adjust any cell directl
 4. **Instant Validation**: Once updated, the grid instantly runs live validation and updates the Assignment Validation counter (`Valid: X, Invalid: Y`).
 5. **Save Draft / Publish**: Save internal working copies or publish the finalized schedule to make it visible to faculty, students, and parents on the Public Dashboard.
 
+## 8. Subject Distribution & Teacher Coverage Checklist (Pre-Publishing Verification)
+
+To guarantee that no section is left unstaffed before generating or publishing a master timetable, the **Schedule Generator** features an integrated **Subject Distribution & Teacher Coverage Checklist** accessible directly from the toolbar's **"Subject Checklist"** trigger.
+
+### Key Capabilities & Coverage Ratios:
+1. **Dynamic Section-to-Teacher Ratios & Curricular Exclusivity**:
+   - Calculates the exact staffing coverage ratio based strictly on **eligible / applicable sections** rather than blindly dividing by total sections in the grade:
+     $$\text{Assigned Sections with Qualified Teachers} \quad / \quad \text{Applicable Sections Required}$$
+   - **Curricular Exclusivity in Action**:
+     - **Universal Subjects** (e.g. *English, Math, Science, AP, VE, MAPEH, HGP*): Apply to all sections in that grade (e.g., **`8 / 8`** or **`7 / 7`**).
+     - **SP-STEM Exclusive Subjects** (e.g. *DEVREAD, ELEMALG, ENVSCI, Research, Biotech, ICT-STEM*): If only 1 section in Grade 7 is SP-STEM (*7-STE Einstein*), the requirement is **1 section**, displaying **`1 / 1`** *(not 1/7)* with a distinct `SP-STEM Exclusive (1 Section)` badge.
+     - **SPA / SPJ Exclusive Subjects** (e.g. *SPASPEC, ICT-SPJ*): Displays **`1 / 1`** or matching SPA/SPJ section count.
+     - **Regular-Only Subjects** (e.g. standard *TLE*, *ARAL*): If 6 of 7 sections are Regular, displays **`6 / 6`** with a `Regular Exclusive (6 Sections)` badge (SP-STEM sections taking specialized subjects are not counted).
+     - **SHS Strand-Specific Subjects** (e.g. *Pre-Calculus 11* for STEM): Displays **`1 / 1`** for the 1 STEM section, never penalizing non-STEM sections (*HUMSS, TVL*).
+     - **HGP (Homeroom Guidance)**: **`32 / 32`** (Universal across all sections, verified against class advisers).
+2. **Interactive Section Accordion & Class Adviser Inspector**:
+   - Clicking any subject row expands to reveal only the sections that **actually take that subject**.
+   - Displays the assigned faculty name, plantilla designation, major, and the section's official **Class Adviser** (e.g. `👤 Juan Dela Cruz`).
+   - Includes an inline **Change / Assign Class Adviser** dropdown allowing schedulers to set or update class advisers directly on the fly, permanently persisting to the school profile.
+3. **One-Click Quick Assign**:
+   - For unassigned sections, an inline teacher selector allows schedulers to immediately assign qualified faculty with matching subject majors directly from the checklist without hunting through grid cells.
+4. **Smart Actions Toolbar**:
+   - **`⚡ Sync HGP to Advisers`**: Automatically assigns each section's Homeroom Guidance (HGP) period to its designated Class Adviser in accordance with DepEd guidelines with a single click.
+   - **`✨ Auto-Distribute Unassigned`**: Intelligently scans unassigned subject loads, identifies faculty members possessing matching subject specializations under the 24 contact hours/week statutory load limit, and distributes them automatically across all applicable sections.
+   - **`📄 Export CSV (SF7)`**: Exports a comprehensive DepEd School Form 7 / Subject Allocation audit matrix containing subject codes, titles, grade levels, assigned faculty rosters, and distribution percentages.
+5. **Filters & Search**:
+   - Search by subject code, title, or grade.
+   - Quick-toggle status pills: **All**, **Needs Attention** (subjects with unassigned sections), and **Complete**.
+
+### 8.1. Draft Management, Publication Confirmation & Visibility Control
+
+To ensure master schedules are thoroughly verified before school-wide release, TuroTugma implements a structured draft and publication lifecycle:
+
+1. **Quota-Safe Draft Saving**:
+   - Clicking **"Save Draft"** captures the current timetable state—including manual cell overrides, teacher allocations, and custom slots.
+   - Saves drafts safely with automatic browser storage quota handling, retaining the 10 most recent drafts and preventing `QuotaExceededError`.
+   - Allows saving working drafts at any time, even prior to running a full automated generation.
+
+2. **Publish Confirmation Engine**:
+   - Clicking **"Publish"** initiates comprehensive validation of two primary criteria: **Scheduling Conflicts** and **Subject Distribution Completeness**:
+     - **0 Conflicts + 100% Subject Distribution**: Prompts an official publication confirmation modal:
+       > *"All curriculum subjects are 100% distributed across all sections with 0 scheduling conflicts. Proceed to publish the official timetable?"*
+       Clicking **"Publish Official Schedule"** commits the schedule into active publication.
+     - **Active Conflicts (> 0)**: Displays an amber alert warning indicating the exact count of double-bookings or overlapping restrictions before prompting confirmation (*"Publish Anyway"*).
+     - **Incomplete Subject Distribution (< 100%)**: Displays an alert with the distribution percentage, reminding the scheduler that some sections lack assigned subject teachers before asking for confirmation.
+
+3. **Admin vs. Public Timetable Views**:
+   - **Admin Dashboard (`Time Tables`)**:
+     - Lists **both** officially published schedules and recent working drafts.
+     - Features distinct status badges: `Published Active (Visible in Public Final Timetables)` vs. `Saved Draft (Internal Admin View Only)`.
+     - Administrators can inspect, restore, delete, or export any draft or published version.
+   - **Public Homepage (`Final Time Tables`)**:
+     - **Strict Privacy Isolation**: Drafts are completely hidden and inaccessible to public visitors, students, and parents.
+     - Only schedules with an active `published` status appear.
+     - Displays the verified **"Official Published Schedule (Public View)"** status badge.
+     - When multiple schedules are published (e.g., both JHS and SHS), an integrated selector allows visitors to seamlessly switch between published curricular levels.
+
+## 9. Official DepEd Signatory Rosters: JHS vs. SHS Governance Architecture
+
+DepEd administrative guidelines mandate distinct approval hierarchies between Junior High School and Senior High School due to curriculum governance, tracking licenses, and voucher subsidies:
+
+### Why JHS and SHS Signatories Differ
+1. **Junior High School (Grades 7–10)**:
+   - Operates under standard school-based curriculum implementation (MATATAG / BEC).
+   - Approval is operational and handled within the **District Level**:
+     - **Prepared by**: Timetable Committee / Subject Coordinators (Chairpersons of MAPEH/SPA, Science/Math, AP/EsP/TLE, Language/SPJ).
+     - **Conformed**: Assistant Principal / Head Teacher Designate.
+     - **Recommending Approval**: Secondary School Principal.
+     - **Approved**: Public Schools District Supervisor (PSDS) / District-In-Charge.
+
+2. **Senior High School (Grades 11–12)**:
+   - Operates under specialized track and strand program offerings regulated by DepEd Order (DO) 017 (e.g. STEM, HUMSS, ABM, TVL).
+   - Approval is statutory and requires endorsement from the **Schools Division Office (SDO)**:
+     - **Prepared by**: Secondary School Principal (submitting the division program and Form 7).
+     - **Reviewed**: Chief Education Supervisor, Curriculum Implementation Division (CID).
+     - **Recommending Approval**: Assistant Schools Division Superintendent (ASDS).
+     - **Approved**: Schools Division Superintendent (SDS).
+
+### How TuroTugma Manages Level-Specific Signatories
+- **School Profile & Settings (Tab 1 — Header & Signatories)**: Administrators can toggle between **Junior High School (District Level)** and **Senior High School (Division SDO Level)** to customize committee rosters, official plantilla titles, and preview the authentic print layout directly below the institutional profile.
+- **Automatic Timetable Level Detection**: When displaying or exporting timetables in **Time Tables** or the Public Homepage, TuroTugma automatically detects the section's grade level and embeds the matching DepEd print footer without requiring manual intervention.
+
+## 10. Simplified School Profile Setup, Live Merged Letterhead Preview & Level-Specific Seals
+
+To make configuration effortless and intuitive, TuroTugma features a clean, simplified School Profile setup organized into 3 purpose-built tabs:
+
+### The 3 Core Configuration Tabs
+1. **School Profile**:
+   - **School Profile (Basic Information)**:
+     - **School Type**: Dropdown supporting *Basic Education (K-12)*, *Higher Education (CHED)*, *Technical-Vocational (TESDA)*, and *Integrated / Others*.
+     - **Name of the School**: Text input for the official school name (e.g. `Diadi National High School`).
+     - **School ID (Optional)**: Optional text input for the official institutional identifier (can be left blank for private/vocational institutions).
+     - **Curricular Levels Offered**: Dropdown supporting *Both Junior High School & Senior High School (Integrated K-12)*, *Junior High School Only (Grades 7 to 10)*, and *Senior High School Only (Grades 11 and 12)*.
+     *(Note: School Head and Plantilla Position are configured directly within the Signatories roster to avoid duplicate entries).*
+   - **Timetable Letterhead, Official Seals & Signatories**:
+     - Controlled by a **Single Master Switch** at the top: **Junior High School (JHS)** vs **Senior High School (SHS)**. There are no redundant duplicate switches across the tab.
+     - **Dynamic Single Live Preview**: Only one letterhead preview is displayed at a time, instantly adapting to whichever level is actively selected:
+       - **JHS Format**: Centered Circular DepEd Seal -> *Republic of the Philippines* -> *Department of Education* -> *Region II – Cagayan Valley* (Region line included) -> *Schools Division of Nueva Vizcaya* -> *DIADI NATIONAL HIGH SCHOOL* (Uppercase) -> `<hr />` divider -> *CLASSROOM PROGRAM* -> *S.Y. 2026 - 2027* -> *7 ALBERT EINSTEIN* -> Timetable Grid -> Operational Committee Signatories -> Footer bar with DepEd Corporate Wordmark (DO 001 Torch) and authentic Diadi NHS Crest.
+       - **SHS Format**: Centered Circular DepEd Seal -> *Republic of the Philippines* -> *Department of Education* -> *Schools Division of Nueva Vizcaya* (Region line omitted for SDO Form 7) -> *Diadi National High School* (Title case) -> `<hr />` divider -> *CLASSROOM PROGRAM* -> *S.Y. 2026 - 2027* -> *11 STEM - ALBERT EINSTEIN* -> Timetable Grid -> 4-Column Statutory SDO Approval Signatories -> Footer bar with Tri-Logo (DepEd Corporate Wordmark + Bagong Pilipinas + authentic Diadi NHS Crest).
+     - **Official Insignia, Seals & Masthead Formats (Integrated Directly Here)**:
+       - Positioned immediately beneath the preview for real-time visual feedback (no separate card below).
+       - Automatically follows the active level switch (JHS or SHS).
+       - **DepEd Circular Seal (Header Masthead — Up in Header)**: Prescribed circular coat of arms centered at the top of the letterhead above *Republic of the Philippines* with custom upload and reset controls.
+       - **DepEd Corporate Text Logo / Wordmark (Signatories Footer — Down with Signatories)**: Prescribed horizontal DO 001 torch wordmark placed on the footer line beside approval signatories.
+       - **"Bagong Pilipinas" Governance Logo**: Prescribed national governance insignia under OP MC No. 24, s. 2023 placed down beside signatories.
+       - **Diadi National High School Official Crest**: Authentic institutional emblem of Diadi National High School (Est. 1980), Poblacion, Diadi, Nueva Vizcaya, replacing synthetic vector/AI approximations with genuine high-resolution crest artwork.
+       - One-click presets: *Tri-Logo Footer* (DepEd Wordmark + BP + School Crest), *DepEd Wordmark + School Crest*, *School Crest Only*, and *Clean Text-Only*.
+       - One-click helper: "Copy Seals to Both JHS & SHS".
+     - **DepEd Official Signatory Rosters (Integrated Directly Here)**:
+       - Automatically follows the active level switch (JHS committee or SHS 4-column statutory SDO approval).
+       - Plantilla naming and designation fields for each level with "Reset Defaults" and "Save Signatory Roster".
+   - **Governance & Campus Locations**:
+     - Administrative Hierarchy: DepEd Region, Schools Division Office (SDO), District Jurisdiction.
+     - Contact Coordinates: Campus Physical Address, Official Email, School Website / Portal.
+
+2. **Scheduling Configurations**:
+   - **Operation Hours**: Standard institutional schedule for Diadi National High School defaults to **07:30 AM – 05:00 PM** (570 minutes / 9.5 hours daily operating window, Single Whole-Day Session).
+   - **Days of Operations & Session Selector**:
+     - Operating days (Monday through Sunday) with pill toggles.
+     - Defaults: Monday to Thursday are *Regular Session* (Blue), Friday is *Shortened Session* (Light Blue), and Saturday & Sunday are *Off Days* (Greyed out).
+     - Color legend: Blue for active session type, Light Blue for other session type, Greyed out for not selected (off days).
+   - **Interactive Period Visualization**:
+     - Clean, focused period timeline displaying instructional periods from 1st Period to Nth Period with scheduled breaks (Morning Recess, Lunch Break, Afternoon Break) slotted in between.
+     - Drag-and-drop handles and arrow buttons (▲/▼) to reorder breaks between periods.
+   - **Period Duration Control & Break Configuration**:
+     - Custom instructional period durations (defaults to 60m regular, 45m shortened) and daily period counts.
+     - **Instructional Time Shortfall Alert**: Proactive detection that alerts the user whenever period duration is set below 60 minutes. Reminds the user that required timing is 60 minutes for 4 meetings per week (240 mins/week total), and that the ideal period duration is 60 minutes per meeting to prevent instructional time shortfalls.
+     - Break configuration with toggle switches, duration controls, and placement after specific periods.
+   - **Separate Configurations for JHS and SHS**:
+     - Independent scheduling parameters maintained and saved separately for Junior High School and Senior High School.
+
+3. **Academic Years & Historical Archives Hub**:
+   - **Active Operational School Year**: Current school year designation (S.Y. 2026–2027) and unified 3-term operational system with active term indicator (Term 1, Term 2, Term 3).
+   - **Most Recent Published Schedules (Active S.Y. 2026–2027)**:
+     - Real-time showcase of the active master timetables for both **Junior High School (JHS)** and **Senior High School (SHS)**.
+     - Direct navigation to live interactive timetables with 60-minute period timings, breaks, and teacher subject distributions.
+   - **Historical School Years Registry (3 Previous Years)**:
+     - Pre-populated historical records for Diadi National High School: **S.Y. 2025–2026**, **S.Y. 2024–2025**, and **S.Y. 2023–2024**.
+     - Focused exclusively on DNHS core operational entities (no individual student headcounts or room utilization):
+       - Section structures (grade levels, section names, tracks, strands, class advisers).
+       - Faculty rosters & ancillary duties (plantilla designations, primary/secondary majors, advisory classes, school ancillary coordinator roles, weekly contact load limits).
+       - Scheduling configurations & bell timings (operating hours, 60m regular period durations, 45m Friday shortened sessions, and morning/lunch/afternoon break placements).
+       - Published master schedules (archived daily period assignments for JHS and SHS).
+   - **Granular Data Reusability & Carry-Over**:
+     - **Inspect Archive**: Modal viewer to browse exact section rosters, teacher profiles, ancillary roles, and archived published schedules.
+     - **Selective Carry-Over**: One-click import allowing users to copy sections, faculty rosters, ancillaries, bell configurations, or published schedules from any previous year into the current active school year.
+     - **Full School Year Rollover**: Instant clone of all records with an automated timestamped audit trail.
+
 ---
 
 *TuroTugma Timetable System • Developed for Philippine Public and Private Secondary Schools*
+
+

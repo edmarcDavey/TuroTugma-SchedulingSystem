@@ -1194,6 +1194,7 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
           subtitle="Grouped by grade level & special program targeting (STE, SPA, SPJ, Universal)."
           subjects={jhsSubjects}
           editingId={editingId}
+          facultyMembers={facultyMembers}
           onEdit={handleEditSubject}
           onDelete={handleDeleteSubject}
         />
@@ -1205,6 +1206,7 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
           subtitle="Grouped by semester context, grade level, and elective cluster."
           subjects={shsSubjects}
           editingId={editingId}
+          facultyMembers={facultyMembers}
           onEdit={handleEditSubject}
           onDelete={handleDeleteSubject}
         />
@@ -1238,7 +1240,7 @@ function ConfirmationModal({ open, message, onConfirm, onCancel, title = "Confir
   );
 }
 
-function SubjectsLevelPanel({ title, subtitle, subjects, editingId, onEdit, onDelete }) {
+function SubjectsLevelPanel({ title, subtitle, subjects, editingId, facultyMembers = [], onEdit, onDelete }) {
   return (
     <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16, marginBottom: 16 }}>
       <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>{title}</h2>
@@ -1264,7 +1266,14 @@ function SubjectsLevelPanel({ title, subtitle, subjects, editingId, onEdit, onDe
               return left.subjectName.localeCompare(right.subjectName);
             })
             .map((subject) => (
-              <SubjectRow key={subject.id} subject={subject} isEditing={editingId === subject.id} onEdit={onEdit} onDelete={onDelete} />
+              <SubjectRow
+                key={subject.id}
+                subject={subject}
+                isEditing={editingId === subject.id}
+                facultyMembers={facultyMembers}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
             ))}
         </div>
       )}
@@ -1365,7 +1374,7 @@ function SubjectRow({ subject, isEditing, onEdit, onDelete }) {
           ) : null}
           {subject.teachingMode === "breakout" || Number(subject.requiredTeachers) > 1 ? (
             <span style={{ fontSize: 10, fontWeight: 700, background: "#f3e8ff", color: "#6b21a8", border: "1px solid #d8b4fe", padding: "1px 6px", borderRadius: 4 }}>
-              Breakout ({subject.requiredTeachers || 2} Teachers)
+              Breakout ({subject.requiredTeachers || (Array.isArray(subject.breakoutStreams) ? subject.breakoutStreams.length : 2)} Teachers)
             </span>
           ) : null}
         </div>

@@ -17,6 +17,12 @@ import { getRecentActivityLog, formatActivityEntry } from "../analyticsData";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, BarElement, Filler, Tooltip, Legend);
 
+function navigateToDashboardUrl(url) {
+  if (typeof window === "undefined") return;
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export default function DashboardOverview() {
   const [analytics, setAnalytics] = useState(() => toDashboardViewModel(getDashboardAnalyticsPayload()));
   const [recentActivity, setRecentActivity] = useState(() =>
@@ -78,21 +84,21 @@ export default function DashboardOverview() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span
                 style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 700, background: "#e0e7ff", padding: "3px 8px", borderRadius: 6 }}
-                onClick={() => window.location.href = "/dashboard?tab=faculty"}
+                onClick={() => navigateToDashboardUrl("/dashboard?tab=faculty")}
                 tabIndex={0}
                 role="button"
                 aria-label="View Faculty Directory"
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=faculty"; }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=faculty"); }}
               >
                 Faculty Directory →
               </span>
               <span
                 style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500 }}
-                onClick={() => window.location.href = "/dashboard?tab=faculty"}
+                onClick={() => navigateToDashboardUrl("/dashboard?tab=faculty")}
                 tabIndex={0}
                 role="button"
                 aria-label="Manage Faculty"
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=faculty"; }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=faculty"); }}
               >
                 Faculty
               </span>
@@ -115,11 +121,11 @@ export default function DashboardOverview() {
             <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
             <span
               style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
-              onClick={() => window.location.href = "/dashboard?tab=schedule-generator"}
+              onClick={() => navigateToDashboardUrl("/dashboard?tab=schedule-generator")}
               tabIndex={0}
               role="button"
               aria-label="View Schedule Grid"
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=schedule-generator"; }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=schedule-generator"); }}
             >
               View Schedule Grid
             </span>
@@ -157,11 +163,11 @@ export default function DashboardOverview() {
           </div>
           <span
             style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
-            onClick={() => window.location.href = "/dashboard?tab=school-profile"}
+            onClick={() => navigateToDashboardUrl("/dashboard?tab=school-profile")}
             tabIndex={0}
             role="button"
             aria-label="Configure Priority Policy"
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=school-profile"; }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=school-profile"); }}
           >
             Configure Priority Policy
           </span>
@@ -250,11 +256,11 @@ export default function DashboardOverview() {
             <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Status</h2>
             <span
               style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
-              onClick={() => window.location.href = "/dashboard?tab=schedule-generator"}
+              onClick={() => navigateToDashboardUrl("/dashboard?tab=schedule-generator")}
               tabIndex={0}
               role="button"
               aria-label="View Schedule Grid"
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') window.location.href = "/dashboard?tab=schedule-generator"; }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=schedule-generator"); }}
             >
               View Schedule Grid
             </span>
@@ -428,13 +434,13 @@ function UnresolvedConflictsCard({ conflicts = [] }) {
               alignItems: "center",
               gap: 4,
             }}
-            onClick={() => (window.location.href = "/dashboard?tab=schedule-generator#conflicts-card")}
+            onClick={() => navigateToDashboardUrl("/dashboard?tab=schedule-generator#conflicts-card")}
             tabIndex={0}
             role="button"
             aria-label="Resolve Conflicts in Generator"
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
-                window.location.href = "/dashboard?tab=schedule-generator#conflicts-card";
+                navigateToDashboardUrl("/dashboard?tab=schedule-generator#conflicts-card");
               }
             }}
           >

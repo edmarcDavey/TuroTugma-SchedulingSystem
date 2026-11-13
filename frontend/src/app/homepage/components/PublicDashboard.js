@@ -58,9 +58,25 @@ function navLinkItemStyle(active) {
 }
 
 export default function PublicDashboard() {
-  const [activeTab, setActiveTab] = useState("current-assignment");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      if (tab === "final-timetables" || tab === "final-time-tables") {
+        return "final-timetables";
+      }
+    }
+    return "current-assignment";
+  });
 
-
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location);
+      url.searchParams.set("tab", tab);
+      window.history.replaceState({}, "", url);
+    }
+  };
 
   let content;
   if (activeTab === "current-assignment") {
@@ -102,18 +118,32 @@ export default function PublicDashboard() {
           Navigation
         </div>
         <nav style={{ display: "grid", gap: 8 }}>
-          <span
-            style={navLinkItemStyle(activeTab === "current-assignment")}
-            onClick={() => setActiveTab("current-assignment")}
+          <button
+            type="button"
+            id="public-nav-current-assignment"
+            style={{
+              ...navLinkItemStyle(activeTab === "current-assignment"),
+              width: "100%",
+              fontFamily: "inherit",
+              outline: "none",
+            }}
+            onClick={() => handleTabChange("current-assignment")}
           >
-            <FaChalkboardTeacher style={{marginRight:8}} /> Current Assignment View
-          </span>
-          <span
-            style={navLinkItemStyle(activeTab === "final-timetables")}
-            onClick={() => setActiveTab("final-timetables")}
+            <FaChalkboardTeacher style={{ marginRight: 8 }} /> Current Assignment View
+          </button>
+          <button
+            type="button"
+            id="public-nav-final-timetables"
+            style={{
+              ...navLinkItemStyle(activeTab === "final-timetables"),
+              width: "100%",
+              fontFamily: "inherit",
+              outline: "none",
+            }}
+            onClick={() => handleTabChange("final-timetables")}
           >
-            <FaTable style={{marginRight:8}} /> Final Time Tables
-          </span>
+            <FaTable style={{ marginRight: 8 }} /> Final Time Tables
+          </button>
         </nav>
         <div style={{ marginTop: "auto" }}>
           <a

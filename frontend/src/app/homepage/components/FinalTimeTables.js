@@ -1,4 +1,4 @@
-// Normalize sections to flat array with correct IDs and names (copied from ScheduleMaker.js)
+// Normalize sections to flat array with correct IDs and names (supporting JHS and SHS)
 function normalizeSections(sectionsRaw, scheduleType = "jhs") {
   if (!sectionsRaw || typeof sectionsRaw !== "object") {
     return [];
@@ -10,8 +10,9 @@ function normalizeSections(sectionsRaw, scheduleType = "jhs") {
         const entries = Array.isArray(gradeConfig?.sections) ? gradeConfig.sections : [];
         return entries.map((section, index) => ({
           id: `jhs-${grade}-${index}`,
+          originalId: section?.id,
           level: "jhs",
-          grade,
+          grade: Number(grade),
           name: section?.name || `Grade ${grade} Section ${index + 1}`,
           classification: section?.classification || "Regular",
           track: section?.track || "",
@@ -21,16 +22,40 @@ function normalizeSections(sectionsRaw, scheduleType = "jhs") {
         if (left.grade !== right.grade) {
           return left.grade - right.grade;
         }
-        return left.name.localeCompare(right.name);
+        return String(left.name).localeCompare(String(right.name));
       });
   }
-  // Add SHS logic if needed
-  return [];
+  return [11, 12]
+    .flatMap((grade) => {
+      const gradeConfig = sectionsRaw?.shs?.[grade];
+      const entries = Array.isArray(gradeConfig?.sections) ? gradeConfig.sections : [];
+      return entries.map((section, index) => ({
+        id: `shs-${grade}-${index}`,
+        originalId: section?.id,
+        level: "shs",
+        grade: Number(grade),
+        name: section?.name || `Grade ${grade} Section ${index + 1}`,
+        classification: "",
+        track: section?.track || "",
+      }));
+    })
+    .sort((left, right) => {
+      if (left.grade !== right.grade) {
+        return left.grade - right.grade;
+      }
+      return String(left.name).localeCompare(String(right.name));
+    });
 }
 
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import html2pdf from "html2pdf.js";
+import {
+  DEFAULT_PROFILE_FALLBACK,
+  getEffectiveSchoolProfile,
+  SignatoryBlock,
+  DepEdTopHeader,
+} from "../../dashboard/components/TimeTables";
 
 function getFromStorage(key, fallback) {
   try {
@@ -41,13 +66,41 @@ function getFromStorage(key, fallback) {
   }
 }
 
-const DRAFTS_STORAGE_KEY = "turotugma_schedule_drafts";
+const PUBLISHED_STORAGE_KEY = "turotugma_published_schedules";
 const SECTIONS_STORAGE_KEY = "turotugma_sections_created";
 const SUBJECTS_STORAGE_KEY = "turotugma_subjects";
 const FACULTY_STORAGE_KEY = "turotugma_faculty";
+function buildSlotsForTimetable(config, scheduleType = "jhs") {
+  const levelConfig = config?.[scheduleType] || config?.jhs || {};
+  const regularDays = Array.isArray(levelConfig.regularDays) && levelConfig.regularDays.length > 0
+    ? levelConfig.regularDays
+    : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const shortenedDays = Array.isArray(levelConfig.shortenedDays) ? levelConfig.shortenedDays : [];
+  const maxPeriods = levelConfig.periods?.regular || 8;
+
+  const slots = [];
+  const activeDays = Array.from(new Set([...regularDays, ...shortenedDays]));
+
+  activeDays.forEach((day) => {
+    const isShortened = shortenedDays.includes(day);
+    for (let period = 1; period <= maxPeriods; period++) {
+      const slotId = `${day}-P${period}`;
+      slots.push({
+        id: slotId,
+        day,
+        period,
+        sessionType: isShortened ? "shortened" : "regular",
+        label: `${period}${period === 1 ? "st" : period === 2 ? "nd" : period === 3 ? "rd" : "th"} Period`,
+      });
+    }
+  });
+  return slots;
+}
 
 export default function FinalTimeTables() {
   const [draft, setDraft] = useState(null);
+  const [publishedList, setPublishedList] = useState([]);
+  const [selectedPublishedId, setSelectedPublishedId] = useState("");
   const [sections, setSections] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [teachers, setTeachers] = useState([]);
@@ -57,67 +110,384 @@ export default function FinalTimeTables() {
   const [selectedSection, setSelectedSection] = useState('all');
   const [selectedTeacher, setSelectedTeacher] = useState('all');
   const [teacherType, setTeacherType] = useState('all'); // 'all', 'adviser', 'non-adviser'
+  const [schoolProfile, setSchoolProfile] = useState(() => getEffectiveSchoolProfile());
   // Ref for exportable schedules only (not the whole component)
   const exportSchedulesRef = useRef();
+
+  useEffect(() => {
+    const handleProfileSync = () => {
+      setSchoolProfile(getEffectiveSchoolProfile());
+    };
+    window.addEventListener("storage", handleProfileSync);
+    window.addEventListener("focus", handleProfileSync);
+    window.addEventListener("turotugma:profile-updated", handleProfileSync);
+    return () => {
+      window.removeEventListener("storage", handleProfileSync);
+      window.removeEventListener("focus", handleProfileSync);
+      window.removeEventListener("turotugma:profile-updated", handleProfileSync);
+    };
+  }, []);
 
   function handleExport() {
     if (exportSchedulesRef.current) {
       // Clone only the schedules container
       const exportClone = exportSchedulesRef.current.cloneNode(true);
-      // Add CSS for page-breaks
+      exportClone.style.width = '100%';
+      exportClone.style.maxWidth = 'none';
+      exportClone.style.margin = '0';
+      exportClone.style.padding = '0';
+      exportClone.style.background = '#ffffff';
+
+      // Add CSS for page-breaks and compact A4 landscape printing
       const style = document.createElement('style');
       style.innerHTML = `
-        .export-section-page-break { page-break-after: always; break-after: page; }
-        @media print { .export-section-page-break { page-break-after: always; break-after: page; } }
+        @page {
+          size: A4 landscape;
+          margin: 0;
+        }
+        .export-section-page-break {
+          margin: 0 !important;
+          padding: 3.5mm 4.5mm !important;
+          box-shadow: none !important;
+          border: 1.5px solid #000 !important;
+          border-radius: 0 !important;
+          box-sizing: border-box !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          background: #ffffff !important;
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: space-between !important;
+          min-height: 202mm !important;
+          max-height: 204mm !important;
+          overflow: hidden !important;
+        }
+        .export-section-page-break .deped-top-header {
+          margin-bottom: 4px !important;
+          line-height: 1.1 !important;
+          flex-shrink: 0 !important;
+        }
+        .export-section-page-break .deped-draft-badge {
+          font-size: 8.5px !important;
+          padding: 2px 6px !important;
+        }
+        .export-section-page-break .deped-header-republic {
+          font-size: 9px !important;
+          margin: 0 !important;
+          line-height: 1.1 !important;
+        }
+        .export-section-page-break .deped-header-department {
+          font-size: 11px !important;
+          margin: 0 !important;
+          line-height: 1.1 !important;
+        }
+        .export-section-page-break .deped-header-region,
+        .export-section-page-break .deped-header-division {
+          font-size: 8.5px !important;
+          margin: 0 !important;
+          line-height: 1.1 !important;
+        }
+        .export-section-page-break .deped-header-school {
+          font-size: 12px !important;
+          margin: 1px 0 0 !important;
+          line-height: 1.15 !important;
+        }
+        .export-section-page-break .deped-header-title {
+          font-size: 10.5px !important;
+          margin: 2px 0 0 !important;
+          line-height: 1.1 !important;
+        }
+        .export-section-page-break .deped-header-sy {
+          font-size: 8.5px !important;
+          margin: 0 !important;
+          line-height: 1.1 !important;
+        }
+        .export-section-page-break .deped-header-subtitle {
+          font-size: 11.5px !important;
+          margin: 1px 0 0 !important;
+          line-height: 1.15 !important;
+        }
+        .export-section-page-break .deped-header-adviser {
+          font-size: 8.5px !important;
+          margin: 0 !important;
+          line-height: 1.1 !important;
+        }
+
+        .export-section-page-break .timetable-table-wrap {
+          flex: 1 1 auto !important;
+          display: flex !important;
+          flex-direction: column !important;
+          overflow: visible !important;
+        }
+        .export-section-page-break table {
+          width: 100% !important;
+          flex: 1 1 auto !important;
+          border-collapse: collapse !important;
+          margin: 0 !important;
+        }
+        .export-section-page-break th,
+        .export-section-page-break td {
+          padding: 2.5px 4px !important;
+          font-size: 8.5px !important;
+          line-height: 1.12 !important;
+          min-height: 0 !important;
+          height: auto !important;
+        }
+        .export-section-page-break thead tr {
+          background: transparent !important;
+        }
+        .export-section-page-break thead th,
+        .export-section-page-break th {
+          font-size: 9.5px !important;
+          font-weight: 800 !important;
+          padding: 3.5px 4px !important;
+          color: #000000 !important;
+          background: #8fb6e5 !important;
+          background-color: #8fb6e5 !important;
+          opacity: 1 !important;
+        }
+        .export-section-page-break td.time-cell,
+        .export-section-page-break td:first-child,
+        .export-section-page-break td:nth-child(2) {
+          white-space: nowrap !important;
+          font-size: 8px !important;
+          line-height: 1.1 !important;
+          color: #000000 !important;
+        }
+        .export-section-page-break .schedule-cell {
+          min-height: 0 !important;
+          height: auto !important;
+          padding: 2.5px 4px !important;
+        }
+        .export-section-page-break .schedule-cell-content {
+          gap: 1.5px !important;
+        }
+        .export-section-page-break .schedule-cell-subject {
+          font-size: 9px !important;
+          line-height: 1.12 !important;
+          font-weight: 800 !important;
+          color: #000000 !important;
+        }
+        .export-section-page-break .schedule-cell-subtext {
+          font-size: 7.5px !important;
+          line-height: 1.05 !important;
+          font-weight: 600 !important;
+          letter-spacing: 0 !important;
+          margin-top: 0.5px !important;
+          color: #111111 !important;
+        }
+        .export-section-page-break .schedule-cell-breakout {
+          font-size: 6.8px !important;
+          line-height: 1.0 !important;
+          gap: 0.5px !important;
+        }
+        .export-section-page-break .break-banner {
+          font-size: 8.5px !important;
+          padding: 2.5px 4px !important;
+          letter-spacing: 0.8px !important;
+          line-height: 1.1 !important;
+          background: #f5b301 !important;
+          background-color: #f5b301 !important;
+          color: #000000 !important;
+        }
+
+        .export-section-page-break .signatory-container {
+          margin-top: 5px !important;
+          padding-top: 2px !important;
+          flex-shrink: 0 !important;
+        }
+        .export-section-page-break .signatory-row {
+          gap: 8px !important;
+          margin-bottom: 3px !important;
+        }
+        .export-section-page-break .signatory-row-mid {
+          margin-top: 3px !important;
+          margin-bottom: 3px !important;
+          gap: 14px !important;
+        }
+        .export-section-page-break .signatory-grid {
+          gap: 6px !important;
+        }
+        .export-section-page-break .signatory-col-right {
+          width: 190px !important;
+        }
+        .export-section-page-break .signatory-box {
+          min-width: 190px !important;
+        }
+        .export-section-page-break .signatory-heading {
+          font-size: 8.5px !important;
+          margin-bottom: 3px !important;
+          font-weight: 700 !important;
+          color: #000000 !important;
+        }
+        .export-section-page-break .signatory-name {
+          font-size: 8.5px !important;
+          line-height: 1.1 !important;
+          font-weight: 800 !important;
+          color: #000000 !important;
+        }
+        .export-section-page-break .signatory-title {
+          font-size: 7.5px !important;
+          line-height: 1.05 !important;
+          margin-top: 1px !important;
+          font-weight: 600 !important;
+          color: #222222 !important;
+        }
+        .export-section-page-break .signatory-contact-bar {
+          margin-top: 4px !important;
+          padding-top: 4px !important;
+          border-top: 1.2px solid #000 !important;
+          font-size: 8px !important;
+          line-height: 1.15 !important;
+          gap: 8px !important;
+        }
         body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       `;
       exportClone.prepend(style);
+      Array.from(exportClone.querySelectorAll('.turotugma-no-print')).forEach((el) => {
+        el.remove();
+      });
       // Add class to each schedule block (section or teacher)
-      Array.from(exportClone.querySelectorAll('div')).forEach(div => {
+      Array.from(exportClone.querySelectorAll('div')).forEach((div) => {
         if (div.classList.contains('schedule-block')) {
           div.classList.add('export-section-page-break');
         }
       });
-      html2pdf()
+      const docTitle = `${viewMode === 'teachers' ? 'Teacher-Timetables' : 'Section-Timetables'}-${(draft?.name || 'Published').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+      let blockRects = [];
+      let containerHeight = 0;
+
+      const worker = html2pdf()
         .set({
-          margin: 0.2,
-          filename: `FinalSchedule-${draft.name || 'export'}.pdf`,
-          html2canvas: { scale: 2 },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-          pagebreak: { mode: ['css', 'legacy'] }
+          margin: [3, 4, 3, 4],
+          filename: `${docTitle}.pdf`,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            scrollY: 0,
+          },
+          jsPDF: {
+            unit: 'mm',
+            format: 'a4',
+            orientation: 'landscape',
+          },
+          pagebreak: {
+            mode: [],
+          },
         })
-        .from(exportClone)
+        .from(exportClone);
+
+      worker
+        .toContainer()
+        .then(function () {
+          const container = this.prop.container;
+          if (container) {
+            const blocks = Array.from(container.querySelectorAll('.export-section-page-break'));
+            const cRect = container.getBoundingClientRect();
+            blockRects = blocks.map((b) => {
+              const r = b.getBoundingClientRect();
+              return {
+                top: Math.max(0, r.top - cRect.top),
+                height: r.height,
+              };
+            });
+            containerHeight = cRect.height || container.scrollHeight || 1;
+          }
+        })
+        .toCanvas()
+        .then(function () {
+          const srcCanvas = this.prop.canvas;
+          if (srcCanvas && blockRects.length > 0 && containerHeight > 0) {
+            const pxPageHeight = Math.floor(srcCanvas.width * this.prop.pageSize.inner.ratio);
+            const scaleY = srcCanvas.height / containerHeight;
+            const normalizedCanvas = document.createElement('canvas');
+            normalizedCanvas.width = srcCanvas.width;
+            normalizedCanvas.height = pxPageHeight * blockRects.length;
+            const ctx = normalizedCanvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, normalizedCanvas.width, normalizedCanvas.height);
+
+            blockRects.forEach((rect, idx) => {
+              const sy = Math.max(0, Math.round(rect.top * scaleY));
+              const sh = Math.min(srcCanvas.height - sy, Math.round(rect.height * scaleY));
+              if (sh <= 0) return;
+              const destY = idx * pxPageHeight;
+              const drawH = Math.min(sh, pxPageHeight);
+              ctx.drawImage(
+                srcCanvas,
+                0,
+                sy,
+                srcCanvas.width,
+                sh,
+                0,
+                destY,
+                normalizedCanvas.width,
+                drawH
+              );
+            });
+
+            this.prop.canvas = normalizedCanvas;
+          }
+        })
+        .toPdf()
         .save();
     }
   }
 
-  const loadActiveSchedule = () => {
+  const loadActiveSchedule = (preferredId = null) => {
     try {
-      const publishedRaw = getFromStorage("turotugma_published_schedules", null);
+      const publishedRaw = getFromStorage(PUBLISHED_STORAGE_KEY, null);
       if (publishedRaw && typeof publishedRaw === "object") {
-        const pubList = Object.values(publishedRaw).filter((item) => item && item.assignments && Object.keys(item.assignments).length > 0);
+        const pubList = [];
+        Object.entries(publishedRaw).forEach(([type, item]) => {
+          if (item && item.assignments && Object.keys(item.assignments).length > 0) {
+            const pubId = `published-${item.scheduleType || type}`;
+            pubList.push({
+              id: pubId,
+              scheduleType: item.scheduleType || type,
+              name: `Published Schedule — ${(item.scheduleType || type).toUpperCase()}`,
+              updatedAt: item.publishedAt || item.updatedAt || new Date(0).toISOString(),
+              schedule: item,
+              config: item.config || item.scheduleConfig || {},
+            });
+          }
+        });
+
+        pubList.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+        setPublishedList(pubList);
+
         if (pubList.length > 0) {
-          pubList.sort((a, b) => new Date(b.publishedAt || b.updatedAt || 0) - new Date(a.publishedAt || a.updatedAt || 0));
-          const latestPub = pubList[0];
-          setDraft({
-            id: `published-${latestPub.scheduleType || "jhs"}`,
-            scheduleType: latestPub.scheduleType || "jhs",
-            name: `Published Schedule — ${(latestPub.scheduleType || "jhs").toUpperCase()}`,
-            updatedAt: latestPub.publishedAt || latestPub.updatedAt,
-            schedule: latestPub,
-            config: latestPub.config || latestPub.scheduleConfig,
-          });
+          const target = preferredId ? pubList.find((p) => p.id === preferredId) || pubList[0] : pubList[0];
+          setSelectedPublishedId(target.id);
+          setDraft(target);
           const sectionsRaw = getFromStorage(SECTIONS_STORAGE_KEY, {});
-          setSections(normalizeSections(sectionsRaw, latestPub?.scheduleType || "jhs"));
+          setSections(normalizeSections(sectionsRaw, target?.scheduleType || "jhs"));
           setSubjects(getFromStorage(SUBJECTS_STORAGE_KEY, []));
           setTeachers(getFromStorage(FACULTY_STORAGE_KEY, []));
           return;
         }
       }
+      setPublishedList([]);
+      setSelectedPublishedId("");
       setDraft(null);
     } catch (err) {
       console.error("Error loading active schedule in FinalTimeTables:", err);
+      setPublishedList([]);
+      setSelectedPublishedId("");
       setDraft(null);
+    }
+  };
+
+  const handleSwitchPublished = (id) => {
+    setSelectedPublishedId(id);
+    const found = publishedList.find((p) => p.id === id);
+    if (found) {
+      setDraft(found);
+      const sectionsRaw = getFromStorage(SECTIONS_STORAGE_KEY, {});
+      setSections(normalizeSections(sectionsRaw, found?.scheduleType || "jhs"));
     }
   };
 
@@ -186,12 +556,16 @@ export default function FinalTimeTables() {
     return name;
   }
   function getSubjectName(subjectId) {
-    const found = Array.isArray(subjects) ? subjects.find((s) => s.id === subjectId) : null;
-    const raw = found ? found.subjectName || found.name : subjectId;
+    if (!subjectId) return "";
+    const sub = subjectsById?.get(subjectId) || subjectsById?.get(String(subjectId));
+    const found = sub || (Array.isArray(subjects) ? subjects.find((s) => s.id === subjectId) : null);
+    const raw = found ? found.subjectName || found.subjectCode || found.name : subjectId;
     return formatCleanSubjectName(raw);
   }
   function getTeacherName(teacherId) {
-    const found = Array.isArray(teachers) ? teachers.find((t) => t.id === teacherId) : null;
+    if (!teacherId) return "";
+    const teacher = teachersById?.get(teacherId) || teachersById?.get(String(teacherId));
+    const found = teacher || (Array.isArray(teachers) ? teachers.find((t) => t.id === teacherId) : null);
     return found ? found.teacherName || found.name : teacherId;
   }
 
@@ -201,10 +575,12 @@ export default function FinalTimeTables() {
     sectionsById,
     subjectsById,
     teachersById,
+    slots,
     days,
     regularDays,
     shortenedDays,
     maxPeriods,
+    assignedSectionIds,
   } = React.useMemo(() => {
     const cellIdx = new Map();
     const teacherIdx = new Map();
@@ -220,19 +596,34 @@ export default function FinalTimeTables() {
         sectionsById: secMap,
         subjectsById: subMap,
         teachersById: tMap,
+        slots: [],
         days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
         regularDays: ["Monday", "Tuesday", "Wednesday", "Thursday"],
         shortenedDays: ["Friday"],
         maxPeriods: 8,
+        assignedSectionIds: [],
       };
     }
 
     const sched = draft.schedule;
     const assign = sched.assignments || {};
 
-    const secList = Array.isArray(sched.sections) && sched.sections.length > 0 ? sched.sections : sections;
+    const rawSecList = Array.isArray(sched.sections) && sched.sections.length > 0 ? sched.sections : sections;
+    const secList = [...rawSecList].sort((a, b) => {
+      const gA = Number(a.grade) || 0;
+      const gB = Number(b.grade) || 0;
+      if (gA !== gB) return gA - gB;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
     secList.forEach((s) => {
-      if (s.id) secMap.set(s.id, s);
+      if (s.id) {
+        secMap.set(s.id, s);
+        secMap.set(String(s.id), s);
+      }
+      if (s.originalId) {
+        secMap.set(s.originalId, s);
+        secMap.set(String(s.originalId), s);
+      }
       if (s.name) secMap.set(s.name, s);
       if (s.code) secMap.set(s.code, s);
     });
@@ -257,10 +648,14 @@ export default function FinalTimeTables() {
       if (t.teacherName) tMap.set(t.teacherName, t);
     });
 
-    const slotList = Array.isArray(sched.slots) && sched.slots.length > 0 ? sched.slots : [];
+    let slotList = Array.isArray(sched.slots) && sched.slots.length > 0 ? sched.slots : [];
+    if (slotList.length === 0) {
+      slotList = buildSlotsForTimetable(draft?.config || sched.config, draft?.scheduleType || "jhs");
+    }
     slotList.forEach((s) => sById.set(s.id, s));
 
-    const levelCfg = sched.config?.jhs || draft?.config?.jhs || {};
+    const stType = draft?.scheduleType || sched?.scheduleType || "jhs";
+    const levelCfg = sched.config?.[stType] || sched.config?.jhs || draft?.config?.[stType] || draft?.config?.jhs || {};
     const weekdayOrder = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
     let daysFromSlots = [];
@@ -321,7 +716,11 @@ export default function FinalTimeTables() {
         }
 
         const secId = parts[0];
-        const period = slot?.period ? Number(slot.period) : null;
+        let period = slot?.period ? Number(slot.period) : null;
+        if (!period) {
+          const numMatch = slotId.match(/P(\d+)/i) || slotId.match(/(\d+)/);
+          if (numMatch) period = parseInt(numMatch[1], 10);
+        }
         const secObj = secMap.get(secId) || secList.find((s) => s.id === secId || s.name === secId);
         const sectionAliases = new Set([secId]);
         if (secObj) {
@@ -341,15 +740,40 @@ export default function FinalTimeTables() {
           }
         }
 
+        const targetDays = (!day || day === "All Days") ? dayList : [day];
+
         sectionAliases.forEach((alias) => {
-          if (day && period) {
-            cellIdx.set(`${alias}|${day}|${period}`, assign[cellKey]);
-          }
+          targetDays.forEach((d) => {
+            if (period) {
+              cellIdx.set(`${alias}|${d}|${period}`, assign[cellKey]);
+            }
+          });
           cellIdx.set(`${alias}|${slotId}`, assign[cellKey]);
         });
 
-        if (assign[cellKey]?.teacherId && day && period) {
-          teacherIdx.set(`${assign[cellKey].teacherId}|${day}|${period}`, { assignment: assign[cellKey], sectionId: secId });
+        if (period) {
+          targetDays.forEach((d) => {
+            if (assign[cellKey]?.teacherId) {
+              teacherIdx.set(`${assign[cellKey].teacherId}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId });
+              teacherIdx.set(`${String(assign[cellKey].teacherId)}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId });
+            }
+            if (Array.isArray(assign[cellKey]?.coTeacherIds)) {
+              assign[cellKey].coTeacherIds.forEach((coTid) => {
+                if (coTid) {
+                  teacherIdx.set(`${coTid}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId, isCoTeacher: true });
+                  teacherIdx.set(`${String(coTid)}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId, isCoTeacher: true });
+                }
+              });
+            }
+            if (Array.isArray(assign[cellKey]?.breakoutAssignments)) {
+              assign[cellKey].breakoutAssignments.forEach((b) => {
+                if (b?.teacherId) {
+                  teacherIdx.set(`${b.teacherId}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId, streamName: b.stream, isBreakout: true });
+                  teacherIdx.set(`${String(b.teacherId)}|${d}|${period}`, { assignment: assign[cellKey], sectionId: secId, streamName: b.stream, isBreakout: true });
+                }
+              });
+            }
+          });
         }
 
         if (day && !dayList.includes(day)) {
@@ -367,7 +791,39 @@ export default function FinalTimeTables() {
     shortDays = shortDays.filter((d) => dayList.includes(d));
 
     const maxPFromSlots = slotList.length > 0 ? Math.max(...slotList.map((s) => Number(s.period) || 1)) : 0;
-    const maxP = Math.max(maxPFromSlots, levelCfg.periods?.regular || 8, levelCfg.periods?.special || 8);
+    const maxPFromAssignments = Object.keys(assign).reduce((maxVal, cellKey) => {
+      const parts = cellKey.split("|");
+      if (parts.length >= 2) {
+        const slotId = parts[1];
+        const numMatch = slotId.match(/P(\d+)/i) || slotId.match(/(\d+)/);
+        if (numMatch) return Math.max(maxVal, parseInt(numMatch[1], 10));
+      }
+      return maxVal;
+    }, 0);
+    const maxP = (maxPFromAssignments > 0 || maxPFromSlots > 0)
+      ? Math.max(maxPFromAssignments, maxPFromSlots)
+      : Math.max(levelCfg.periods?.regular || 8, 1);
+
+    const assignedSecKeySet = new Set(Object.keys(assign).map((k) => k.split("|")[0]));
+    const secIds = [];
+    const addedSec = new Set();
+    secList.forEach((s) => {
+      if (!addedSec.has(s.id) && (assignedSecKeySet.has(s.id) || assignedSecKeySet.has(s.originalId) || assignedSecKeySet.has(s.name) || Object.keys(assign).length === 0)) {
+        secIds.push(s.id);
+        addedSec.add(s.id);
+        if (s.originalId) addedSec.add(s.originalId);
+      }
+    });
+    assignedSecKeySet.forEach((sid) => {
+      if (sid && !addedSec.has(sid)) {
+        const mapped = secMap.get(sid);
+        const canonicalId = mapped?.id || sid;
+        if (!addedSec.has(canonicalId)) {
+          secIds.push(canonicalId);
+          addedSec.add(canonicalId);
+        }
+      }
+    });
 
     return {
       cellAssignmentIndex: cellIdx,
@@ -375,31 +831,44 @@ export default function FinalTimeTables() {
       sectionsById: secMap,
       subjectsById: subMap,
       teachersById: tMap,
+      slots: slotList,
       days: dayList,
       regularDays: regDays,
       shortenedDays: shortDays,
       maxPeriods: maxP,
+      assignedSectionIds: secIds,
     };
   }, [draft, sections, subjects, teachers]);
 
   function getCellAssignment(sectionId, day, periodNum) {
-    const secObj = sectionsById.get(sectionId);
+    const secObj = sectionsById.get(sectionId) || sectionsById.get(String(sectionId));
     const secName = secObj?.name || getSectionName(sectionId);
     return (
       cellAssignmentIndex.get(`${sectionId}|${day}|${periodNum}`) ||
+      cellAssignmentIndex.get(`${String(sectionId)}|${day}|${periodNum}`) ||
       cellAssignmentIndex.get(`${secName}|${day}|${periodNum}`) ||
+      cellAssignmentIndex.get(`${sectionId}|${day}-P${periodNum}`) ||
+      cellAssignmentIndex.get(`${secName}|${day}-P${periodNum}`) ||
       null
     );
   }
 
   function getTeacherCellAssignment(teacherId, day, periodNum) {
-    return teacherAssignmentIndex.get(`${teacherId}|${day}|${periodNum}`) || null;
+    return (
+      teacherAssignmentIndex.get(`${teacherId}|${day}|${periodNum}`) ||
+      teacherAssignmentIndex.get(`${String(teacherId)}|${day}|${periodNum}`) ||
+      null
+    );
   }
 
   function getAdviserName(sectionId) {
-    const checkDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const secObj = sectionsById.get(sectionId) || sectionsById.get(String(sectionId));
+    if (secObj?.adviserName) return secObj.adviserName;
+    if (secObj?.adviserId) return getTeacherName(secObj.adviserId);
+
+    const checkDays = days?.length > 0 ? days : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
     for (const day of checkDays) {
-      for (let p = 1; p <= 8; p++) {
+      for (let p = 1; p <= (maxPeriods || 8); p++) {
         const assign = getCellAssignment(sectionId, day, p);
         if (assign?.teacherId) {
           return getTeacherName(assign.teacherId);
@@ -425,7 +894,14 @@ export default function FinalTimeTables() {
             textAlign: "center",
           }}
         >
-          <div style={{ fontSize: 48, marginBottom: 12 }}>📅</div>
+          <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 64, height: 64, borderRadius: 16, background: "#eef2ff", color: "#3B4197", marginBottom: 16 }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+          </div>
           <h3 style={{ margin: "0 0 8px", color: "#1e293b", fontSize: 20, fontWeight: 700 }}>
             No Published Schedule Available
           </h3>
@@ -438,12 +914,11 @@ export default function FinalTimeTables() {
   }
 
   // Use config from draft
-  const config = draft.config;
-  const scheduleType = draft.scheduleType;
+  const config = draft.config || {};
+  const scheduleType = draft.scheduleType || "jhs";
   const assignments = draft.schedule.assignments || {};
 
-  // For demo, use JHS config
-  const levelConfig = config["jhs"] || {};
+  const levelConfig = config[scheduleType] || config["jhs"] || {};
   const weekdayOrder = [
     "Monday",
     "Tuesday",
@@ -456,16 +931,29 @@ export default function FinalTimeTables() {
   const periods = Array.from({ length: maxPeriods || levelConfig.periods?.regular || 8 }, (_, i) => i + 1);
 
   // Section and teacher view logic
-  let sectionIds = Array.from(
-    new Set([...Object.keys(assignments).map((k) => k.split("|")[0]), ...sections.map((s) => s.id)])
-  ).filter(Boolean);
+  let sectionIds = [...assignedSectionIds];
 
-  const sectionIdToGrade = {};
-  sections.forEach(s => { sectionIdToGrade[s.id] = s.grade; });
+  const fromSecs = sections.map((s) => Number(s.grade)).filter(Boolean);
+  const gradeSet = new Set(fromSecs);
+  const availableGrades = gradeSet.size > 0
+    ? Array.from(gradeSet).sort((a, b) => a - b)
+    : (scheduleType === "shs" ? [11, 12] : [7, 8, 9, 10]);
 
   let teacherIds = Array.from(
-    new Set(Object.values(assignments).map(a => a?.teacherId).filter(Boolean))
+    new Set(Object.values(assignments).map((a) => a?.teacherId).filter(Boolean))
   );
+  Object.values(assignments).forEach((a) => {
+    if (Array.isArray(a?.coTeacherIds)) {
+      a.coTeacherIds.forEach((coTid) => {
+        if (coTid && !teacherIds.includes(coTid)) teacherIds.push(coTid);
+      });
+    }
+    if (Array.isArray(a?.breakoutAssignments)) {
+      a.breakoutAssignments.forEach((b) => {
+        if (b?.teacherId && !teacherIds.includes(b.teacherId)) teacherIds.push(b.teacherId);
+      });
+    }
+  });
   if (teacherIds.length === 0 && teachers.length > 0) {
     teacherIds = teachers.map((t) => t.id);
   }
@@ -473,32 +961,36 @@ export default function FinalTimeTables() {
   let filteredTeacherIds = teacherIds;
   if (viewMode === 'teachers' && searchTerm.trim()) {
     const lower = searchTerm.trim().toLowerCase();
-    filteredTeacherIds = teacherIds.filter(id => {
-      const teacher = teachers.find(t => t.id === id);
+    filteredTeacherIds = teacherIds.filter((id) => {
+      const teacher = teachers.find((t) => t.id === id);
       return teacher && (teacher.teacherName || teacher.name || '').toLowerCase().includes(lower);
     });
   }
 
   if (viewMode === 'sections' && gradeFilter !== 'all') {
-    sectionIds = sectionIds.filter(id => String(sectionIdToGrade[id]) === String(gradeFilter));
+    sectionIds = sectionIds.filter((id) => {
+      const sec = sectionsById.get(id) || sections.find((s) => s.id === id || s.name === id);
+      const grade = sec?.grade || (id.includes("7") ? 7 : id.includes("8") ? 8 : id.includes("9") ? 9 : id.includes("10") ? 10 : null);
+      return String(grade) === String(gradeFilter);
+    });
   }
   if (viewMode === 'sections' && selectedSection !== 'all') {
-    sectionIds = sectionIds.filter(id => id === selectedSection);
+    sectionIds = sectionIds.filter((id) => id === selectedSection);
   }
   if (viewMode === 'sections' && searchTerm.trim()) {
     const lower = searchTerm.trim().toLowerCase();
-    sectionIds = sectionIds.filter(id => {
-      const section = sections.find(s => s.id === id);
-      return section && (section.name || '').toLowerCase().includes(lower);
+    sectionIds = sectionIds.filter((id) => {
+      const secName = getSectionName(id);
+      return secName.toLowerCase().includes(lower);
     });
   }
 
   if (viewMode === 'teachers' && selectedTeacher !== 'all') {
-    filteredTeacherIds = filteredTeacherIds.filter(id => id === selectedTeacher);
+    filteredTeacherIds = filteredTeacherIds.filter((id) => id === selectedTeacher);
   }
   if (viewMode === 'teachers' && teacherType !== 'all') {
     const adviserIds = new Set();
-    sectionIds.forEach(sectionId => {
+    sectionIds.forEach((sectionId) => {
       const adviserName = getAdviserName(sectionId);
       if (adviserName && adviserName !== "-") {
         const advObj = teachers.find((t) => (t.teacherName || t.name) === adviserName || t.id === adviserName);
@@ -506,20 +998,301 @@ export default function FinalTimeTables() {
       }
     });
     if (teacherType === 'adviser') {
-      filteredTeacherIds = filteredTeacherIds.filter(id => adviserIds.has(id));
+      filteredTeacherIds = filteredTeacherIds.filter((id) => adviserIds.has(id));
     } else if (teacherType === 'non-adviser') {
-      filteredTeacherIds = filteredTeacherIds.filter(id => !adviserIds.has(id));
+      filteredTeacherIds = filteredTeacherIds.filter((id) => !adviserIds.has(id));
     }
   }
 
   return (
     <div>
-      <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Final Time Tables</h1>
-      <div style={{ margin: "8px 0 8px", color: "#5b6787", fontSize: 14, maxWidth: 920 }}>
-        Viewing published schedule: <b>{draft && draft.name}</b>
+      <style>{`
+        @media print {
+          @page {
+            size: A4 landscape !important;
+            margin: 3mm 4mm !important;
+          }
+          html, body {
+            background: #ffffff !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          /* Hide UI elements marked with turotugma-no-print */
+          .turotugma-no-print,
+          .turotugma-no-print * {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            max-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+          }
+          #printable-timetables-container {
+            position: static !important;
+            display: block !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            overflow: visible !important;
+          }
+          /* Strictly ONE schedule block per printed A4 landscape page */
+          .schedule-block {
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: space-between !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-height: 200mm !important;
+            max-height: 202mm !important;
+            box-sizing: border-box !important;
+            page-break-before: auto !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            margin: 0 !important;
+            padding: 3.5mm 4.5mm !important;
+            box-shadow: none !important;
+            border: 1.5px solid #000 !important;
+            border-radius: 0 !important;
+            background: #ffffff !important;
+            overflow: hidden !important;
+          }
+          .schedule-block:last-child {
+            page-break-after: auto !important;
+            break-after: auto !important;
+          }
+          .schedule-block .deped-top-header {
+            margin-bottom: 4px !important;
+            line-height: 1.1 !important;
+            flex-shrink: 0 !important;
+          }
+          .schedule-block .deped-draft-badge {
+            font-size: 8.5px !important;
+            padding: 2px 6px !important;
+          }
+          .schedule-block .deped-header-republic {
+            font-size: 9px !important;
+            margin: 0 !important;
+            line-height: 1.1 !important;
+          }
+          .schedule-block .deped-header-department {
+            font-size: 11px !important;
+            margin: 0 !important;
+            line-height: 1.1 !important;
+          }
+          .schedule-block .deped-header-region,
+          .schedule-block .deped-header-division {
+            font-size: 8.5px !important;
+            margin: 0 !important;
+            line-height: 1.1 !important;
+          }
+          .schedule-block .deped-header-school {
+            font-size: 12px !important;
+            margin: 1px 0 0 !important;
+            line-height: 1.15 !important;
+          }
+          .schedule-block .deped-header-title {
+            font-size: 10.5px !important;
+            margin: 2px 0 0 !important;
+            line-height: 1.1 !important;
+          }
+          .schedule-block .deped-header-sy {
+            font-size: 8.5px !important;
+            margin: 0 !important;
+            line-height: 1.1 !important;
+          }
+          .schedule-block .deped-header-subtitle {
+            font-size: 11.5px !important;
+            margin: 1px 0 0 !important;
+            line-height: 1.15 !important;
+          }
+          .schedule-block .deped-header-adviser {
+            font-size: 8.5px !important;
+            margin: 0 !important;
+            line-height: 1.1 !important;
+          }
+
+          .schedule-block .timetable-table-wrap {
+            flex: 1 1 auto !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: visible !important;
+          }
+          .schedule-block table {
+            width: 100% !important;
+            flex: 1 1 auto !important;
+            border-collapse: collapse !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            margin: 0 !important;
+          }
+          .schedule-block th,
+          .schedule-block td {
+            padding: 2.5px 4px !important;
+            font-size: 8.5px !important;
+            line-height: 1.12 !important;
+            min-height: 0 !important;
+            height: auto !important;
+          }
+          .schedule-block thead tr {
+            background: transparent !important;
+          }
+          .schedule-block thead th,
+          .schedule-block th {
+            font-size: 9.5px !important;
+            font-weight: 800 !important;
+            padding: 3.5px 4px !important;
+            color: #000000 !important;
+            background: #8fb6e5 !important;
+            background-color: #8fb6e5 !important;
+            opacity: 1 !important;
+          }
+          .schedule-block td.time-cell,
+          .schedule-block td:first-child,
+          .schedule-block td:nth-child(2) {
+            white-space: nowrap !important;
+            font-size: 8px !important;
+            line-height: 1.1 !important;
+            color: #000000 !important;
+          }
+          .schedule-block .schedule-cell {
+            min-height: 0 !important;
+            height: auto !important;
+            padding: 2.5px 4px !important;
+          }
+          .schedule-block .schedule-cell-content {
+            gap: 1.5px !important;
+          }
+          .schedule-block .schedule-cell-subject {
+            font-size: 9px !important;
+            line-height: 1.12 !important;
+            font-weight: 800 !important;
+            color: #000000 !important;
+          }
+          .schedule-block .schedule-cell-subtext {
+            font-size: 7.5px !important;
+            line-height: 1.05 !important;
+            font-weight: 600 !important;
+            letter-spacing: 0 !important;
+            margin-top: 0.5px !important;
+            color: #111111 !important;
+          }
+          .schedule-block .schedule-cell-breakout {
+            font-size: 6.8px !important;
+            line-height: 1.0 !important;
+            gap: 0.5px !important;
+          }
+          .schedule-block .break-banner {
+            font-size: 8.5px !important;
+            padding: 2.5px 4px !important;
+            letter-spacing: 0.8px !important;
+            line-height: 1.1 !important;
+            background: #f5b301 !important;
+            background-color: #f5b301 !important;
+            color: #000000 !important;
+          }
+
+          .schedule-block .signatory-container {
+            margin-top: 5px !important;
+            padding-top: 2px !important;
+            flex-shrink: 0 !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .schedule-block .signatory-row {
+            gap: 8px !important;
+            margin-bottom: 3px !important;
+          }
+          .schedule-block .signatory-row-mid {
+            margin-top: 3px !important;
+            margin-bottom: 3px !important;
+            gap: 14px !important;
+          }
+          .schedule-block .signatory-grid {
+            gap: 6px !important;
+          }
+          .schedule-block .signatory-col-right {
+            width: 190px !important;
+          }
+          .schedule-block .signatory-box {
+            min-width: 190px !important;
+          }
+          .schedule-block .signatory-heading {
+            font-size: 8.5px !important;
+            margin-bottom: 3px !important;
+            font-weight: 700 !important;
+            color: #000000 !important;
+          }
+          .schedule-block .signatory-name {
+            font-size: 8.5px !important;
+            line-height: 1.1 !important;
+            font-weight: 800 !important;
+            color: #000000 !important;
+          }
+          .schedule-block .signatory-title {
+            font-size: 7.5px !important;
+            line-height: 1.05 !important;
+            margin-top: 1px !important;
+            font-weight: 600 !important;
+            color: #222222 !important;
+          }
+          .schedule-block .signatory-contact-bar {
+            margin-top: 4px !important;
+            padding-top: 4px !important;
+            border-top: 1.2px solid #000 !important;
+            font-size: 8px !important;
+            line-height: 1.15 !important;
+            gap: 8px !important;
+          }
+        }
+      `}</style>
+      <div className="turotugma-no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 14, marginBottom: 12 }}>
+        <div>
+          <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30, fontWeight: 800 }}>Final Time Tables</h1>
+          <div style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, color: "#1e293b" }}>Official Published Timetable:</span>
+            {publishedList.length > 1 ? (
+              <select
+                value={selectedPublishedId}
+                onChange={(e) => handleSwitchPublished(e.target.value)}
+                style={{
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  padding: "5px 12px",
+                  borderRadius: 8,
+                  border: "1.5px solid #cbd5e1",
+                  background: "#fff",
+                  color: "#1e293b",
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                {publishedList.map((pub) => (
+                  <option key={pub.id} value={pub.id}>
+                    {pub.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span style={{ fontWeight: 600, color: "#1e293b" }}>{draft && draft.name}</span>
+            )}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 99, background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 12, border: "1px solid #bbf7d0" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#16a34a" }} />
+              Official Published Schedule (Public View)
+            </span>
+          </div>
+        </div>
       </div>
       {/* View filter and contextual dropdowns + Export button */}
-      <div style={{
+      <div className="turotugma-no-print" style={{
         display: 'flex',
         flexDirection: 'row',
         alignItems: 'flex-end',
@@ -567,77 +1340,104 @@ export default function FinalTimeTables() {
             <option value="teachers">Timetables of Teachers</option>
           </select>
         </div>
-        {/* Section dropdown (sections view) */}
+        {/* Section controls (sections view) */}
         {viewMode === 'sections' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-            <label style={{
-              color: '#5b6787',
-              fontWeight: 700,
-              fontSize: 13.5,
-              marginBottom: 5,
-              marginLeft: 2,
-            }}>
-              Section
-            </label>
-            <select
-              value={selectedSection}
-              onChange={e => setSelectedSection(e.target.value)}
-              style={{
-                width: 180,
-                fontSize: 15.5,
-                padding: '7px 12px',
-                borderRadius: 8,
-                border: '1.2px solid #e5eaf4',
-                color: '#25326f',
-                background: '#f8faff',
-                fontWeight: 500,
-                outline: 'none',
-                boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
-                transition: 'border 0.2s',
-              }}
-            >
-              <option value="all">All Sections</option>
-              {Array.from(new Set(sections.map(s => s.id))).map(id => (
-                <option key={id} value={id}>{getSectionName(id)}</option>
-              ))}
-            </select>
-          </div>
-        )}
-        {/* Grade dropdown (sections view) */}
-        {viewMode === 'sections' && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-            <label style={{
-              color: '#5b6787',
-              fontWeight: 700,
-              fontSize: 13.5,
-              marginBottom: 5,
-              marginLeft: 2,
-            }}>
-              Grade
-            </label>
-            <select
-              value={gradeFilter}
-              onChange={e => setGradeFilter(e.target.value)}
-              style={{
-                width: 120,
-                fontSize: 15.5,
-                padding: '7px 12px',
-                borderRadius: 8,
-                border: '1.2px solid #e5eaf4',
-                color: '#25326f',
-                background: '#f8faff',
-                fontWeight: 500,
-                outline: 'none',
-                boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
-                transition: 'border 0.2s',
-              }}
-            >
-              <option value="all">All Grades</option>
-              {allGrades.map(g => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </select>
-          </div>
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <label style={{
+                color: '#5b6787',
+                fontWeight: 700,
+                fontSize: 13.5,
+                marginBottom: 5,
+                marginLeft: 2,
+              }}>
+                Section
+              </label>
+              <select
+                value={selectedSection}
+                onChange={e => setSelectedSection(e.target.value)}
+                style={{
+                  width: 180,
+                  fontSize: 15.5,
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1.2px solid #e5eaf4',
+                  color: '#25326f',
+                  background: '#f8faff',
+                  fontWeight: 500,
+                  outline: 'none',
+                  boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
+                  transition: 'border 0.2s',
+                }}
+              >
+                <option value="all">All Sections</option>
+                {Array.from(new Set(sections.map(s => s.id))).map(id => (
+                  <option key={id} value={id}>{getSectionName(id)}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <label style={{
+                color: '#5b6787',
+                fontWeight: 700,
+                fontSize: 13.5,
+                marginBottom: 5,
+                marginLeft: 2,
+              }}>
+                Grade
+              </label>
+              <select
+                value={gradeFilter}
+                onChange={e => setGradeFilter(e.target.value)}
+                style={{
+                  width: 120,
+                  fontSize: 15.5,
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1.2px solid #e5eaf4',
+                  color: '#25326f',
+                  background: '#f8faff',
+                  fontWeight: 500,
+                  outline: 'none',
+                  boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
+                  transition: 'border 0.2s',
+                }}
+              >
+                <option value="all">All Grades</option>
+                {availableGrades.map(g => (
+                  <option key={g} value={g}>Grade {g}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <label style={{
+                color: '#5b6787',
+                fontWeight: 700,
+                fontSize: 13.5,
+                marginBottom: 5,
+                marginLeft: 2,
+              }}>
+                Search Section
+              </label>
+              <input
+                type="text"
+                placeholder="Search section..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                style={{
+                  width: 180,
+                  fontSize: 14.5,
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1.2px solid #e5eaf4',
+                  color: '#25326f',
+                  background: '#f8faff',
+                  outline: 'none',
+                  boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
+                }}
+              />
+            </div>
+          </>
         )}
         {/* Teacher dropdown and type filter (teachers view) */}
         {viewMode === 'teachers' && (
@@ -707,34 +1507,107 @@ export default function FinalTimeTables() {
                 <option value="non-adviser">Non-Adviser</option>
               </select>
             </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <label style={{
+                color: '#5b6787',
+                fontWeight: 700,
+                fontSize: 13.5,
+                marginBottom: 5,
+                marginLeft: 2,
+              }}>
+                Search Teacher
+              </label>
+              <input
+                type="text"
+                placeholder="Search teacher..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                style={{
+                  width: 180,
+                  fontSize: 14.5,
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1.2px solid #e5eaf4',
+                  color: '#25326f',
+                  background: '#f8faff',
+                  outline: 'none',
+                  boxShadow: '0 1px 4px 0 rgba(30,40,90,0.04)',
+                }}
+              />
+            </div>
           </>
         )}
         </div>
-        <button onClick={handleExport} style={{ padding: '10px 22px', background: '#1a3a8c', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer', marginLeft: 'auto', marginTop: 0, marginBottom: 0 }}>
-          Export as PDF
-        </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginLeft: 'auto' }}>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            style={{
+              padding: '10px 18px',
+              background: '#059669',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            Print Schedule
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            style={{
+              padding: '10px 22px',
+              background: '#1a3a8c',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Export as PDF
+          </button>
+        </div>
       </div>
       {/* Schedules to export: only these are included in PDF */}
-      <div ref={exportSchedulesRef}>
+      <div ref={exportSchedulesRef} id="printable-timetables-container" className="printable-timetables-container">
       {viewMode === 'sections' && sectionIds.map((sectionId) => {
-        // Adviser: teacher assigned to first period (P1) for this section
-        const firstPeriodKey = `${sectionId}|JHS-P1`;
-        const adviserId = assignments[firstPeriodKey]?.teacherId;
-        const adviserName = adviserId ? getTeacherName(adviserId) : "-";
+        const adviserName = getAdviserName(sectionId);
 
-        // Find section classification (Regular or Special)
-        const section = sections.find(s => s.id === sectionId);
-        const isSpecial = section && (section.classification === 'Special' || section.classification === 'special');
-        // Use correct period count for this section
-        const periodCount = isSpecial ? (levelConfig.periods.special || 9) : (levelConfig.periods.regular || 8);
+        const section = sectionsById.get(sectionId) || sections.find(s => s.id === sectionId);
+        const sectionLevel = (section?.level === "shs" || Number(section?.grade) >= 11 || String(sectionId).toLowerCase().includes("shs")) ? "shs" : "jhs";
+        const periodCount = maxPeriods || levelConfig.periods?.regular || 8;
 
-        // Calculate timings for each period
-        function getPeriodTimes(periodType, periodCount, periodMinutes, breaks) {
+        function parseTimeToMinutes(timeText) {
+          if (!timeText) return 450;
+          const clean = String(timeText).trim();
+          const isPm = clean.toUpperCase().includes("PM");
+          const isAm = clean.toUpperCase().includes("AM");
+          const [hStr, mStr] = clean.replace(/[^0-9:]/g, "").split(":");
+          let h = parseInt(hStr, 10) || 7;
+          let m = parseInt(mStr, 10) || 30;
+          if (isPm && h < 12) h += 12;
+          if (isAm && h === 12) h = 0;
+          return h * 60 + m;
+        }
+
+        function getPeriodTimes(periodType, count, periodMinutes, breaks) {
           let times = [];
-          let startHour = 7, startMinute = 30; // Default start time: 7:30 AM
-          let currentMinutes = startHour * 60 + startMinute;
-          for (let i = 1; i <= periodCount; i++) {
-            // Insert breaks if needed
+          const startTimeText = levelConfig.schoolStartTime || "07:30";
+          let currentMinutes = parseTimeToMinutes(startTimeText);
+          for (let i = 1; i <= count; i++) {
+            const matchingSlot = (slots || []).find((s) => Number(s.period) === i && (s.sessionType === periodType || !s.sessionType));
+            if (matchingSlot && matchingSlot.start && matchingSlot.end) {
+              times.push(`${matchingSlot.start} – ${matchingSlot.end}`);
+              continue;
+            }
             let breakDuration = 0;
             if (breaks?.morning?.enabled && i - 1 === breaks.morning.afterPeriod) breakDuration += breaks.morning.duration;
             if (breaks?.lunch?.enabled && i - 1 === breaks.lunch.afterPeriod) breakDuration += breaks.lunch.duration;
@@ -743,7 +1616,7 @@ export default function FinalTimeTables() {
             let endMinutes = currentMinutes + periodMinutes;
             let start = minutesToTime(currentMinutes);
             let end = minutesToTime(endMinutes);
-            times.push(`${start} - ${end}`);
+            times.push(`${start} – ${end}`);
             currentMinutes = endMinutes;
           }
           return times;
@@ -755,8 +1628,7 @@ export default function FinalTimeTables() {
           let ampm = h >= 12 ? 'PM' : 'AM';
           h = h % 12;
           if (h === 0) h = 12;
-          // Always pad hour to 2 digits
-          return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
+          return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
         }
 
         // Helper to get day initials (e.g., 'Monday' -> 'M', 'Thursday' -> 'Th')
@@ -773,13 +1645,13 @@ export default function FinalTimeTables() {
         const regularTimes = getPeriodTimes(
           'regular',
           periodCount,
-          levelConfig.periodMinutes.regular || 50,
+          levelConfig.periodMinutes?.regular || 50,
           levelConfig.breaks
         );
         const shortenedTimes = getPeriodTimes(
           'shortened',
           periodCount,
-          levelConfig.periodMinutes.shortened || 45,
+          levelConfig.periodMinutes?.shortened || 45,
           levelConfig.breaks
         );
 
@@ -791,199 +1663,351 @@ export default function FinalTimeTables() {
             key={sectionId}
             className="schedule-block"
             style={{
-              marginBottom: 32,
+              marginBottom: 40,
               background: '#fff',
-              borderRadius: 12,
-              boxShadow: '0 2px 12px 0 rgba(30,40,90,0.07)',
-              padding: 24,
-              border: '1px solid #e5eaf4',
+              borderRadius: 8,
+              boxShadow: '0 2px 12px 0 rgba(0,0,0,0.08)',
+              padding: '28px 24px',
+              border: '1.5px solid #000',
               maxWidth: 1400,
               marginLeft: 'auto',
               marginRight: 'auto',
             }}
           >
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 12,
-              minHeight: 32,
-              padding: '0 32px',
-            }}>
-              <span style={{
-                color: '#25326f',
-                fontSize: 17,
-                fontWeight: 700,
-                margin: 0,
-                letterSpacing: 0.2,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                flex: 1,
-              }}>
-                <span style={{ color: '#7a86a7', fontWeight: 500, fontSize: 14, marginRight: 8 }}>Section:</span>
-                {getSectionName(sectionId)}
-              </span>
-              <span style={{
-                color: '#5b6787',
-                fontSize: 15,
-                fontWeight: 500,
-                marginLeft: 24,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}>
-                <span style={{ color: '#7a86a7', fontWeight: 500, fontSize: 14, marginRight: 6 }}>Name of Adviser:</span>
-                <b style={{ fontWeight: 700, color: '#25326f' }}>{adviserName}</b>
-              </span>
-            </div>
-            <div style={{ overflowX: 'auto', border: '1px solid #e5eaf4', borderRadius: 10 }}>
-              <table style={{ borderCollapse: 'collapse', minWidth: 170 + days.length * 165, width: '100%' }}>
+            {/* DepEd Official Header */}
+            <DepEdTopHeader
+              schoolProfile={schoolProfile}
+              title="CLASSROOM PROGRAM"
+              subtitle={getSectionName(sectionId)}
+              adviserName={adviserName}
+              isDraft={false}
+              level={sectionLevel}
+            />
+
+            <div className="timetable-table-wrap" style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', border: '2px solid #000' }}>
+                <colgroup>
+                  {shortenedDays.length > 0 ? (
+                    <>
+                      <col style={{ width: "11%" }} />
+                      <col style={{ width: "11%" }} />
+                    </>
+                  ) : (
+                    <col style={{ width: "16%" }} />
+                  )}
+                  {days.map((day) => (
+                    <col
+                      key={day}
+                      style={{
+                        width: `${(shortenedDays.length > 0 ? 78 : 84) / days.length}%`,
+                      }}
+                    />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr>
-                    <th colSpan={2} style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '10px 8px 6px 8px',
+                    <th colSpan={shortenedDays.length > 0 ? 2 : 1} style={{
+                      border: '1px solid #000',
+                      padding: '8px 6px',
                       textAlign: 'center',
-                      fontWeight: 700,
+                      fontWeight: 800,
                       fontSize: 13,
-                      color: '#25326f',
-                      position: 'sticky',
-                      top: 0,
-                      zIndex: 2
+                      color: '#000000',
+                      background: '#8fb6e5',
+                      backgroundColor: '#8fb6e5',
+                      textTransform: 'uppercase',
                     }}>Time</th>
                     {days.map((day) => (
                       <th key={day} rowSpan={2} style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
-                        padding: '10px 8px 6px 8px',
-                        fontWeight: 700,
+                        border: '1px solid #000',
+                        padding: '8px 6px',
+                        fontWeight: 800,
                         fontSize: 13,
-                        color: '#25326f',
-                        position: 'sticky',
-                        top: 0,
-                        zIndex: 2
+                        color: '#000000',
+                        background: '#8fb6e5',
+                        backgroundColor: '#8fb6e5',
+                        textAlign: 'center',
+                        verticalAlign: 'middle',
+                        textTransform: 'uppercase',
                       }}>{day}</th>
                     ))}
                   </tr>
                   <tr>
                     <th style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '4px 8px',
-                      width: 80,
-                      fontWeight: 600,
-                      fontSize: 12,
-                      color: '#5b6787',
-                      position: 'sticky',
-                      top: 32,
-                      zIndex: 2
+                      border: '1px solid #000',
+                      padding: '4px 6px',
+                      fontWeight: 700,
+                      fontSize: 11,
+                      color: '#000000',
+                      background: '#8fb6e5',
+                      backgroundColor: '#8fb6e5',
+                      textAlign: 'center',
                     }}>{regularSessionInitials || 'Regular'}</th>
-                    <th style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '4px 8px',
-                      width: 80,
-                      fontWeight: 600,
-                      fontSize: 12,
-                      color: '#5b6787',
-                      position: 'sticky',
-                      top: 32,
-                      zIndex: 2
-                    }}>{shortenedSessionInitials || 'Shortened'}</th>
+                    {shortenedDays.length > 0 && (
+                      <th style={{
+                        border: '1px solid #000',
+                        padding: '4px 6px',
+                        fontWeight: 700,
+                        fontSize: 11,
+                        color: '#000000',
+                        background: '#8fb6e5',
+                        backgroundColor: '#8fb6e5',
+                        textAlign: 'center',
+                      }}>{shortenedSessionInitials || 'Shortened'}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {periods.map((periodNum, idx) => (
-                    <tr key={periodNum}>
-                      <td style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
-                        padding: '10px 8px',
-                        fontWeight: 500,
+                  {/* Flag Raising Row on Monday */}
+                  <tr style={{ background: '#fff' }}>
+                    <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 12, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                      7:00 – 7:30
+                    </td>
+                    {shortenedDays.length > 0 && (
+                      <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 12, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                        7:00 – 7:30
+                      </td>
+                    )}
+                    <td
+                      colSpan={days.length}
+                      className="break-banner"
+                      style={{
+                        border: '1px solid #000',
+                        padding: '8px',
+                        background: '#f5b301',
+                        color: '#000',
+                        fontWeight: 800,
                         fontSize: 13,
-                        color: '#5b6787',
-                        minWidth: 110,
-                        whiteSpace: 'nowrap',
-                      }}>{regularTimes[idx]}</td>
-                      <td style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
-                        padding: '10px 8px',
-                        fontWeight: 500,
-                        fontSize: 13,
-                        color: '#5b6787',
-                        minWidth: 110,
-                        whiteSpace: 'nowrap',
-                      }}>{shortenedTimes[idx]}</td>
-                      {days.map((day) => {
-                        const assignment = getCellAssignment(sectionId, day, periodNum);
-                        return (
-                          <td key={day} style={{
-                            border: '1px solid #e5eaf4',
+                        textAlign: 'center',
+                        letterSpacing: 1,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      FLAG RAISING CEREMONY (MONDAY)
+                    </td>
+                  </tr>
+
+                  {periods.map((periodNum, idx) => {
+                    const morningAfter = levelConfig?.breaks?.morning?.enabled !== false ? (levelConfig?.breaks?.morning?.afterPeriod || 2) : -1;
+                    const lunchAfter = levelConfig?.breaks?.lunch?.enabled !== false ? (levelConfig?.breaks?.lunch?.afterPeriod || 4) : -1;
+                    const isMorningBreak = idx === morningAfter;
+                    const isLunchBreak = idx === lunchAfter;
+
+                    const getBreakRange = (timesArr, fallback) => {
+                      if (idx > 0 && timesArr[idx - 1] && timesArr[idx]) {
+                        const prevParts = String(timesArr[idx - 1]).split(/[–-]/);
+                        const currParts = String(timesArr[idx]).split(/[–-]/);
+                        const prevEnd = prevParts[1]?.trim();
+                        const currStart = currParts[0]?.trim();
+                        if (prevEnd && currStart && prevEnd !== currStart) {
+                          return `${prevEnd} – ${currStart}`;
+                        }
+                      }
+                      return fallback;
+                    };
+
+                    return (
+                      <React.Fragment key={periodNum}>
+                        {isMorningBreak && (
+                          <tr>
+                            <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                              {getBreakRange(regularTimes, "9:30 – 9:50")}
+                            </td>
+                            {shortenedDays.length > 0 && (
+                              <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                                {getBreakRange(shortenedTimes, "9:15 – 9:35")}
+                              </td>
+                            )}
+                            <td
+                              colSpan={days.length}
+                              className="break-banner"
+                              style={{
+                                border: '1px solid #000',
+                                padding: '6px',
+                                background: '#f5b301',
+                                color: '#000',
+                                fontWeight: 800,
+                                fontSize: 12,
+                                textAlign: 'center',
+                                letterSpacing: 1.5,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              RECESS / MORNING BREAK
+                            </td>
+                          </tr>
+                        )}
+
+                        {isLunchBreak && (
+                          <tr>
+                            <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                              {getBreakRange(regularTimes, "11:50 – 1:00")}
+                            </td>
+                            {shortenedDays.length > 0 && (
+                              <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                                {getBreakRange(shortenedTimes, "11:30 – 12:30")}
+                              </td>
+                            )}
+                            <td
+                              colSpan={days.length}
+                              className="break-banner"
+                              style={{
+                                border: '1px solid #000',
+                                padding: '6px',
+                                background: '#f5b301',
+                                color: '#000',
+                                fontWeight: 800,
+                                fontSize: 12,
+                                textAlign: 'center',
+                                letterSpacing: 1.5,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              LUNCH BREAK
+                            </td>
+                          </tr>
+                        )}
+
+                        <tr>
+                          <td className="time-cell" style={{
+                            border: '1px solid #000',
                             padding: '10px 8px',
-                            background: assignment ? '#f7faf7' : '#fff',
-                            fontSize: 13,
-                            color: assignment ? '#25326f' : '#7a86a7',
-                            fontWeight: assignment ? 700 : 400,
-                            minWidth: 120,
-                            verticalAlign: 'top'
-                          }}>
-                            {assignment ? (
-                              <>
-                                <div style={{ fontWeight: 700, fontSize: 13, color: '#25326f', marginBottom: 2 }}>{getSubjectName(assignment.subjectId)}</div>
-                                <div style={{ color: '#6b7898', fontSize: 12, fontWeight: 500 }}>{getTeacherName(assignment.teacherId)}</div>
-                              </>
-                            ) : null}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                            fontWeight: 700,
+                            fontSize: 12,
+                            color: '#000',
+                            textAlign: 'center',
+                            background: '#f8fafc',
+                            whiteSpace: 'nowrap',
+                          }}>{regularTimes[idx]}</td>
+                          {shortenedDays.length > 0 && (
+                            <td className="time-cell" style={{
+                              border: '1px solid #000',
+                              padding: '10px 8px',
+                              fontWeight: 700,
+                              fontSize: 12,
+                              color: '#000',
+                              textAlign: 'center',
+                              background: '#f8fafc',
+                              whiteSpace: 'nowrap',
+                            }}>{shortenedTimes[idx]}</td>
+                          )}
+                          {days.map((day) => {
+                            const assignment = getCellAssignment(sectionId, day, periodNum);
+                            return (
+                              <td key={day} className="schedule-cell" style={{
+                                border: '1px solid #000',
+                                padding: '8px 6px',
+                                background: '#fff',
+                                textAlign: 'center',
+                                verticalAlign: 'middle',
+                                minHeight: 52,
+                              }}>
+                                {assignment ? (
+                                  <div className="schedule-cell-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                                    <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: '#000', textTransform: 'uppercase', lineHeight: 1.2 }}>{getSubjectName(assignment.subjectId)}</div>
+                                    {Array.isArray(assignment.breakoutAssignments) && assignment.breakoutAssignments.length > 0 ? (
+                                      <div className="schedule-cell-subtext schedule-cell-breakout" style={{ color: '#222', fontSize: 9.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.1, lineHeight: 1.15, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                        {assignment.breakoutAssignments.map((b, bIdx) => (
+                                          <div key={bIdx} style={{ whiteSpace: 'nowrap' }}>
+                                            <span style={{ fontWeight: 800 }}>{b.stream}:</span> {b.teacherName || getTeacherName(b.teacherId)}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : Array.isArray(assignment.coTeacherIds) && assignment.coTeacherIds.length > 0 ? (
+                                      <div className="schedule-cell-subtext" style={{ color: '#222', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.2 }}>
+                                        {[getTeacherName(assignment.teacherId), ...assignment.coTeacherIds.map((id) => getTeacherName(id))].join(', ')}
+                                      </div>
+                                    ) : (
+                                      <div className="schedule-cell-subtext" style={{ color: '#222', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.2 }}>{getTeacherName(assignment.teacherId)}</div>
+                                    )}
+                                  </div>
+                                ) : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {/* Footer Maintenance Banner */}
+                  <tr>
+                    <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                      END
+                    </td>
+                    {shortenedDays.length > 0 && (
+                      <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                        END
+                      </td>
+                    )}
+                    <td
+                      colSpan={days.length}
+                      className="break-banner"
+                      style={{
+                        border: '1px solid #000',
+                        padding: '8px',
+                        background: '#f5b301',
+                        color: '#000',
+                        fontWeight: 800,
+                        fontSize: 13,
+                        textAlign: 'center',
+                        letterSpacing: 1.5,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      ROOM MAINTENANCE & ZONE IMPROVEMENT
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
+
+            {/* Official DepEd Signatories Block */}
+            <SignatoryBlock schoolProfile={schoolProfile} sectionId={sectionId} level={sectionLevel} />
           </div>
         );
       })}
 
       {viewMode === 'teachers' && filteredTeacherIds.map((teacherId) => {
-        const teacher = teachers.find(t => t.id === teacherId);
-        const teacherName = teacher ? (teacher.teacherName || teacher.name) : teacherId;
-        // Find all assignments for this teacher, grouped by section and period
-        // Build a map: { [sectionId]: { [periodNum]: { day, subjectId } } }
-        // But for display, we want a grid: periods x days, showing subject and section
-        // We'll use the same periods/days as the main timetable
+        const teacherName = getTeacherName(teacherId);
+        const teacherLevel = (sectionIds.some((sId) => {
+          const sec = sectionsById.get(sId) || sections.find(s => s.id === sId);
+          return (sec?.level === "shs" || Number(sec?.grade) >= 11 || String(sId).toLowerCase().includes("shs")) &&
+            Object.keys(assignments).some((k) => k.startsWith(`${sId}|`) && assignments[k]?.teacherId === teacherId);
+        })) ? "shs" : "jhs";
 
-        // Helper: for each cell, find the assignment for this teacher
-        function findAssignment(day, periodNum) {
-          // For each section, check if this teacher is assigned at this slot
-          for (const sectionId of sectionIds) {
-            const slotKey = `${sectionId}|JHS-P${periodNum}`;
-            const assignment = assignments[slotKey];
-            if (assignment && assignment.teacherId === teacherId) {
-              return { assignment, sectionId };
-            }
-          }
-          return null;
+        function parseTimeToMinutes(timeText) {
+          if (!timeText) return 450;
+          const clean = String(timeText).trim();
+          const isPm = clean.toUpperCase().includes("PM");
+          const isAm = clean.toUpperCase().includes("AM");
+          const [hStr, mStr] = clean.replace(/[^0-9:]/g, "").split(":");
+          let h = parseInt(hStr, 10) || 7;
+          let m = parseInt(mStr, 10) || 30;
+          if (isPm && h < 12) h += 12;
+          if (isAm && h === 12) h = 0;
+          return h * 60 + m;
         }
 
-        // Calculate timings for each period (reuse from above)
         function getPeriodTimes(periodType, periodCount, periodMinutes, breaks) {
           let times = [];
-          let startHour = 7, startMinute = 30; // Default start time: 7:30 AM
-          let currentMinutes = startHour * 60 + startMinute;
+          const startTimeText = levelConfig.schoolStartTime || "07:30";
+          let currentMinutes = parseTimeToMinutes(startTimeText);
           for (let i = 1; i <= periodCount; i++) {
-            // Insert breaks if needed
+            const matchingSlot = (slots || []).find((s) => Number(s.period) === i && (s.sessionType === periodType || !s.sessionType));
+            if (matchingSlot && matchingSlot.start && matchingSlot.end) {
+              times.push(`${matchingSlot.start} – ${matchingSlot.end}`);
+              continue;
+            }
             let breakDuration = 0;
-            if (levelConfig.breaks?.morning?.enabled && i - 1 === levelConfig.breaks.morning.afterPeriod) breakDuration += levelConfig.breaks.morning.duration;
-            if (levelConfig.breaks?.lunch?.enabled && i - 1 === levelConfig.breaks.lunch.afterPeriod) breakDuration += levelConfig.breaks.lunch.duration;
-            if (levelConfig.breaks?.afternoon?.enabled && i - 1 === levelConfig.breaks.afternoon.afterPeriod) breakDuration += levelConfig.breaks.afternoon.duration;
+            if (breaks?.morning?.enabled && i - 1 === breaks.morning.afterPeriod) breakDuration += breaks.morning.duration;
+            if (breaks?.lunch?.enabled && i - 1 === breaks.lunch.afterPeriod) breakDuration += breaks.lunch.duration;
+            if (breaks?.afternoon?.enabled && i - 1 === breaks.afternoon.afterPeriod) breakDuration += breaks.afternoon.duration;
             currentMinutes += breakDuration;
-            let endMinutes = currentMinutes + levelConfig.periodMinutes.regular;
+            let endMinutes = currentMinutes + (periodMinutes || levelConfig.periodMinutes?.regular || 50);
             let start = minutesToTime(currentMinutes);
             let end = minutesToTime(endMinutes);
-            times.push(`${start} - ${end}`);
+            times.push(`${start} – ${end}`);
             currentMinutes = endMinutes;
           }
           return times;
@@ -995,8 +2019,7 @@ export default function FinalTimeTables() {
           let ampm = h >= 12 ? 'PM' : 'AM';
           h = h % 12;
           if (h === 0) h = 12;
-          // Always pad hour to 2 digits
-          return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
+          return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
         }
 
         // Helper to get day initials (e.g., 'Monday' -> 'M', 'Thursday' -> 'Th')
@@ -1012,14 +2035,14 @@ export default function FinalTimeTables() {
 
         const regularTimes = getPeriodTimes(
           'regular',
-          levelConfig.periods.regular || 8,
-          levelConfig.periodMinutes.regular || 50,
+          periods.length,
+          levelConfig.periodMinutes?.regular || 50,
           levelConfig.breaks
         );
         const shortenedTimes = getPeriodTimes(
           'shortened',
-          levelConfig.periods.regular || 8,
-          levelConfig.periodMinutes.shortened || 45,
+          periods.length,
+          levelConfig.periodMinutes?.shortened || 45,
           levelConfig.breaks
         );
 
@@ -1028,139 +2051,144 @@ export default function FinalTimeTables() {
             key={teacherId}
             className="schedule-block"
             style={{
-              marginBottom: 32,
+              marginBottom: 40,
               background: '#fff',
-              borderRadius: 12,
-              boxShadow: '0 2px 12px 0 rgba(30,40,90,0.07)',
-              padding: 24,
-              border: '1px solid #e5eaf4',
+              borderRadius: 8,
+              boxShadow: '0 2px 12px 0 rgba(0,0,0,0.08)',
+              padding: '28px 24px',
+              border: '1.5px solid #000',
               maxWidth: 1400,
               marginLeft: 'auto',
               marginRight: 'auto',
             }}
           >
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 12,
-              minHeight: 32,
-              padding: '0 32px',
-            }}>
-              <span style={{
-                color: '#25326f',
-                fontSize: 17,
-                fontWeight: 700,
-                margin: 0,
-                letterSpacing: 0.2,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                flex: 1,
-              }}>
-                <span style={{ color: '#7a86a7', fontWeight: 500, fontSize: 14, marginRight: 8 }}>Teacher:</span>
-                {teacherName}
-              </span>
-            </div>
-            <div style={{ overflowX: 'auto', border: '1px solid #e5eaf4', borderRadius: 10 }}>
-              <table style={{ borderCollapse: 'collapse', minWidth: 170 + days.length * 165, width: '100%' }}>
+            {/* DepEd Official Header */}
+            <DepEdTopHeader
+              schoolProfile={schoolProfile}
+              title="TEACHER CLASS PROGRAM"
+              subtitle={`TEACHER: ${teacherName}`}
+              isDraft={false}
+              level={teacherLevel}
+            />
+
+            <div className="timetable-table-wrap" style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', border: '2px solid #000' }}>
+                <colgroup>
+                  {shortenedDays.length > 0 ? (
+                    <>
+                      <col style={{ width: "11%" }} />
+                      <col style={{ width: "11%" }} />
+                    </>
+                  ) : (
+                    <col style={{ width: "16%" }} />
+                  )}
+                  {days.map((day) => (
+                    <col
+                      key={day}
+                      style={{
+                        width: `${(shortenedDays.length > 0 ? 78 : 84) / days.length}%`,
+                      }}
+                    />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr>
-                    <th colSpan={2} style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '10px 8px 6px 8px',
+                    <th colSpan={shortenedDays.length > 0 ? 2 : 1} style={{
+                      border: '1px solid #000',
+                      padding: '8px 6px',
                       textAlign: 'center',
-                      fontWeight: 700,
+                      fontWeight: 800,
                       fontSize: 13,
-                      color: '#25326f',
-                      position: 'sticky',
-                      top: 0,
-                      zIndex: 2
+                      color: '#000000',
+                      background: '#8fb6e5',
+                      backgroundColor: '#8fb6e5',
+                      textTransform: 'uppercase',
                     }}>Time</th>
                     {days.map((day) => (
                       <th key={day} rowSpan={2} style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
-                        padding: '10px 8px 6px 8px',
-                        fontWeight: 700,
+                        border: '1px solid #000',
+                        padding: '8px 6px',
+                        fontWeight: 800,
                         fontSize: 13,
-                        color: '#25326f',
-                        position: 'sticky',
-                        top: 0,
-                        zIndex: 2
+                        color: '#000000',
+                        background: '#8fb6e5',
+                        backgroundColor: '#8fb6e5',
+                        textAlign: 'center',
+                        verticalAlign: 'middle',
+                        textTransform: 'uppercase',
                       }}>{day}</th>
                     ))}
                   </tr>
                   <tr>
                     <th style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '4px 8px',
-                      width: 80,
-                      fontWeight: 600,
-                      fontSize: 12,
-                      color: '#5b6787',
-                      position: 'sticky',
-                      top: 32,
-                      zIndex: 2
+                      border: '1px solid #000',
+                      padding: '4px 6px',
+                      fontWeight: 700,
+                      fontSize: 11,
+                      color: '#000000',
+                      background: '#8fb6e5',
+                      backgroundColor: '#8fb6e5',
+                      textAlign: 'center',
                     }}>{regularSessionInitials || 'Regular'}</th>
-                    <th style={{
-                      background: '#f6f8fc',
-                      border: '1px solid #e5eaf4',
-                      padding: '4px 8px',
-                      width: 80,
-                      fontWeight: 600,
-                      fontSize: 12,
-                      color: '#5b6787',
-                      position: 'sticky',
-                      top: 32,
-                      zIndex: 2
-                    }}>{shortenedSessionInitials || 'Shortened'}</th>
+                    {shortenedDays.length > 0 && (
+                      <th style={{
+                        border: '1px solid #000',
+                        padding: '4px 6px',
+                        fontWeight: 700,
+                        fontSize: 11,
+                        color: '#000000',
+                        background: '#8fb6e5',
+                        backgroundColor: '#8fb6e5',
+                        textAlign: 'center',
+                      }}>{shortenedSessionInitials || 'Shortened'}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {periods.map((periodNum, idx) => (
                     <tr key={periodNum}>
-                      <td style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
+                      <td className="time-cell" style={{
+                        border: '1px solid #000',
                         padding: '10px 8px',
-                        fontWeight: 500,
-                        fontSize: 13,
-                        color: '#5b6787',
-                        minWidth: 110,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        color: '#000',
+                        textAlign: 'center',
+                        background: '#f8fafc',
                         whiteSpace: 'nowrap',
                       }}>{regularTimes[idx]}</td>
-                      <td style={{
-                        background: '#f6f8fc',
-                        border: '1px solid #e5eaf4',
-                        padding: '10px 8px',
-                        fontWeight: 500,
-                        fontSize: 13,
-                        color: '#5b6787',
-                        minWidth: 110,
-                        whiteSpace: 'nowrap',
-                      }}>{shortenedTimes[idx]}</td>
+                      {shortenedDays.length > 0 && (
+                        <td className="time-cell" style={{
+                          border: '1px solid #000',
+                          padding: '10px 8px',
+                          fontWeight: 700,
+                          fontSize: 12,
+                          color: '#000',
+                          textAlign: 'center',
+                          background: '#f8fafc',
+                          whiteSpace: 'nowrap',
+                        }}>{shortenedTimes[idx]}</td>
+                      )}
                       {days.map((day) => {
                         const teacherAssign = getTeacherCellAssignment(teacherId, day, periodNum);
                         const found = teacherAssign ? { assignment: teacherAssign.assignment, sectionId: teacherAssign.sectionId } : null;
                         return (
-                          <td key={day} style={{
-                            border: '1px solid #e5eaf4',
-                            padding: '10px 8px',
-                            background: found ? '#f7faf7' : '#fff',
-                            fontSize: 13,
-                            color: found ? '#25326f' : '#7a86a7',
-                            fontWeight: found ? 700 : 400,
-                            minWidth: 120,
-                            verticalAlign: 'top'
+                          <td key={day} className="schedule-cell" style={{
+                            border: '1px solid #000',
+                            padding: '8px 6px',
+                            background: '#fff',
+                            textAlign: 'center',
+                            verticalAlign: 'middle',
+                            minHeight: 52,
                           }}>
                             {found ? (
-                              <>
-                                <div style={{ fontWeight: 700, fontSize: 13, color: '#25326f', marginBottom: 2 }}>{getSubjectName(found.assignment.subjectId)}</div>
-                                <div style={{ color: '#6b7898', fontSize: 12, fontWeight: 500 }}>{getSectionName(found.sectionId)}</div>
-                              </>
+                              <div className="schedule-cell-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                                <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: '#000', textTransform: 'uppercase', lineHeight: 1.2 }}>
+                                  {getSubjectName(found.assignment.subjectId)}
+                                  {teacherAssign?.streamName ? ` (${teacherAssign.streamName})` : ''}
+                                </div>
+                                <div className="schedule-cell-subtext" style={{ color: '#222', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.2 }}>{getSectionName(found.sectionId)}</div>
+                              </div>
                             ) : null}
                           </td>
                         );
@@ -1170,6 +2198,9 @@ export default function FinalTimeTables() {
                 </tbody>
               </table>
             </div>
+
+            {/* Official DepEd Signatories Block */}
+            <SignatoryBlock schoolProfile={schoolProfile} level={teacherLevel} />
           </div>
         );
       })}

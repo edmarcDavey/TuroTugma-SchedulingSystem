@@ -87,14 +87,21 @@ function getActiveScheduleAssignments() {
     });
   };
 
+  const latestByLevel = {};
+
+  // 1. Inspect Published Schedules
   try {
-    // 1. Check Published Schedules
     const publishedRaw = localStorage.getItem("turotugma_published_schedules");
     if (publishedRaw) {
       const publishedMap = JSON.parse(publishedRaw);
       if (publishedMap && typeof publishedMap === "object") {
-        Object.values(publishedMap).forEach((sched) => {
-          processSchedule(sched);
+        Object.entries(publishedMap).forEach(([key, sched]) => {
+          if (!sched) return;
+          const level = sched.scheduleType || key || "default";
+          const updated = new Date(sched.updatedAt || sched.publishedAt || 0).getTime();
+          if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
+            latestByLevel[level] = { sched, updated };
+          }
         });
       }
     }
@@ -102,35 +109,29 @@ function getActiveScheduleAssignments() {
     console.error("Error reading published schedules:", e);
   }
 
-  // If published schedules had assignments, return them
-  if (allAssignments.length > 0) {
-    return allAssignments;
-  }
-
+  // 2. Inspect Draft Schedules (if draft is newer than published, draft reflects latest generated schedule)
   try {
-    // 2. Fallback to Draft Schedules if no published schedules exist.
-    // Deduplicate by taking the most recent draft per scheduleType so multiple versions don't multiply count.
     const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
     if (draftRaw) {
       const draftArr = JSON.parse(draftRaw);
       if (Array.isArray(draftArr) && draftArr.length > 0) {
-        const latestByLevel = {};
         draftArr.forEach((draftItem) => {
           const sched = draftItem?.schedule || draftItem;
           const level = sched?.scheduleType || draftItem?.scheduleType || "default";
           const updated = new Date(draftItem?.updatedAt || sched?.updatedAt || 0).getTime();
-          if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
+          if (!latestByLevel[level] || updated >= latestByLevel[level].updated) {
             latestByLevel[level] = { sched, updated };
           }
-        });
-        Object.values(latestByLevel).forEach(({ sched }) => {
-          processSchedule(sched);
         });
       }
     }
   } catch (e) {
     console.error("Error reading schedule drafts:", e);
   }
+
+  Object.values(latestByLevel).forEach(({ sched }) => {
+    processSchedule(sched);
+  });
 
   return allAssignments;
 }
@@ -170,8 +171,8 @@ function calculateTeacherLoads(facultyList) {
   const teacherAbsorbedHGPMap = {};
 
   assignments.forEach((asgn) => {
-    const tid = asgn.teacherId;
-    if (tid) {
+    const processTeacherAssignment = (tid) => {
+      if (!tid) return;
       const faculty = facultyById.get(tid);
       const isClassAdviser = Boolean(
         faculty?.isClassAdviser ||
@@ -246,6 +247,11 @@ function calculateTeacherLoads(facultyList) {
         if (!teacherDistinctPrepsMap[tid]) teacherDistinctPrepsMap[tid] = new Set();
         teacherDistinctPrepsMap[tid].add(prepLabel);
       }
+    };
+
+    processTeacherAssignment(asgn.teacherId);
+    if (Array.isArray(asgn.coTeacherIds)) {
+      asgn.coTeacherIds.forEach((coTid) => processTeacherAssignment(coTid));
     }
   });
 
@@ -282,21 +288,27 @@ function calculateTeacherLoads(facultyList) {
     // Class Advisers receive a 1-load credit (5 hours/week ancillary credit), capping contact teaching at 25 hrs/week.
     // Operational Workload Categories:
     // - Unassigned: 0 contact hours assigned
-    // - Underload: < 20h for regular, < 16h for class adviser, < 12h for part-time (needs more classes assigned)
-    // - Balanced: 20 - 30h for regular, 16 - 25h for class adviser, 12 - 20h for part-time (optimal target load)
-    // - Overload: > 30h for regular, > 25h for adviser (exceeds teaching ceiling)
-    const ancillaryCreditHours = isClassAdviser ? 5 : (Number(faculty.ancillaryCreditHours) || 0);
-    const maxTeachingContactHours = isPartTime ? 20 : (isClassAdviser ? 25 : 30);
-    const minBalancedHours = isPartTime ? 12 : (isClassAdviser ? 16 : 20);
+    // - Underload: < 16 periods (< 15h) for regular, < 14 periods for class adviser, < 10 periods for part-time
+    // - Balanced: 16 - 30 periods (15 - 30h) for regular, 14 - 25 periods for adviser, 10 - 20 periods for part-time (DepEd optimal target load)
+    const isMajorAncillary = Boolean(
+      Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => {
+        const l = String(a).toLowerCase();
+        return l.includes("drrm") || l.includes("ict") || l.includes("custodian") || (l.includes("guidance") && !l.includes("homeroom")) || l.includes("registrar") || l.includes("canteen") || l.includes("testing");
+      })
+    );
+    const hasActiveAdvisory = isClassAdviser || Boolean(teacherAbsorbedHGPMap[faculty.id]);
+    const ancillaryCreditHours = hasActiveAdvisory ? 5 : (isMajorAncillary ? 4 : (Number(faculty.ancillaryCreditHours) || 0));
+    const maxTeachingContactHours = isPartTime ? 20 : (hasActiveAdvisory ? 25 : (isMajorAncillary ? 26 : 30));
+    const minBalancedHours = isPartTime ? 10 : (hasActiveAdvisory ? 14 : (isMajorAncillary ? 10 : 14));
 
     const percent = Math.round((totalHours / maxTeachingContactHours) * 100);
 
     let status = "Unassigned";
     if (periodCount === 0) {
       status = "Unassigned";
-    } else if (totalHours < minBalancedHours) {
+    } else if (totalHours < minBalancedHours && periodCount < minBalancedHours) {
       status = "Underload";
-    } else if (totalHours <= maxTeachingContactHours) {
+    } else if (totalHours <= maxTeachingContactHours || periodCount <= maxTeachingContactHours) {
       status = "Balanced";
     } else {
       status = "Overload";
