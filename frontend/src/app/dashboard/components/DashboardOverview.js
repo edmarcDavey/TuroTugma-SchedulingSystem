@@ -11,9 +11,8 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
-import { Bar, Doughnut, Line } from "react-chartjs-2";
+import { Bar, Doughnut } from "react-chartjs-2";
 import { getDashboardAnalyticsPayload, toDashboardViewModel } from "../analyticsData";
-import { getRecentActivityLog, formatActivityEntry } from "../analyticsData";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, BarElement, Filler, Tooltip, Legend);
 
@@ -25,14 +24,10 @@ function navigateToDashboardUrl(url) {
 
 export default function DashboardOverview() {
   const [analytics, setAnalytics] = useState(() => toDashboardViewModel(getDashboardAnalyticsPayload()));
-  const [recentActivity, setRecentActivity] = useState(() =>
-    typeof window !== "undefined" ? getRecentActivityLog(10) : []
-  );
 
   useEffect(() => {
     function refreshData() {
       setAnalytics(toDashboardViewModel(getDashboardAnalyticsPayload()));
-      setRecentActivity(typeof window !== "undefined" ? getRecentActivityLog(10) : []);
     }
 
     window.addEventListener("turotugma:schedule-updated", refreshData);
@@ -40,6 +35,7 @@ export default function DashboardOverview() {
     window.addEventListener("turotugma:subjects-updated", refreshData);
     window.addEventListener("turotugma:sections-updated", refreshData);
     window.addEventListener("turotugma:config-updated", refreshData);
+    window.addEventListener("turotugma:profile-updated", refreshData);
     window.addEventListener("storage", refreshData);
 
     return () => {
@@ -48,89 +44,408 @@ export default function DashboardOverview() {
       window.removeEventListener("turotugma:subjects-updated", refreshData);
       window.removeEventListener("turotugma:sections-updated", refreshData);
       window.removeEventListener("turotugma:config-updated", refreshData);
+      window.removeEventListener("turotugma:profile-updated", refreshData);
       window.removeEventListener("storage", refreshData);
     };
   }, []);
 
+  const loadSummary = analytics.loadSummary || { total: 0, balanced: 0, underload: 0, unassigned: 0, overload: 0 };
+  const totalTeachersForPct = Math.max(loadSummary.total, 1);
+  const loadLegendItems = [
+    {
+      label: "Balanced (Target Load)",
+      count: loadSummary.balanced,
+      pct: Math.round((loadSummary.balanced / totalTeachersForPct) * 100),
+      color: "#3B4197",
+    },
+    {
+      label: "Underload (< 20h)",
+      count: loadSummary.underload,
+      pct: Math.round((loadSummary.underload / totalTeachersForPct) * 100),
+      color: "#818cf8",
+    },
+    {
+      label: "Unassigned (0h)",
+      count: loadSummary.unassigned,
+      pct: Math.round((loadSummary.unassigned / totalTeachersForPct) * 100),
+      color: "#cbd5e1",
+    },
+    {
+      label: "Overload (> Limit)",
+      count: loadSummary.overload,
+      pct: Math.round((loadSummary.overload / totalTeachersForPct) * 100),
+      color: "#ef4444",
+    },
+  ];
+
+  const departments = Array.isArray(analytics.departmentBreakdown) ? analytics.departmentBreakdown : [];
+
+  const teachersCount = Number(analytics.metrics?.[0]?.value) || 0;
+  const sectionsCount = Number(analytics.metrics?.[1]?.value) || 0;
+  const subjectsCount = Number(analytics.metrics?.[2]?.value) || 0;
+  const conflictsCount = Number(analytics.metrics?.[3]?.value) || 0;
+
+  const publishedRow = (analytics.scheduleStatusRows || []).find((r) => r.label === "Published");
+  const versionRow = (analytics.scheduleStatusRows || []).find((r) => r.label === "Current Version");
+  const activeScheduleRow = (analytics.scheduleStatusRows || []).find((r) => r.label === "Active Schedule");
+
+  // Also check localStorage directly for published schedules or saved drafts so Step 5 & Step 6 update live immediately
+  let hasStoredPublished = false;
+  let hasStoredDraft = false;
+  try {
+    const pubRaw = window.localStorage.getItem("turotugma_published_schedules");
+    if (pubRaw) {
+      const parsedPub = JSON.parse(pubRaw);
+      if (parsedPub && typeof parsedPub === "object") {
+        hasStoredPublished = Object.values(parsedPub).some(
+          (item) => item && item.assignments && Object.keys(item.assignments).length > 0
+        );
+      }
+    }
+    const draftsRaw = window.localStorage.getItem("turotugma_schedule_drafts");
+    if (draftsRaw) {
+      const parsedDrafts = JSON.parse(draftsRaw);
+      if (Array.isArray(parsedDrafts)) {
+        hasStoredDraft = parsedDrafts.some(
+          (d) =>
+            (d?.schedule?.assignments && Object.keys(d.schedule.assignments).length > 0) ||
+            (d?.assignments && Object.keys(d.assignments).length > 0)
+        );
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const isPublished =
+    hasStoredPublished ||
+    String(publishedRow?.value || "").toLowerCase() === "yes" ||
+    String(versionRow?.value || "").toLowerCase().includes("published");
+
+  const hasDraftOrPublished =
+    isPublished ||
+    hasStoredDraft ||
+    (versionRow?.value &&
+      versionRow.value !== "None" &&
+      versionRow.value !== "No draft" &&
+      versionRow.value !== "No Active Draft");
+
+  const workflowSteps = [
+    {
+      num: 1,
+      title: "School & Bell Config",
+      detail: "Identity, periods & DO 005 rules",
+      ready: true,
+      url: "/dashboard?tab=school-profile",
+    },
+    {
+      num: 2,
+      title: "Sections & Themes",
+      detail: sectionsCount > 0 ? `${sectionsCount} Sections configured` : "Add sections & naming themes",
+      ready: sectionsCount > 0,
+      url: "/dashboard?tab=sections",
+    },
+    {
+      num: 3,
+      title: "Curriculum Subjects",
+      detail: subjectsCount > 0 ? `${subjectsCount} Subjects in catalog` : "Configure subjects catalog",
+      ready: subjectsCount > 0,
+      url: "/dashboard?tab=subjects",
+    },
+    {
+      num: 4,
+      title: "Faculty Roster",
+      detail: teachersCount > 0 ? `${teachersCount} Teachers profiled` : "Add or import faculty",
+      ready: teachersCount > 0,
+      url: "/dashboard?tab=faculty",
+    },
+    {
+      num: 5,
+      title: "Generate Schedule",
+      detail: hasDraftOrPublished && conflictsCount === 0
+        ? "Conflict-free draft ready"
+        : conflictsCount > 0
+          ? `${conflictsCount} conflict(s) to resolve`
+          : "Run automated generator",
+      ready: Boolean(hasDraftOrPublished && conflictsCount === 0),
+      url: "/dashboard?tab=schedule-generator",
+    },
+    {
+      num: 6,
+      title: "Publish Timetables",
+      detail: isPublished ? "Published & live" : "Publish master schedule",
+      ready: isPublished,
+      url: "/dashboard?tab=time-tables",
+    },
+  ];
+
+  const completedStepsCount = workflowSteps.filter((s) => s.ready).length;
+  const [showPipeline, setShowPipeline] = useState(true);
+
   return (
     <>
-      <div style={{ marginBottom: 18 }}>
-        <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Admin Dashboard</h1>
-        <p style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14 }}>
-          Monitor schedule health and manage core school data from one place.
-        </p>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <div>
+          <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30 }}>Admin Dashboard</h1>
+          <p style={{ margin: "6px 0 0", color: "#5b6787", fontSize: 14 }}>
+            Monitor schedule health and manage core school data from one place.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => setShowPipeline((prev) => !prev)}
+            style={{
+              height: 38,
+              padding: "0 14px",
+              borderRadius: 9,
+              border: "1px solid #c7d2fe",
+              background: showPipeline ? "#eef2ff" : "#ffffff",
+              color: "#3B4197",
+              fontSize: 12.5,
+              fontWeight: 700,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span>Scheduling Pipeline ({completedStepsCount}/6 Ready)</span>
+            <span style={{ fontSize: 11 }}>{showPipeline ? "▲" : "▼"}</span>
+          </button>
+
+          <a
+            href="/public-dashboard"
+            style={{
+              height: 38,
+              padding: "0 16px",
+              borderRadius: 9,
+              border: "none",
+              background: "linear-gradient(135deg, #3B4197 0%, #2563eb 100%)",
+              color: "#ffffff",
+              fontSize: 12.5,
+              fontWeight: 700,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              boxShadow: "0 4px 12px rgba(59, 65, 151, 0.2)",
+            }}
+          >
+            <span>Public / Teacher Timetable Portal</span>
+            <span>↗</span>
+          </a>
+        </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14, marginBottom: 18 }}>
+      {/* GUIDED 6-STEP OPERATIONAL SCHEDULING PIPELINE */}
+      {showPipeline && (
+        <div
+          style={{
+            background: "#ffffff",
+            border: "1px solid #dce5ff",
+            borderRadius: 14,
+            padding: "14px 18px",
+            marginBottom: 18,
+            boxShadow: "0 2px 10px rgba(31, 44, 111, 0.04)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 800, color: "#1f2c6f", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Guided School Year Scheduling Workflow
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  padding: "2px 9px",
+                  borderRadius: 999,
+                  background: completedStepsCount === 6 ? "#dcfce7" : "#fef3c7",
+                  color: completedStepsCount === 6 ? "#166534" : "#92400e",
+                }}
+              >
+                {completedStepsCount === 6 ? "All 6 Operational Stages Complete" : `${6 - completedStepsCount} Stage(s) Remaining`}
+              </span>
+            </div>
+            <span style={{ fontSize: 11.5, color: "#64748b" }}>
+              Click any stage below to jump directly to that module
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+            {workflowSteps.map((step) => (
+              <div
+                key={step.num}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigateToDashboardUrl(step.url)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") navigateToDashboardUrl(step.url);
+                }}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: step.ready ? "1px solid #bbf7d0" : "1.5px solid #fde68a",
+                  background: step.ready ? "#f8fafc" : "#fffbeb",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 800, color: step.ready ? "#3B4197" : "#b45309" }}>
+                    STEP {step.num}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 800,
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      background: step.ready ? "#dcfce7" : "#fef3c7",
+                      color: step.ready ? "#166534" : "#92400e",
+                    }}
+                  >
+                    {step.ready ? "READY" : "NEXT"}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, fontWeight: 800, color: "#1e293b" }}>
+                  {step.title}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.3 }}>
+                  {step.detail}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 18 }}>
         {analytics.metrics.map((metric) => (
           <MetricCard
             key={metric.label}
             label={metric.label}
             value={metric.value}
+            subtitle={metric.subtitle}
+            offeredLevels={analytics.offeredLevels}
             assignmentBreakdown={metric.assignmentBreakdown}
             sectionBreakdown={metric.sectionBreakdown}
             subjectBreakdown={metric.subjectBreakdown}
+            conflictBreakdown={metric.conflictBreakdown}
           />
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 14, marginBottom: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(310px, 1fr))", gap: 14, marginBottom: 18, alignItems: "stretch" }}>
         <div style={panelStyle()}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Teacher Load Distribution</h2>
-              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>Underload • Balanced • Overload • Unassigned</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span
-                style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 700, background: "#e0e7ff", padding: "3px 8px", borderRadius: 6 }}
-                onClick={() => navigateToDashboardUrl("/dashboard?tab=faculty")}
-                tabIndex={0}
-                role="button"
-                aria-label="View Faculty Directory"
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=faculty"); }}
-              >
-                Faculty Directory →
-              </span>
-              <span
-                style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500 }}
-                onClick={() => navigateToDashboardUrl("/dashboard?tab=faculty")}
-                tabIndex={0}
-                role="button"
-                aria-label="Manage Faculty"
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=faculty"); }}
-              >
-                Faculty
+              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                DepEd DO 005, s. 2024 • Balanced • Underload • Unassigned • Overload
               </span>
             </div>
+            <span
+              style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 700, background: "#e0e7ff", padding: "4px 10px", borderRadius: 6 }}
+              onClick={() => navigateToDashboardUrl("/dashboard?tab=faculty")}
+              tabIndex={0}
+              role="button"
+              aria-label="View Faculty Directory"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") navigateToDashboardUrl("/dashboard?tab=faculty");
+              }}
+            >
+              Faculty Directory →
+            </span>
           </div>
-          <div style={{ marginTop: 12, height: 220 }}>
-            {analytics?.charts?.teacherLoad ? (
-              <Doughnut
-                data={analytics.charts.teacherLoad}
-                options={{
-                  maintainAspectRatio: false,
-                  plugins: { legend: { position: "bottom", labels: { boxWidth: 12, color: "#334170" } } },
+
+          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 18, alignItems: "center", minHeight: 215 }}>
+            <div style={{ position: "relative", height: 185 }}>
+              {analytics?.charts?.teacherLoad ? (
+                <Doughnut
+                  data={analytics.charts.teacherLoad}
+                  options={{
+                    maintainAspectRatio: false,
+                    cutout: "66%",
+                    plugins: { legend: { display: false } },
+                  }}
+                />
+              ) : null}
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  pointerEvents: "none",
                 }}
-              />
-            ) : null}
+              >
+                <span style={{ fontSize: 22, fontWeight: 800, color: "#1f2c6f", lineHeight: 1 }}>
+                  {loadSummary.total}
+                </span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginTop: 2 }}>
+                  Teachers
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {loadLegendItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "7px 10px",
+                    borderRadius: 8,
+                    background: "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: item.color, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{item.label}</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: "#1f2c6f" }}>{item.count}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>({item.pct}%)</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-        <div style={{ ...panelStyle(), marginBottom: 18 }}>
+
+        <div style={panelStyle()}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Completion by Target</h2>
+              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                Percentage of valid curriculum slots assigned
+              </span>
+            </div>
             <span
-              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 700, background: "#e0e7ff", padding: "4px 10px", borderRadius: 6 }}
               onClick={() => navigateToDashboardUrl("/dashboard?tab=schedule-generator")}
               tabIndex={0}
               role="button"
               aria-label="View Schedule Grid"
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=schedule-generator"); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") navigateToDashboardUrl("/dashboard?tab=schedule-generator");
+              }}
             >
-              View Schedule Grid
+              Schedule Grid →
             </span>
           </div>
-          <div style={{ marginTop: 12, height: 230 }}>
+          <div style={{ marginTop: 14, height: 215 }}>
             {analytics?.charts?.scheduleCompletion ? (
               <Bar
                 data={analytics.charts.scheduleCompletion}
@@ -153,89 +468,73 @@ export default function DashboardOverview() {
         </div>
       </div>
 
-      {/* Quick Actions removed */}
-
-      {/* Faculty Employment Status & Workload Fusion Analytics */}
+      {/* Faculty Workload Distribution by Department / Subject Area */}
       <div style={{ ...panelStyle(), marginBottom: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Faculty Workload Distribution by Employment Tier</h2>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Teachers & Assigned Classes by Subject Area</h2>
+            <span style={{ fontSize: 11.5, color: "#64748b", fontWeight: 500 }}>
+              How your {loadSummary.total} teachers are utilized across subject departments (Unassigned = extra/SHS faculty not needed once 100% of section classes are filled)
+            </span>
           </div>
           <span
-            style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+            style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 700, background: "#e0e7ff", padding: "4px 10px", borderRadius: 6 }}
             onClick={() => navigateToDashboardUrl("/dashboard?tab=school-profile")}
             tabIndex={0}
             role="button"
-            aria-label="Configure Priority Policy"
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=school-profile"); }}
+            aria-label="Configure Workload Policy"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") navigateToDashboardUrl("/dashboard?tab=school-profile");
+            }}
           >
-            Configure Priority Policy
+            Configure Workload Policy →
           </span>
         </div>
 
-        <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
-          <div style={{ padding: "12px 14px", background: "#f0f4ff", border: "1px solid #c2cefd", borderRadius: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#3B4197", textTransform: "uppercase", letterSpacing: "0.05em" }}>Regular / Permanent</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#5663bd", background: "#e0e7ff", padding: "1px 7px", borderRadius: 99 }}>
-                {analytics.employmentBreakdown?.regular?.totalPeriods || 0} Periods
-              </span>
+        <div
+          style={{
+            marginTop: 14,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {departments.map((dept) => (
+            <div
+              key={dept.key}
+              style={{
+                padding: "10px 12px",
+                background: "#f8faff",
+                border: "1px solid #d8e2fc",
+                borderRadius: 10,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#3B4197", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {dept.label}
+                </span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: "#4338ca", background: "#e0e7ff", padding: "1px 7px", borderRadius: 99 }}>
+                  {dept.totalPeriods} Periods
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color: "#1f2c6f" }}>{dept.count}</span>
+                <span style={{ fontSize: 11.5, color: "#51608d", fontWeight: 600 }}>Teachers</span>
+              </div>
+              <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10.5, fontWeight: 600 }}>
+                <span style={{ color: "#3B4197" }}>{dept.balanced} Balanced</span>
+                <span style={{ color: "#6366f1" }}>• {dept.underload} Underload</span>
+                {dept.overload > 0 ? <span style={{ color: "#b91c1c" }}>• {dept.overload} Overload</span> : null}
+                <span style={{ color: "#64748b" }}>• {dept.unassigned} Unassigned</span>
+              </div>
             </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: "#1f2c6f" }}>{analytics.employmentBreakdown?.regular?.count || 0}</span>
-              <span style={{ fontSize: 12, color: "#51608d", fontWeight: 600 }}>Teachers</span>
-            </div>
-            <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11, fontWeight: 600 }}>
-              <span style={{ color: "#3B4197" }}>✓ {analytics.employmentBreakdown?.regular?.balanced || 0} Balanced</span>
-              <span style={{ color: "#5663bd" }}>↓ {analytics.employmentBreakdown?.regular?.underload || 0} Underload</span>
-              <span style={{ color: "#b91c1c" }}>↑ {analytics.employmentBreakdown?.regular?.overload || 0} Overload</span>
-              <span style={{ color: "#64748b" }}>○ {analytics.employmentBreakdown?.regular?.unassigned || 0} Unassigned</span>
-            </div>
-          </div>
-
-          <div style={{ padding: "12px 14px", background: "#f8faff", border: "1px solid #d0dcfd", borderRadius: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#2c327e", textTransform: "uppercase", letterSpacing: "0.05em" }}>Probationary</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#6f7dd4", background: "#edf2ff", padding: "1px 7px", borderRadius: 99 }}>
-                {analytics.employmentBreakdown?.probationary?.totalPeriods || 0} Periods
-              </span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: "#1f2c6f" }}>{analytics.employmentBreakdown?.probationary?.count || 0}</span>
-              <span style={{ fontSize: 12, color: "#51608d", fontWeight: 600 }}>Teachers</span>
-            </div>
-            <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11, fontWeight: 600 }}>
-              <span style={{ color: "#3B4197" }}>✓ {analytics.employmentBreakdown?.probationary?.balanced || 0} Balanced</span>
-              <span style={{ color: "#5663bd" }}>↓ {analytics.employmentBreakdown?.probationary?.underload || 0} Underload</span>
-              <span style={{ color: "#b91c1c" }}>↑ {analytics.employmentBreakdown?.probationary?.overload || 0} Overload</span>
-              <span style={{ color: "#64748b" }}>○ {analytics.employmentBreakdown?.probationary?.unassigned || 0} Unassigned</span>
-            </div>
-          </div>
-
-          <div style={{ padding: "12px 14px", background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#1f2c6f", textTransform: "uppercase", letterSpacing: "0.05em" }}>Part-Time</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#818cf8", background: "#f1f5f9", padding: "1px 7px", borderRadius: 99 }}>
-                {analytics.employmentBreakdown?.partTime?.totalPeriods || 0} Periods
-              </span>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: "#1f2c6f" }}>{analytics.employmentBreakdown?.partTime?.count || 0}</span>
-              <span style={{ fontSize: 12, color: "#51608d", fontWeight: 600 }}>Teachers</span>
-            </div>
-            <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11, fontWeight: 600 }}>
-              <span style={{ color: "#3B4197" }}>✓ {analytics.employmentBreakdown?.partTime?.balanced || 0} Balanced</span>
-              <span style={{ color: "#5663bd" }}>↓ {analytics.employmentBreakdown?.partTime?.underload || 0} Underload</span>
-              <span style={{ color: "#b91c1c" }}>↑ {analytics.employmentBreakdown?.partTime?.overload || 0} Overload</span>
-              <span style={{ color: "#64748b" }}>○ {analytics.employmentBreakdown?.partTime?.unassigned || 0} Unassigned</span>
-            </div>
-          </div>
+          ))}
         </div>
 
         <div style={{ marginTop: 14, height: 210 }}>
-          {analytics?.charts?.fusionAnalytics ? (
+          {analytics?.charts?.departmentWorkload ? (
             <Bar
-              data={analytics.charts.fusionAnalytics}
+              data={analytics.charts.departmentWorkload}
               options={{
                 maintainAspectRatio: false,
                 plugins: { legend: { position: "top", labels: { boxWidth: 12, color: "#334170" } } },
@@ -249,20 +548,22 @@ export default function DashboardOverview() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
         {/* Schedule Status Card */}
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h2 style={{ margin: 0, fontSize: 16, color: "#1f2c6f" }}>Schedule Status</h2>
             <span
-              style={{ color: "#7a8bb7", fontSize: 12, cursor: "pointer", fontWeight: 500, marginLeft: 8 }}
+              style={{ color: "#3B4197", fontSize: 12, cursor: "pointer", fontWeight: 600, marginLeft: 8 }}
               onClick={() => navigateToDashboardUrl("/dashboard?tab=schedule-generator")}
               tabIndex={0}
               role="button"
               aria-label="View Schedule Grid"
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigateToDashboardUrl("/dashboard?tab=schedule-generator"); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") navigateToDashboardUrl("/dashboard?tab=schedule-generator");
+              }}
             >
-              View Schedule Grid
+              View Schedule Grid →
             </span>
           </div>
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
@@ -288,59 +589,158 @@ function panelStyle() {
   };
 }
 
-function MetricCard({ label, value, assignmentBreakdown: breakdown, sectionBreakdown, subjectBreakdown }) {
+function MetricCard({
+  label,
+  value,
+  subtitle,
+  offeredLevels = "both",
+  assignmentBreakdown: breakdown,
+  sectionBreakdown,
+  subjectBreakdown,
+  conflictBreakdown,
+}) {
   const barTotal = breakdown ? Math.max(Number(breakdown.total) || 0, 1) : 1;
   const sectionTotal = sectionBreakdown ? Math.max(Number(sectionBreakdown.total) || 0, 1) : 1;
   const subjectTotal = subjectBreakdown ? Math.max(Number(value) || 0, 1) : 1;
+  const conflictTotal = conflictBreakdown ? Math.max(Number(conflictBreakdown.total) || 0, 1) : 1;
+  const shsTrackSum = subjectBreakdown?.shsTracks
+    ? Object.values(subjectBreakdown.shsTracks).reduce((acc, v) => acc + (Number(v) || 0), 0)
+    : 0;
 
   return (
-    <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 12, padding: 14 }}>
-      <p style={{ margin: 0, color: "#66739a", fontSize: 12 }}>{label}</p>
-      <p style={{ margin: "6px 0 0", color: "#1f2c6f", fontSize: 24, fontWeight: 700 }}>{value}</p>
+    <div
+      style={{
+        background: "#ffffff",
+        border: "1px solid #e3e7ef",
+        borderRadius: 12,
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+      }}
+    >
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          <p style={{ margin: 0, color: "#66739a", fontSize: 12, fontWeight: 600 }}>{label}</p>
+          {subtitle ? (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "2px 6px",
+                borderRadius: 999,
+                background: conflictBreakdown
+                  ? Number(value) === 0
+                    ? "#dcfce7"
+                    : "#fee2e2"
+                  : "#eef2ff",
+                color: conflictBreakdown
+                  ? Number(value) === 0
+                    ? "#166534"
+                    : "#991b1b"
+                  : "#3B4197",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {subtitle}
+            </span>
+          ) : null}
+        </div>
+        <p style={{ margin: "6px 0 0", color: "#1f2c6f", fontSize: 26, fontWeight: 800 }}>{value}</p>
+      </div>
+
       {breakdown ? (
-        <div style={{ marginTop: 8, display: "grid", gap: 5 }}>
-          <MiniBarRow label="JHS" value={breakdown.jhs} total={barTotal} color="#5663bd" />
-          <MiniBarRow label="SHS" value={breakdown.shs} total={barTotal} color="#8fa0f1" />
-          <MiniBarRow label="Both" value={breakdown.both} total={barTotal} color="#3B4197" />
+        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          <MiniBarRow label="JHS" value={breakdown.jhs} total={barTotal} color="#3B4197" />
+          <MiniBarRow label="SHS" value={breakdown.shs} total={barTotal} color="#6f7dd4" />
+          <MiniBarRow label="Both" value={breakdown.both} total={barTotal} color="#8fa0f1" />
         </div>
       ) : null}
+
       {sectionBreakdown ? (
-        <div style={{ marginTop: 8, display: "grid", gap: 5 }}>
-          <MiniBarRow label="G7" value={sectionBreakdown.g7} total={sectionTotal} color="#3B4197" />
-          <MiniBarRow label="G8" value={sectionBreakdown.g8} total={sectionTotal} color="#4a56ad" />
-          <MiniBarRow label="G9" value={sectionBreakdown.g9} total={sectionTotal} color="#5968c2" />
-          <MiniBarRow label="G10" value={sectionBreakdown.g10} total={sectionTotal} color="#6f7dd4" />
-          <MiniBarRow label="G11" value={sectionBreakdown.g11} total={sectionTotal} color="#8591e3" />
-          <MiniBarRow label="G12" value={sectionBreakdown.g12} total={sectionTotal} color="#9ca6ee" />
+        <div
+          style={{
+            marginTop: 10,
+            display: "grid",
+            gridTemplateColumns: offeredLevels === "both" ? "1fr 1fr" : "1fr",
+            columnGap: 12,
+            rowGap: 6,
+          }}
+        >
+          {offeredLevels !== "shs_only" && (
+            <>
+              <MiniBarRow label="G7" value={sectionBreakdown.g7} total={sectionTotal} color="#3B4197" />
+              <MiniBarRow label="G8" value={sectionBreakdown.g8} total={sectionTotal} color="#4a56ad" />
+              <MiniBarRow label="G9" value={sectionBreakdown.g9} total={sectionTotal} color="#5968c2" />
+              <MiniBarRow label="G10" value={sectionBreakdown.g10} total={sectionTotal} color="#6f7dd4" />
+            </>
+          )}
+          {offeredLevels !== "jhs_only" && (
+            <>
+              <MiniBarRow label="G11" value={sectionBreakdown.g11} total={sectionTotal} color="#8591e3" />
+              <MiniBarRow label="G12" value={sectionBreakdown.g12} total={sectionTotal} color="#9ca6ee" />
+            </>
+          )}
         </div>
       ) : null}
+
       {subjectBreakdown ? (
-        <div style={{ marginTop: 8, display: "grid", gap: 5 }}>
-          <MiniBarRow label="JHS Core" value={subjectBreakdown.jhsCore} total={subjectTotal} color="#3B4197" />
-          <MiniBarRow label="JHS Spec" value={subjectBreakdown.jhsSpecialized} total={subjectTotal} color="#5968c2" />
-          <MiniBarRow label="SHS Core" value={subjectBreakdown.shsCore} total={subjectTotal} color="#6f7dd4" />
-          <MiniBarRow label="STEM" value={subjectBreakdown.shsTracks.STEM} total={subjectTotal} color="#8fa0f1" />
-          <MiniBarRow label="HUMSS" value={subjectBreakdown.shsTracks.HUMSS} total={subjectTotal} color="#9ca6ee" />
-          <MiniBarRow label="ABM" value={subjectBreakdown.shsTracks.ABM} total={subjectTotal} color="#b0b9f4" />
-          <MiniBarRow label="TVL" value={subjectBreakdown.shsTracks.TVL} total={subjectTotal} color="#c3c9de" />
-          <MiniBarRow label="GAS" value={subjectBreakdown.shsTracks.GAS} total={subjectTotal} color="#d0d8ff" />
+        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          {offeredLevels !== "shs_only" && (
+            <>
+              <MiniBarRow label="JHS Core" value={subjectBreakdown.jhsCore} total={subjectTotal} color="#3B4197" labelWidth={62} />
+              <MiniBarRow label="JHS Spec" value={subjectBreakdown.jhsSpecialized} total={subjectTotal} color="#5968c2" labelWidth={62} />
+            </>
+          )}
+          {offeredLevels !== "jhs_only" && (
+            <>
+              <MiniBarRow label="SHS Core" value={subjectBreakdown.shsCore} total={subjectTotal} color="#6f7dd4" labelWidth={62} />
+              <MiniBarRow label="SHS Track" value={shsTrackSum} total={subjectTotal} color="#8fa0f1" labelWidth={62} />
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {conflictBreakdown ? (
+        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          <MiniBarRow
+            label="Overlaps"
+            value={conflictBreakdown.teacherOverlaps}
+            total={conflictTotal}
+            color={conflictBreakdown.teacherOverlaps > 0 ? "#ef4444" : "#cbd5e1"}
+            labelWidth={62}
+          />
+          <MiniBarRow
+            label="Quotas"
+            value={conflictBreakdown.quotaIssues}
+            total={conflictTotal}
+            color={conflictBreakdown.quotaIssues > 0 ? "#f59e0b" : "#cbd5e1"}
+            labelWidth={62}
+          />
+          <MiniBarRow
+            label="Rules"
+            value={conflictBreakdown.restrictionIssues}
+            total={conflictTotal}
+            color={conflictBreakdown.restrictionIssues > 0 ? "#e11d48" : "#cbd5e1"}
+            labelWidth={62}
+          />
         </div>
       ) : null}
     </div>
   );
 }
 
-function MiniBarRow({ label, value, total, color }) {
+function MiniBarRow({ label, value, total, color, labelWidth = 34 }) {
   const safeTotal = Math.max(Number(total) || 0, 1);
   const widthPercent = Math.max(0, Math.min(100, (Number(value) / safeTotal) * 100));
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "34px 1fr 24px", alignItems: "center", gap: 6 }}>
-      <span style={{ color: "#65739a", fontSize: 11, fontWeight: 600 }}>{label}</span>
+    <div style={{ display: "grid", gridTemplateColumns: `${labelWidth}px 1fr 24px`, alignItems: "center", gap: 6 }}>
+      <span style={{ color: "#65739a", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{label}</span>
       <div style={{ height: 6, borderRadius: 999, overflow: "hidden", background: "#eef2fb" }}>
         <div style={{ width: `${widthPercent}%`, height: "100%", background: color }} />
       </div>
-      <span style={{ color: "#65739a", fontSize: 11, textAlign: "right" }}>{value}</span>
+      <span style={{ color: "#65739a", fontSize: 11, textAlign: "right", fontWeight: 600 }}>{value}</span>
     </div>
   );
 }

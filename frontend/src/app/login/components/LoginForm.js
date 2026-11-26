@@ -1,22 +1,32 @@
 import { useState } from "react";
 import "./LoginForm.css";
 import { getSystemSnapshot } from "../../dashboard/analyticsData";
+import { verifyAdminCredentials, createAdminSession } from "../../../auth";
 
 export default function LoginForm() {
   const [employeeId, setEmployeeId] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const snapshot = getSystemSnapshot();
 
   const handleSubmit = (event) => {
     event.preventDefault();
-    setLoading(true);
+    setErrorMessage("");
 
+    const check = verifyAdminCredentials(employeeId, password);
+    if (!check.valid) {
+      setErrorMessage(check.error);
+      return;
+    }
+
+    setLoading(true);
     setTimeout(() => {
+      createAdminSession(check.account);
       setLoading(false);
       window.location.href = "/dashboard";
-    }, 900);
+    }, 450);
   };
 
   return (
@@ -66,6 +76,24 @@ export default function LoginForm() {
           <p className="login-subtitle">Enter your administrator credentials to continue.</p>
 
           <form className="login-form" onSubmit={handleSubmit}>
+            {errorMessage ? (
+              <div
+                role="alert"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#dc2626",
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  marginBottom: 4,
+                }}
+              >
+                {errorMessage}
+              </div>
+            ) : null}
+
             <label className="login-label" htmlFor="employeeId">Employee ID</label>
             <input
               id="employeeId"
@@ -74,7 +102,10 @@ export default function LoginForm() {
               placeholder="e.g. EMP001"
               autoComplete="username"
               value={employeeId}
-              onChange={(event) => setEmployeeId(event.target.value)}
+              onChange={(event) => {
+                setEmployeeId(event.target.value);
+                if (errorMessage) setErrorMessage("");
+              }}
             />
 
             <label className="login-label" htmlFor="password">Password</label>
@@ -86,21 +117,20 @@ export default function LoginForm() {
                 placeholder="Enter your password"
                 autoComplete="current-password"
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (errorMessage) setErrorMessage("");
+                }}
               />
               <button
                 type="button"
                 className="login-eye-btn"
                 onClick={() => setShowPassword((prev) => !prev)}
                 aria-label={showPassword ? "Hide password" : "Show password"}
+                style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}
               >
-                {showPassword ? "🙈" : "👁"}
+                {showPassword ? "Hide" : "Show"}
               </button>
-            </div>
-
-            <div className="login-demo-box">
-              <p className="login-demo-title">Demo Credentials</p>
-              <p>Admin: EMP001 / admin123</p>
             </div>
 
             <button type="submit" className="login-submit" disabled={loading}>

@@ -8,10 +8,14 @@ import {
 import {
   getHistoricalSchoolYears,
   reuseSectionsFromYear,
+  reuseSubjectsFromYear,
+  reuseNamingThemesFromYear,
   reuseFacultyFromYear,
   reuseConfigurationsFromYear,
   reusePublishedSchedulesFromYear,
   executeFullRolloverFromYear,
+  archiveCurrentSchoolYearAndStartNew,
+  validateAcademicYearLabel,
   ROLLOVER_AUDIT_KEY,
 } from "../historicalSchoolYears";
 
@@ -918,15 +922,75 @@ export default function SchoolProfileSettings() {
   const [historicalYears, setHistoricalYears] = useState(() => getHistoricalSchoolYears());
   const [inspectingYear, setInspectingYear] = useState(null);
   const [inspectLevel, setInspectLevel] = useState("jhs");
+  const [inspectSubTab, setInspectSubTab] = useState("overview");
   const [reuseModalYear, setReuseModalYear] = useState(null);
   const [reuseTargetLevel, setReuseTargetLevel] = useState("both");
   const [reuseOptions, setReuseOptions] = useState({
     sections: true,
+    themes: true,
+    subjects: true,
     faculty: true,
     ancillaries: true,
     configs: true,
     schedules: true,
   });
+
+  // Start Next School Year / Rollover Wizard Modal State
+  const [newYearModalOpen, setNewYearModalOpen] = useState(false);
+  const [nextYearLabelInput, setNextYearLabelInput] = useState("2027-2028");
+  const [newYearMode, setNewYearMode] = useState("recommended"); // "recommended" | "selective" | "scratch"
+  const [newYearKeepOptions, setNewYearKeepOptions] = useState({
+    sections: true,
+    themes: true,
+    subjects: true,
+    faculty: true,
+    ancillaries: true,
+    configs: true,
+    schedules: false,
+  });
+
+  // Controlled draft input for Active Academic Year Label so invalid typing never corrupts live S.Y. header or storage
+  const [academicYearInput, setAcademicYearInput] = useState(() => {
+    const check = validateAcademicYearLabel(profile.academicYear);
+    return check.valid ? check.normalized : "2026-2027";
+  });
+
+  useEffect(() => {
+    const check = validateAcademicYearLabel(profile.academicYear);
+    if (check.valid && academicYearInput !== check.normalized) {
+      setAcademicYearInput(check.normalized);
+    }
+  }, [profile.academicYear]);
+
+  const activeYearValidation = useMemo(
+    () => validateAcademicYearLabel(academicYearInput),
+    [academicYearInput]
+  );
+
+  const nextYearValidation = useMemo(
+    () =>
+      validateAcademicYearLabel(nextYearLabelInput, {
+        isRolloverTarget: true,
+        currentYear: profile.academicYear || "2026-2027",
+      }),
+    [nextYearLabelInput, profile.academicYear]
+  );
+
+  const schoolNameError = useMemo(() => {
+    const trimmed = String(profile.schoolName || "").trim();
+    if (!trimmed) return "School Name is required.";
+    if (trimmed.length < 3) return "School Name must be at least 3 characters.";
+    return null;
+  }, [profile.schoolName]);
+
+  const schoolIdError = useMemo(() => {
+    const trimmed = String(profile.schoolId || "").trim();
+    if (!trimmed) return null; // Optional field
+    if (!/^\d{6}$/.test(trimmed)) {
+      return "Invalid School ID: DepEd School ID must be a 6-digit number (e.g., 300627).";
+    }
+    return null;
+  }, [profile.schoolId]);
 
   const [rolloverSourceYear, setRolloverSourceYear] = useState("2025-2026");
   const [rolloverOptions, setRolloverOptions] = useState({
@@ -942,9 +1006,71 @@ export default function SchoolProfileSettings() {
 
   const completeness = useMemo(() => calculateProfileCompleteness(profile), [profile]);
 
+  const activeStats = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { jhsSections: 8, shsSections: 6, jhsFaculty: 16, shsFaculty: 12, totalSubjects: 27 };
+    }
+    try {
+      const rawSec = JSON.parse(window.localStorage.getItem("turotugma_sections_created") || "null") || {};
+      let jhsSections = 0;
+      let shsSections = 0;
+      if (rawSec?.jhs) {
+        Object.values(rawSec.jhs).forEach((g) => {
+          if (Array.isArray(g?.sections)) jhsSections += g.sections.length;
+        });
+      }
+      if (rawSec?.shs) {
+        Object.values(rawSec.shs).forEach((g) => {
+          if (Array.isArray(g?.sections)) shsSections += g.sections.length;
+        });
+      }
+
+      const rawFac = JSON.parse(window.localStorage.getItem("turotugma_faculty") || "[]") || [];
+      let jhsFaculty = 0;
+      let shsFaculty = 0;
+      if (Array.isArray(rawFac)) {
+        rawFac.forEach((f) => {
+          const grades = Array.isArray(f?.gradeLevelAssignments) ? f.gradeLevelAssignments.join(" ") : "";
+          if (f?.schoolLevel === "shs" || /11|12/.test(grades)) shsFaculty++;
+          else jhsFaculty++;
+        });
+      }
+
+      const rawSub = JSON.parse(window.localStorage.getItem("turotugma_subjects") || "[]") || [];
+      const totalSubjects = Array.isArray(rawSub) ? rawSub.length : 0;
+
+      return {
+        jhsSections,
+        shsSections,
+        jhsFaculty,
+        shsFaculty,
+        totalSubjects,
+      };
+    } catch {
+      return { jhsSections: 8, shsSections: 6, jhsFaculty: 16, shsFaculty: 12, totalSubjects: 27 };
+    }
+  }, [newYearModalOpen, historicalYears]);
+
+  useEffect(() => {
+    if (profile.offeredLevels === "jhs_only") {
+      if (activeLevel !== "jhs") setActiveLevel("jhs");
+      if (inspectLevel !== "jhs") setInspectLevel("jhs");
+      if (reuseTargetLevel !== "jhs") setReuseTargetLevel("jhs");
+    } else if (profile.offeredLevels === "shs_only") {
+      if (activeLevel !== "shs") setActiveLevel("shs");
+      if (inspectLevel !== "shs") setInspectLevel("shs");
+      if (reuseTargetLevel !== "shs") setReuseTargetLevel("shs");
+    }
+  }, [profile.offeredLevels, activeLevel, inspectLevel, reuseTargetLevel]);
+
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
+      return;
+    }
+    // Block auto-save if any profile input has a validation error
+    if (schoolNameError || schoolIdError || !validateAcademicYearLabel(profile.academicYear).valid) {
+      setSaveStatus("error");
       return;
     }
     setSaveStatus("saving");
@@ -962,7 +1088,7 @@ export default function SchoolProfileSettings() {
       }
     }, 850);
     return () => clearTimeout(timer);
-  }, [profile]);
+  }, [profile, schoolNameError, schoolIdError]);
 
   const formatSavedTime = (date) => {
     if (!date) return "just now";
@@ -1118,13 +1244,24 @@ export default function SchoolProfileSettings() {
   };
 
   const handleSaveProfile = async () => {
-    if (!profile.schoolName.trim()) {
-      showNotice("School Name is required.", "error");
+    if (schoolNameError) {
+      showNotice(schoolNameError, "error");
+      return;
+    }
+    if (schoolIdError) {
+      showNotice(schoolIdError, "error");
+      return;
+    }
+    if (!activeYearValidation.valid) {
+      showNotice(activeYearValidation.error, "error");
       return;
     }
 
     try {
-      let profileToSave = { ...profile };
+      let profileToSave = {
+        ...profile,
+        academicYear: activeYearValidation.normalized,
+      };
 
       // Ensure any large data URIs are compressed down to small thumbnails to conserve storage quota
       if (profileToSave.depedLogoUrl && profileToSave.depedLogoUrl.startsWith("data:") && profileToSave.depedLogoUrl.length > 25000) {
@@ -1165,7 +1302,7 @@ export default function SchoolProfileSettings() {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("turotugma:profile-updated"));
       }
-      showNotice("School Profile updated successfully.", "success");
+      showNotice(`School Profile & S.Y. ${profileToSave.academicYear} saved successfully.`, "success");
     } catch (err) {
       console.error("Save profile error:", err);
       showNotice("Failed to save school profile: " + (err.message || "Storage error"), "error");
@@ -1198,6 +1335,8 @@ export default function SchoolProfileSettings() {
     if (!reuseModalYear) return;
     try {
       let secCount = 0;
+      let thmCount = 0;
+      let subCount = 0;
       let facCount = 0;
       let cfgSuccess = false;
 
@@ -1205,8 +1344,16 @@ export default function SchoolProfileSettings() {
         const res = reuseSectionsFromYear(reuseModalYear, reuseTargetLevel);
         secCount = res.count || 0;
       }
+      if (reuseOptions.themes) {
+        const res = reuseNamingThemesFromYear(reuseModalYear);
+        thmCount = res.count || 0;
+      }
+      if (reuseOptions.subjects) {
+        const res = reuseSubjectsFromYear(reuseModalYear, reuseTargetLevel);
+        subCount = res.count || 0;
+      }
       if (reuseOptions.faculty) {
-        const res = reuseFacultyFromYear(reuseModalYear, reuseTargetLevel);
+        const res = reuseFacultyFromYear(reuseModalYear, reuseTargetLevel, Boolean(reuseOptions.ancillaries));
         facCount = res.count || 0;
       }
       if (reuseOptions.configs) {
@@ -1228,7 +1375,10 @@ export default function SchoolProfileSettings() {
         targetYear: profile.academicYear || "2026-2027",
         level: reuseTargetLevel,
         importedSections: secCount,
+        importedThemes: thmCount,
+        importedSubjects: subCount,
         importedFaculty: facCount,
+        importedAncillaries: reuseOptions.ancillaries ? (reuseModalYear.totalAncillaries || 0) : 0,
         configurationsUpdated: cfgSuccess,
         importedSchedules: schedCount,
         action: `Selective data reuse from S.Y. ${reuseModalYear.academicYear} (${reuseTargetLevel.toUpperCase()})`,
@@ -1237,7 +1387,9 @@ export default function SchoolProfileSettings() {
 
       const summaryParts = [];
       if (secCount > 0) summaryParts.push(`${secCount} sections`);
-      if (facCount > 0) summaryParts.push(`${facCount} faculty members`);
+      if (thmCount > 0) summaryParts.push(`naming themes`);
+      if (subCount > 0) summaryParts.push(`${subCount} subjects`);
+      if (facCount > 0) summaryParts.push(`${facCount} faculty${reuseOptions.ancillaries ? " + ancillaries" : ""}`);
       if (cfgSuccess) summaryParts.push("bell schedule configurations");
       if (schedCount > 0) summaryParts.push(`${schedCount} published schedules`);
 
@@ -1248,6 +1400,71 @@ export default function SchoolProfileSettings() {
       setReuseModalYear(null);
     } catch (err) {
       showNotice("Failed to reuse data: " + err.message, "error");
+    }
+  };
+
+  const handleOpenNewYearModal = () => {
+    const curCheck = validateAcademicYearLabel(profile.academicYear || "2026-2027");
+    const safeCur = curCheck.valid ? curCheck.normalized : "2026-2027";
+    if (!curCheck.valid) {
+      setProfile((prev) => ({ ...prev, academicYear: safeCur }));
+      setAcademicYearInput(safeCur);
+    }
+    const parts = safeCur.split("-").map((p) => parseInt(p.trim(), 10));
+    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      setNextYearLabelInput(`${parts[0] + 1}-${parts[1] + 1}`);
+    } else {
+      setNextYearLabelInput("2027-2028");
+    }
+    setNewYearMode("recommended");
+    setNewYearKeepOptions({
+      sections: true,
+      themes: true,
+      subjects: true,
+      faculty: true,
+      ancillaries: true,
+      configs: true,
+      schedules: false,
+    });
+    setNewYearModalOpen(true);
+  };
+
+  const handleConfirmStartNextSchoolYear = () => {
+    if (!nextYearValidation.valid) {
+      showNotice(nextYearValidation.error || "Please enter a valid target School Year label (e.g. 2027-2028).", "error");
+      return;
+    }
+    const cleanNextYear = nextYearValidation.normalized;
+    const curCheck = validateAcademicYearLabel(profile.academicYear || "2026-2027");
+    const currentYearLabel = curCheck.valid ? curCheck.normalized : "2026-2027";
+    const res = archiveCurrentSchoolYearAndStartNew({
+      currentYearLabel,
+      nextYearLabel: cleanNextYear,
+      mode: newYearMode,
+      keepOptions: newYearKeepOptions,
+    });
+    if (res.success) {
+      setHistoricalYears(res.updatedArchives || getHistoricalSchoolYears());
+      const nextProfile = {
+        ...profile,
+        academicYear: cleanNextYear,
+        activeTerm: "Term 1",
+        shsActiveTerm: "Term 1",
+        jhsTerm: "Term 1",
+      };
+      setProfile(nextProfile);
+      setAcademicYearInput(cleanNextYear);
+      try {
+        window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(nextProfile));
+        window.dispatchEvent(new Event("turotugma:profile-updated"));
+      } catch (e) {}
+      setNewYearModalOpen(false);
+      showNotice(
+        `Archived S.Y. ${currentYearLabel} into Historical Archives and initialized S.Y. ${cleanNextYear} (${res.modeLabel})!`,
+        "success"
+      );
+    } else {
+      showNotice("Failed to initialize next school year: " + (res.error || "Unknown error"), "error");
     }
   };
 
@@ -1339,15 +1556,49 @@ export default function SchoolProfileSettings() {
                 gap: 6,
                 padding: "3px 10px",
                 borderRadius: 999,
-                background: saveStatus === "saving" ? "#eff6ff" : "#f0fdf4",
-                border: saveStatus === "saving" ? "1px solid #bfdbfe" : "1px solid #bbf7d0",
+                background:
+                  saveStatus === "error" || !activeYearValidation.valid || schoolNameError || schoolIdError
+                    ? "#fef2f2"
+                    : saveStatus === "saving"
+                      ? "#eff6ff"
+                      : "#f0fdf4",
+                border:
+                  saveStatus === "error" || !activeYearValidation.valid || schoolNameError || schoolIdError
+                    ? "1px solid #fecaca"
+                    : saveStatus === "saving"
+                      ? "1px solid #bfdbfe"
+                      : "1px solid #bbf7d0",
                 fontSize: 11,
                 fontWeight: 700,
-                color: saveStatus === "saving" ? "#1d4ed8" : "#166534",
+                color:
+                  saveStatus === "error" || !activeYearValidation.valid || schoolNameError || schoolIdError
+                    ? "#dc2626"
+                    : saveStatus === "saving"
+                      ? "#1d4ed8"
+                      : "#166534",
               }}
             >
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: saveStatus === "saving" ? "#3b82f6" : "#22c55e", display: "inline-block" }} />
-              <span>{saveStatus === "saving" ? "Saving..." : `Auto-saved (${formatSavedTime(lastSavedTime)})`}</span>
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background:
+                    saveStatus === "error" || !activeYearValidation.valid || schoolNameError || schoolIdError
+                      ? "#dc2626"
+                      : saveStatus === "saving"
+                        ? "#3b82f6"
+                        : "#22c55e",
+                  display: "inline-block",
+                }}
+              />
+              <span>
+                {saveStatus === "error" || !activeYearValidation.valid || schoolNameError || schoolIdError
+                  ? "Validation Error — Fix highlighted input"
+                  : saveStatus === "saving"
+                    ? "Saving..."
+                    : `Auto-saved (${formatSavedTime(lastSavedTime)})`}
+              </span>
             </div>
             <div
               style={{
@@ -1467,27 +1718,57 @@ export default function SchoolProfileSettings() {
                   id="input-school-name"
                   value={profile.schoolName}
                   onChange={(e) => setProfile((prev) => ({ ...prev, schoolName: e.target.value }))}
-                  style={{ ...inputStyle(), fontWeight: 700 }}
+                  style={{
+                    ...inputStyle(),
+                    fontWeight: 700,
+                    border: schoolNameError ? "1.5px solid #dc2626" : inputStyle().border,
+                    background: schoolNameError ? "#fef2f2" : "#ffffff",
+                  }}
                   placeholder="e.g. DIADI NATIONAL HIGH SCHOOL"
                 />
+                {schoolNameError && (
+                  <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#dc2626" }}>
+                    {schoolNameError}
+                  </div>
+                )}
               </Field>
 
               <Field label="School ID (Optional)">
                 <input
                   type="text"
                   id="input-school-id"
+                  maxLength={6}
                   value={profile.schoolId || ""}
                   onChange={(e) => setProfile((prev) => ({ ...prev, schoolId: e.target.value }))}
-                  style={{ ...inputStyle(), fontWeight: 700, letterSpacing: "0.05em" }}
+                  style={{
+                    ...inputStyle(),
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    border: schoolIdError ? "1.5px solid #dc2626" : inputStyle().border,
+                    background: schoolIdError ? "#fef2f2" : "#ffffff",
+                  }}
                   placeholder="e.g. 300627 (Optional)"
                 />
+                {schoolIdError && (
+                  <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#dc2626" }}>
+                    {schoolIdError}
+                  </div>
+                )}
               </Field>
 
               <Field label="Curricular Levels Offered">
                 <select
                   id="select-offered-levels"
                   value={profile.offeredLevels || "both"}
-                  onChange={(e) => setProfile((prev) => ({ ...prev, offeredLevels: e.target.value }))}
+                  onChange={(e) => {
+                    const nextOffered = e.target.value;
+                    setProfile((prev) => ({ ...prev, offeredLevels: nextOffered }));
+                    if (nextOffered === "jhs_only") {
+                      setActiveLevel("jhs");
+                    } else if (nextOffered === "shs_only") {
+                      setActiveLevel("shs");
+                    }
+                  }}
                   style={selectStyle()}
                 >
                   <option value="both">Both Junior High School & Senior High School (Integrated K-12)</option>
@@ -1522,46 +1803,50 @@ export default function SchoolProfileSettings() {
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                {/* The Single Master Switch for Active Level */}
+                {/* The Single Master Switch for Active Level (Filtered by Curricular Levels Offered) */}
                 <div style={{ display: "inline-flex", background: "#f1f5f9", padding: 4, borderRadius: 8, border: "1.5px solid #cbd5e1" }}>
-                  <button
-                    type="button"
-                    id="btn-preview-level-jhs"
-                    onClick={() => setActiveLevel("jhs")}
-                    style={{
-                      border: "none",
-                      background: activeLevel === "jhs" ? "#3B4197" : "transparent",
-                      color: activeLevel === "jhs" ? "#ffffff" : "#475569",
-                      padding: "6px 14px",
-                      borderRadius: 6,
-                      fontSize: 12,
-                      fontWeight: 800,
-                      cursor: "pointer",
-                      boxShadow: activeLevel === "jhs" ? "0 2px 6px rgba(59,65,151,0.3)" : "none",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    Junior High School (JHS)
-                  </button>
-                  <button
-                    type="button"
-                    id="btn-preview-level-shs"
-                    onClick={() => setActiveLevel("shs")}
-                    style={{
-                      border: "none",
-                      background: activeLevel === "shs" ? "#3B4197" : "transparent",
-                      color: activeLevel === "shs" ? "#ffffff" : "#475569",
-                      padding: "6px 14px",
-                      borderRadius: 6,
-                      fontSize: 12,
-                      fontWeight: 800,
-                      cursor: "pointer",
-                      boxShadow: activeLevel === "shs" ? "0 2px 6px rgba(59,65,151,0.3)" : "none",
-                      transition: "all 0.15s ease",
-                    }}
-                  >
-                    Senior High School (SHS)
-                  </button>
+                  {profile.offeredLevels !== "shs_only" && (
+                    <button
+                      type="button"
+                      id="btn-preview-level-jhs"
+                      onClick={() => setActiveLevel("jhs")}
+                      style={{
+                        border: "none",
+                        background: activeLevel === "jhs" ? "#3B4197" : "transparent",
+                        color: activeLevel === "jhs" ? "#ffffff" : "#475569",
+                        padding: "6px 14px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        boxShadow: activeLevel === "jhs" ? "0 2px 6px rgba(59,65,151,0.3)" : "none",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      Junior High School (JHS)
+                    </button>
+                  )}
+                  {profile.offeredLevels !== "jhs_only" && (
+                    <button
+                      type="button"
+                      id="btn-preview-level-shs"
+                      onClick={() => setActiveLevel("shs")}
+                      style={{
+                        border: "none",
+                        background: activeLevel === "shs" ? "#3B4197" : "transparent",
+                        color: activeLevel === "shs" ? "#ffffff" : "#475569",
+                        padding: "6px 14px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        boxShadow: activeLevel === "shs" ? "0 2px 6px rgba(59,65,151,0.3)" : "none",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      Senior High School (SHS)
+                    </button>
+                  )}
                 </div>
 
                 <button
@@ -1619,32 +1904,34 @@ export default function SchoolProfileSettings() {
                       >
                         {activeLevel.toUpperCase()} SEALS ACTIVE
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const cur = getLevelBranding(profile, activeLevel);
-                          setProfile((prev) => ({
-                            ...prev,
-                            brandingByLevel: {
-                              jhs: { ...cur },
-                              shs: { ...cur },
-                            },
-                          }));
-                          showNotice(`Copied ${activeLevel.toUpperCase()} seals and insignia configuration to both JHS and SHS!`, "info");
-                        }}
-                        style={{
-                          border: "1px solid #cbd5e1",
-                          background: "#ffffff",
-                          color: "#2563eb",
-                          borderRadius: 6,
-                          padding: "5px 12px",
-                          fontSize: 11,
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Copy {activeLevel.toUpperCase()} Seals to Both JHS & SHS
-                      </button>
+                      {(!profile.offeredLevels || profile.offeredLevels === "both") && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cur = getLevelBranding(profile, activeLevel);
+                            setProfile((prev) => ({
+                              ...prev,
+                              brandingByLevel: {
+                                jhs: { ...cur },
+                                shs: { ...cur },
+                              },
+                            }));
+                            showNotice(`Copied ${activeLevel.toUpperCase()} seals and insignia configuration to both JHS and SHS!`, "info");
+                          }}
+                          style={{
+                            border: "1px solid #cbd5e1",
+                            background: "#ffffff",
+                            color: "#2563eb",
+                            borderRadius: 6,
+                            padding: "5px 12px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Copy {activeLevel.toUpperCase()} Seals to Both JHS & SHS
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -3567,45 +3854,52 @@ export default function SchoolProfileSettings() {
               gap: 16,
             }}
           >
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
-              <div>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+              <div style={{ flex: "1 1 380px" }}>
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c7d2fe" }}>
                   Active Operational School Year
                 </div>
                 <div style={{ fontSize: 32, fontWeight: 900, letterSpacing: "0.02em", margin: "4px 0 0", color: "#ffffff" }}>
-                  S.Y. {profile.academicYear || "2026-2027"}
+                  S.Y. {validateAcademicYearLabel(profile.academicYear).valid ? profile.academicYear : "2026-2027"}
                 </div>
                 <p style={{ margin: "6px 0 0", fontSize: 13, color: "#e0e7ff" }}>
                   Active operational calendar governing Junior High School (Grades 7–10) and Senior High School (Grades 11–12) section schedules, teacher workloads, and published master timetables.
                 </p>
               </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-                <span style={{ fontSize: 11, fontWeight: 800, background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.3)", padding: "4px 12px", borderRadius: 999, color: "#ffffff" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end", flexShrink: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.3)", padding: "4px 12px", borderRadius: 999, color: "#ffffff", whiteSpace: "nowrap" }}>
                   Current Operational Year
                 </span>
-                <span style={{ fontSize: 11, fontWeight: 700, background: "#16a34a", padding: "4px 12px", borderRadius: 999, color: "#ffffff" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, background: "#16a34a", padding: "4px 12px", borderRadius: 999, color: "#ffffff", whiteSpace: "nowrap" }}>
                   Active School-Wide Term: {profile.activeTerm || profile.shsActiveTerm || "Term 1"} (Aug 24 – Nov 20, 2026)
                 </span>
               </div>
             </div>
 
             {/* Direct fields within Hero Card */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.2)" }}>
-              <div>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 14, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.2)" }}>
+              <div style={{ flex: "1 1 220px", minWidth: 210 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "#e0e7ff", display: "block", marginBottom: 6 }}>
-                  Active Academic Year Label
+                  Active Academic Year Label (YYYY-YYYY)
                 </label>
                 <input
                   type="text"
-                  value={profile.academicYear}
-                  onChange={(e) => setProfile((prev) => ({ ...prev, academicYear: e.target.value }))}
+                  maxLength={9}
+                  value={academicYearInput}
+                  onChange={(e) => setAcademicYearInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && activeYearValidation.valid) {
+                      handleSaveProfile();
+                    }
+                  }}
                   style={{
                     width: "100%",
-                    padding: "10px 14px",
+                    height: 44,
+                    padding: "0 14px",
                     borderRadius: 8,
-                    border: "1px solid rgba(255,255,255,0.32)",
-                    background: "rgba(255,255,255,0.14)",
+                    border: !activeYearValidation.valid ? "2px solid #fca5a5" : "1px solid rgba(255,255,255,0.32)",
+                    background: !activeYearValidation.valid ? "rgba(220, 38, 38, 0.25)" : "rgba(255,255,255,0.14)",
                     color: "#ffffff",
                     fontSize: 14,
                     fontWeight: 700,
@@ -3613,9 +3907,46 @@ export default function SchoolProfileSettings() {
                   }}
                   placeholder="e.g. 2026-2027"
                 />
+                {!activeYearValidation.valid && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      color: "#991b1b",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                  >
+                    <span>{activeYearValidation.error}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAcademicYearInput(activeYearValidation.expected || profile.academicYear || "2026-2027")}
+                      style={{
+                        padding: "3px 8px",
+                        borderRadius: 4,
+                        border: "1px solid #dc2626",
+                        background: "#dc2626",
+                        color: "#ffffff",
+                        fontSize: 10.5,
+                        fontWeight: 800,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Fix → {activeYearValidation.expected || "2026-2027"}
+                    </button>
+                  </div>
+                )}
               </div>
 
-              <div>
+              <div style={{ flex: "1 1 230px", minWidth: 220 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "#e0e7ff", display: "block", marginBottom: 6 }}>
                   Active Operational Term
                 </label>
@@ -3632,7 +3963,8 @@ export default function SchoolProfileSettings() {
                   }}
                   style={{
                     width: "100%",
-                    padding: "10px 14px",
+                    height: 44,
+                    padding: "0 14px",
                     borderRadius: 8,
                     border: "1px solid rgba(255,255,255,0.32)",
                     background: "rgba(255,255,255,0.14)",
@@ -3648,24 +3980,53 @@ export default function SchoolProfileSettings() {
                 </select>
               </div>
 
-              <div style={{ display: "flex", alignItems: "flex-end" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 22, flexShrink: 0 }}>
                 <button
                   type="button"
+                  disabled={!activeYearValidation.valid}
                   onClick={handleSaveProfile}
                   style={{
-                    width: "100%",
-                    minHeight: 44,
+                    height: 44,
+                    padding: "0 18px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(255,255,255,0.4)",
+                    background: !activeYearValidation.valid ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.16)",
+                    color: "#ffffff",
+                    fontSize: 12.5,
+                    fontWeight: 800,
+                    cursor: !activeYearValidation.valid ? "not-allowed" : "pointer",
+                    opacity: !activeYearValidation.valid ? 0.55 : 1,
+                    whiteSpace: "nowrap",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  Save Label / Term
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenNewYearModal}
+                  style={{
+                    height: 44,
+                    padding: "0 20px",
                     borderRadius: 8,
                     border: "none",
                     background: "#ffffff",
                     color: "#3B4197",
-                    fontSize: 13,
+                    fontSize: 12.5,
                     fontWeight: 800,
                     cursor: "pointer",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+                    whiteSpace: "nowrap",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
                   }}
                 >
-                  Save Active School Year
+                  <span>Start Next School Year / Rollover</span>
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>→</span>
                 </button>
               </div>
             </div>
@@ -3704,86 +4065,90 @@ export default function SchoolProfileSettings() {
               return (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14 }}>
                   {/* JHS Published Sched Card */}
-                  <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 10, padding: 16 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 800, color: "#1e40af" }}>
-                        Junior High School (JHS) Schedule
-                      </span>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: jhsSched ? "#dcfce7" : "#fef3c7", color: jhsSched ? "#166534" : "#92400e" }}>
-                        {jhsSched ? "PUBLISHED & ACTIVE" : "Draft In-Progress"}
-                      </span>
-                    </div>
+                  {profile.offeredLevels !== "shs_only" && (
+                    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 10, padding: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: "#1e40af" }}>
+                          Junior High School (JHS) Schedule
+                        </span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: jhsSched ? "#dcfce7" : "#fef3c7", color: jhsSched ? "#166534" : "#92400e" }}>
+                          {jhsSched ? "PUBLISHED & ACTIVE" : "Draft In-Progress"}
+                        </span>
+                      </div>
 
-                    <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>
-                      {jhsSched
-                        ? `Published: ${jhsSched.publishedAt ? new Date(jhsSched.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "Active"} • 8 Periods/Day (60m) • S.Y. ${profile.academicYear || "2026-2027"}`
-                        : "No published schedule yet for JHS. Generate and publish in Schedule Generator or restore from archives."}
-                    </div>
+                      <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>
+                        {jhsSched
+                          ? `Published: ${jhsSched.publishedAt ? new Date(jhsSched.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "Active"} • 8 Periods/Day (60m) • S.Y. ${profile.academicYear || "2026-2027"}`
+                          : "No published schedule yet for JHS. Generate and publish in Schedule Generator or restore from archives."}
+                      </div>
 
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (typeof window !== "undefined") {
-                            window.location.href = "/dashboard?tab=timetables&level=jhs";
-                          }
-                        }}
-                        style={{
-                          padding: "6px 14px",
-                          borderRadius: 6,
-                          border: "1px solid #c7d2fe",
-                          background: "#ffffff",
-                          color: "#1e40af",
-                          fontSize: 11.5,
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        View Live JHS Timetable →
-                      </button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (typeof window !== "undefined") {
+                              window.location.href = "/dashboard?tab=time-tables&level=jhs";
+                            }
+                          }}
+                          style={{
+                            padding: "6px 14px",
+                            borderRadius: 6,
+                            border: "1px solid #c7d2fe",
+                            background: "#ffffff",
+                            color: "#1e40af",
+                            fontSize: 11.5,
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          View Live JHS Timetable →
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* SHS Published Sched Card */}
-                  <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 10, padding: 16 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 800, color: "#15803d" }}>
-                        Senior High School (SHS) Schedule
-                      </span>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: shsSched ? "#dcfce7" : "#fef3c7", color: shsSched ? "#166534" : "#92400e" }}>
-                        {shsSched ? "PUBLISHED & ACTIVE" : "Draft In-Progress"}
-                      </span>
-                    </div>
+                  {profile.offeredLevels !== "jhs_only" && (
+                    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 10, padding: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: "#15803d" }}>
+                          Senior High School (SHS) Schedule
+                        </span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: shsSched ? "#dcfce7" : "#fef3c7", color: shsSched ? "#166534" : "#92400e" }}>
+                          {shsSched ? "PUBLISHED & ACTIVE" : "Draft In-Progress"}
+                        </span>
+                      </div>
 
-                    <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>
-                      {shsSched
-                        ? `Published: ${shsSched.publishedAt ? new Date(shsSched.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "Active"} • 8 Periods/Day (60m) • S.Y. ${profile.academicYear || "2026-2027"}`
-                        : "No published schedule yet for SHS. Generate and publish in Schedule Generator or restore from archives."}
-                    </div>
+                      <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>
+                        {shsSched
+                          ? `Published: ${shsSched.publishedAt ? new Date(shsSched.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "Active"} • 8 Periods/Day (60m) • S.Y. ${profile.academicYear || "2026-2027"}`
+                          : "No published schedule yet for SHS. Generate and publish in Schedule Generator or restore from archives."}
+                      </div>
 
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (typeof window !== "undefined") {
-                            window.location.href = "/dashboard?tab=timetables&level=shs";
-                          }
-                        }}
-                        style={{
-                          padding: "6px 14px",
-                          borderRadius: 6,
-                          border: "1px solid #bbf7d0",
-                          background: "#ffffff",
-                          color: "#15803d",
-                          fontSize: 11.5,
-                          fontWeight: 700,
-                          cursor: "pointer",
-                        }}
-                      >
-                        View Live SHS Timetable →
-                      </button>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (typeof window !== "undefined") {
+                              window.location.href = "/dashboard?tab=time-tables&level=shs";
+                            }
+                          }}
+                          style={{
+                            padding: "6px 14px",
+                            borderRadius: 6,
+                            border: "1px solid #bbf7d0",
+                            background: "#ffffff",
+                            color: "#15803d",
+                            fontSize: 11.5,
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          View Live SHS Timetable →
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })()}
@@ -3798,18 +4163,26 @@ export default function SchoolProfileSettings() {
                     Previous School Years Registry (DNHS Archives)
                   </h3>
                   <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0" }}>
-                    3 Years Archived • Ready to Reuse
+                    {historicalYears.length} Years Archived • Full Analytics & Ready to Reuse
                   </span>
                 </div>
                 <p style={{ margin: 0, color: "#5d698d", fontSize: 13 }}>
-                  Pre-configured historical data for past academic years at Diadi National High School. Inspect historical section groupings, faculty rosters, bell configurations, and published master schedules (scheds), and carry them over into S.Y. {profile.academicYear || "2026-2027"}.
+                  Historical snapshots for past academic years at Diadi National High School—including sections, naming themes, subjects catalog, faculty rosters, ancillary roles, bell configurations, and published master schedules.
                 </p>
               </div>
             </div>
 
-            {/* 3 Historical Cards Grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-              {historicalYears.map((hYear) => (
+            {/* Historical Cards Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 }}>
+              {historicalYears.map((hYear) => {
+                const jhsThemesList = Object.values(hYear.jhs?.sectionThemesByGrade || {}).map((t) => `G${t.grade}: ${t.theme}`);
+                const shsThemesList = Object.values(hYear.shs?.sectionThemesByGrade || {}).map((t) => `G${t.grade}: ${t.theme}`);
+                const allThemesSummary = [
+                  ...(profile.offeredLevels !== "shs_only" ? jhsThemesList : []),
+                  ...(profile.offeredLevels !== "jhs_only" ? shsThemesList : []),
+                ].slice(0, 3).join(" • ") || "Gems, Trees & Scientists";
+
+                return (
                 <div
                   key={hYear.yearId}
                   style={{
@@ -3835,8 +4208,8 @@ export default function SchoolProfileSettings() {
                           fontWeight: 800,
                           padding: "2px 8px",
                           borderRadius: 999,
-                          background: "#e2e8f0",
-                          color: "#475569",
+                          background: "#e0e7ff",
+                          color: "#3B4197",
                         }}
                       >
                         {hYear.status}
@@ -3847,40 +4220,67 @@ export default function SchoolProfileSettings() {
                       {hYear.dateRange} • {hYear.description}
                     </div>
 
-                    {/* Metrics row: Sections, Faculty, Published Scheds (NO student/room utilization!) */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
-                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b" }}>SECTIONS</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b" }}>{hYear.totalSections}</div>
+                    {/* 6-Metric Archive Analytics Grid: Sections, Themes, Subjects, Faculty, Ancillaries, Published Scheds */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 7, marginBottom: 12 }}>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>SECTIONS</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: "#1e293b" }}>{hYear.totalSections}</div>
                       </div>
-                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b" }}>FACULTY</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#1e293b" }}>{hYear.totalFaculty}</div>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>SUBJECTS</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: "#3B4197" }}>{hYear.totalSubjects || 28}</div>
                       </div>
-                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b" }}>PUBLISHED SCHEDS</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#166534" }}>{hYear.publishedSchedulesCount || 2} Timetables</div>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>FACULTY</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: "#1e293b" }}>{hYear.totalFaculty}</div>
+                      </div>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>ANCILLARY ROLES</div>
+                        <div style={{ fontSize: 13.5, fontWeight: 800, color: "#92400e" }}>{hYear.totalAncillaries || 24} Roles</div>
+                      </div>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>NAMING THEMES</div>
+                        <div style={{ fontSize: 13.5, fontWeight: 800, color: "#4338ca" }}>{hYear.totalThemes || 6} Grades</div>
+                      </div>
+                      <div style={{ background: "#ffffff", padding: "7px 8px", borderRadius: 8, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>TIMETABLES</div>
+                        <div style={{ fontSize: 13.5, fontWeight: 800, color: "#166534" }}>{hYear.publishedSchedulesCount || 2} Scheds</div>
                       </div>
                     </div>
 
-                    {/* Level Details */}
+                    {/* Level & Theme Details */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "#ffffff", padding: 10, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", display: "flex", justifyContent: "space-between" }}>
-                        <span>Junior High School (JHS):</span>
-                        <span style={{ fontWeight: 800 }}>{hYear.jhs?.sectionCount} sections • {hYear.jhs?.facultyCount} faculty</span>
-                      </div>
-                      <div style={{ fontSize: 10.5, color: "#64748b" }}>
-                        8 Periods (60m) • Master Schedule Archived
-                      </div>
+                      {profile.offeredLevels !== "shs_only" && (
+                        <>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", display: "flex", justifyContent: "space-between" }}>
+                            <span>Junior High School (JHS):</span>
+                            <span style={{ fontWeight: 800 }}>{hYear.jhs?.sectionCount} sec • {hYear.jhs?.subjectCount || 17} subj • {hYear.jhs?.facultyCount} fac</span>
+                          </div>
+                          <div style={{ fontSize: 10.5, color: "#64748b" }}>
+                            8 Periods (60m) • {hYear.jhs?.ancillarySummary?.advisersCount || 8} Advisers & {hYear.jhs?.ancillarySummary?.coordinatorsCount || 8} Coordinators
+                          </div>
+                        </>
+                      )}
+
+                      {(!profile.offeredLevels || profile.offeredLevels === "both") && (
+                        <div style={{ height: 1, background: "#f1f5f9", margin: "3px 0" }} />
+                      )}
+
+                      {profile.offeredLevels !== "jhs_only" && (
+                        <>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#15803d", display: "flex", justifyContent: "space-between" }}>
+                            <span>Senior High School (SHS):</span>
+                            <span style={{ fontWeight: 800 }}>{hYear.shs?.sectionCount} sec • {hYear.shs?.subjectCount || 11} subj • {hYear.shs?.facultyCount} fac</span>
+                          </div>
+                          <div style={{ fontSize: 10.5, color: "#64748b" }}>
+                            STEM, HUMSS, TVL • {hYear.shs?.ancillarySummary?.advisersCount || 6} Advisers & {hYear.shs?.ancillarySummary?.coordinatorsCount || 6} Coordinators
+                          </div>
+                        </>
+                      )}
 
                       <div style={{ height: 1, background: "#f1f5f9", margin: "3px 0" }} />
-
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "#15803d", display: "flex", justifyContent: "space-between" }}>
-                        <span>Senior High School (SHS):</span>
-                        <span style={{ fontWeight: 800 }}>{hYear.shs?.sectionCount} sections • {hYear.shs?.facultyCount} faculty</span>
-                      </div>
-                      <div style={{ fontSize: 10.5, color: "#64748b" }}>
-                        STEM, HUMSS, TVL • Master Schedule Archived
+                      <div style={{ fontSize: 10.5, color: "#4338ca", fontWeight: 600 }}>
+                        <strong>Themes:</strong> {allThemesSummary}
                       </div>
                     </div>
                   </div>
@@ -3891,7 +4291,8 @@ export default function SchoolProfileSettings() {
                       type="button"
                       onClick={() => {
                         setInspectingYear(hYear);
-                        setInspectLevel("jhs");
+                        setInspectLevel(profile.offeredLevels === "shs_only" ? "shs" : "jhs");
+                        setInspectSubTab("overview");
                       }}
                       style={{
                         padding: "8px 12px",
@@ -3904,15 +4305,29 @@ export default function SchoolProfileSettings() {
                         cursor: "pointer",
                       }}
                     >
-                      Inspect Archive
+                      Inspect Analytics & Data
                     </button>
 
                     <button
                       type="button"
                       onClick={() => {
                         setReuseModalYear(hYear);
-                        setReuseTargetLevel("both");
-                        setReuseOptions({ sections: true, faculty: true, ancillaries: true, configs: true, schedules: true });
+                        setReuseTargetLevel(
+                          profile.offeredLevels === "jhs_only"
+                            ? "jhs"
+                            : profile.offeredLevels === "shs_only"
+                              ? "shs"
+                              : "both"
+                        );
+                        setReuseOptions({
+                          sections: true,
+                          themes: true,
+                          subjects: true,
+                          faculty: true,
+                          ancillaries: true,
+                          configs: true,
+                          schedules: true,
+                        });
                       }}
                       style={{
                         padding: "8px 12px",
@@ -3929,7 +4344,8 @@ export default function SchoolProfileSettings() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -3992,10 +4408,13 @@ export default function SchoolProfileSettings() {
                           <td style={{ padding: "8px 12px", color: "#334155" }}>
                             {[
                               log.importedSections ? `${log.importedSections} sections` : null,
+                              log.importedThemes ? `${log.importedThemes} themes` : null,
+                              log.importedSubjects ? `${log.importedSubjects} subjects` : null,
                               log.importedFaculty ? `${log.importedFaculty} faculty` : null,
+                              log.importedAncillaries ? `${log.importedAncillaries} ancillaries` : null,
                               log.configurationsUpdated ? "bell configs" : null,
                               log.importedSchedules ? `${log.importedSchedules} scheds` : null,
-                            ].filter(Boolean).join(", ") || "Data imported"}
+                            ].filter(Boolean).join(", ") || "Fresh blank setup"}
                           </td>
                           <td style={{ padding: "8px 12px", color: "#64748b" }}>
                             {log.action}
@@ -4029,9 +4448,9 @@ export default function SchoolProfileSettings() {
                 style={{
                   background: "#ffffff",
                   borderRadius: 16,
-                  maxWidth: 900,
+                  maxWidth: 980,
                   width: "100%",
-                  maxHeight: "90vh",
+                  maxHeight: "92vh",
                   overflow: "hidden",
                   display: "flex",
                   flexDirection: "column",
@@ -4044,7 +4463,7 @@ export default function SchoolProfileSettings() {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>
-                        Historical Archive: {inspectingYear.label}
+                        Historical Archive & Analytics: {inspectingYear.label}
                       </h3>
                       <span style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: "rgba(255,255,255,0.2)" }}>
                         {inspectingYear.status}
@@ -4064,242 +4483,439 @@ export default function SchoolProfileSettings() {
                   </button>
                 </div>
 
-                {/* Level Tabs */}
-                <div style={{ display: "flex", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", padding: "8px 20px 0" }}>
-                  <button
-                    type="button"
-                    onClick={() => setInspectLevel("jhs")}
-                    style={{
-                      padding: "10px 18px",
-                      border: "none",
-                      borderBottom: inspectLevel === "jhs" ? "2.5px solid #3B4197" : "2.5px solid transparent",
-                      background: "transparent",
-                      color: inspectLevel === "jhs" ? "#3B4197" : "#64748b",
-                      fontWeight: inspectLevel === "jhs" ? 800 : 600,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Junior High School (JHS)
-                  </button>
+                {/* Level Tabs + Sub-category Filter Pills */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: "1px solid #e2e8f0", background: "#f8fafc", padding: "8px 20px" }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {profile.offeredLevels !== "shs_only" && (
+                      <button
+                        type="button"
+                        onClick={() => setInspectLevel("jhs")}
+                        style={{
+                          padding: "8px 16px",
+                          border: "none",
+                          borderBottom: inspectLevel === "jhs" ? "2.5px solid #3B4197" : "2.5px solid transparent",
+                          background: "transparent",
+                          color: inspectLevel === "jhs" ? "#3B4197" : "#64748b",
+                          fontWeight: inspectLevel === "jhs" ? 800 : 600,
+                          fontSize: 13,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Junior High School (JHS)
+                      </button>
+                    )}
 
-                  <button
-                    type="button"
-                    onClick={() => setInspectLevel("shs")}
-                    style={{
-                      padding: "10px 18px",
-                      border: "none",
-                      borderBottom: inspectLevel === "shs" ? "2.5px solid #3B4197" : "2.5px solid transparent",
-                      background: "transparent",
-                      color: inspectLevel === "shs" ? "#3B4197" : "#64748b",
-                      fontWeight: inspectLevel === "shs" ? 800 : 600,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Senior High School (SHS)
-                  </button>
+                    {profile.offeredLevels !== "jhs_only" && (
+                      <button
+                        type="button"
+                        onClick={() => setInspectLevel("shs")}
+                        style={{
+                          padding: "8px 16px",
+                          border: "none",
+                          borderBottom: inspectLevel === "shs" ? "2.5px solid #3B4197" : "2.5px solid transparent",
+                          background: "transparent",
+                          color: inspectLevel === "shs" ? "#3B4197" : "#64748b",
+                          fontWeight: inspectLevel === "shs" ? 800 : 600,
+                          fontSize: 13,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Senior High School (SHS)
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {[
+                      { id: "overview", label: "All Analytics & Data" },
+                      { id: "sections", label: "Sections & Themes" },
+                      { id: "subjects", label: "Subjects Catalog" },
+                      { id: "faculty", label: "Faculty & Ancillaries" },
+                      { id: "schedules", label: "Schedules & Timings" },
+                    ].map((tab) => {
+                      const active = inspectSubTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setInspectSubTab(tab.id)}
+                          style={{
+                            padding: "5px 10px",
+                            borderRadius: 6,
+                            border: active ? "1px solid #3B4197" : "1px solid #cbd5e1",
+                            background: active ? "#eef2ff" : "#ffffff",
+                            color: active ? "#3B4197" : "#475569",
+                            fontSize: 11,
+                            fontWeight: active ? 800 : 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Modal Body */}
                 <div style={{ padding: 22, overflowY: "auto", display: "flex", flexDirection: "column", gap: 18 }}>
-                  {/* Summary row */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                  {/* 6 KPI Summary Cards */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: 10 }}>
                     <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>SECTIONS ALLOCATED</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "#1f2c6f" }}>
-                        {inspectingYear[inspectLevel]?.sectionCount} Sections
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>SECTIONS ALLOCATED</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: "#1f2c6f", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.sectionCount || 0} Sections
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        {Object.entries(inspectingYear[inspectLevel]?.gradeCounts || {}).map(([g, c]) => `G${g}: ${c}`).join(" • ")}
                       </div>
                     </div>
+
                     <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>FACULTY ROSTER</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "#1f2c6f" }}>
-                        {inspectingYear[inspectLevel]?.facultyCount} Teachers
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>SECTION THEMES</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: "#4338ca", marginTop: 2 }}>
+                        {Object.keys(inspectingYear[inspectLevel]?.sectionThemesByGrade || {}).length || 0} Grade Themes
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        Preserved Vocabulary
                       </div>
                     </div>
+
                     <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>PUBLISHED TIMETABLE</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "#166534" }}>
-                        8 Periods (60m) • Archived
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>SUBJECTS CATALOG</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: "#1f2c6f", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.subjectCount || (inspectingYear[inspectLevel]?.subjects || []).length || 0} Subjects
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        {Object.entries(inspectingYear[inspectLevel]?.analytics?.subjectTypeCounts || inspectingYear[inspectLevel]?.subjectTypeCounts || {}).map(([t, c]) => `${t}: ${c}`).join(" • ") || "Core & Specialized"}
+                      </div>
+                    </div>
+
+                    <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>FACULTY ROSTER</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: "#1f2c6f", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.facultyCount || 0} Teachers
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        {Object.keys(inspectingYear[inspectLevel]?.analytics?.deptCounts || inspectingYear[inspectLevel]?.deptCounts || {}).length} Specializations
+                      </div>
+                    </div>
+
+                    <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>ANCILLARY & ADVISERS</div>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: "#92400e", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.ancillarySummary?.totalRolesCount ||
+                          ((inspectingYear[inspectLevel]?.ancillarySummary?.advisersCount || inspectingYear[inspectLevel]?.ancillarySummary?.adviserCount || 0) +
+                            (inspectingYear[inspectLevel]?.ancillarySummary?.coordinatorsCount || inspectingYear[inspectLevel]?.ancillarySummary?.coordinatorCount || 0))} Roles
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.ancillarySummary?.advisersCount || inspectingYear[inspectLevel]?.ancillarySummary?.adviserCount || 0} Advisers • {inspectingYear[inspectLevel]?.ancillarySummary?.coordinatorsCount || inspectingYear[inspectLevel]?.ancillarySummary?.coordinatorCount || 0} Coordinators
+                      </div>
+                    </div>
+
+                    <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>PUBLISHED TIMETABLE</div>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: "#166534", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.config?.periodDuration || 60}m • Archived
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 2 }}>
+                        {inspectingYear[inspectLevel]?.config?.schoolStartTime || "07:30"} – {inspectingYear[inspectLevel]?.config?.schoolEndTime || "16:30"}
                       </div>
                     </div>
                   </div>
 
-                  {/* Sections List */}
-                  <div>
-                    <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
-                      {inspectLevel.toUpperCase()} Sections Roster ({inspectingYear[inspectLevel]?.sections?.length || 0})
-                    </h4>
-                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                            <th style={{ padding: "8px 12px" }}>Grade</th>
-                            <th style={{ padding: "8px 12px" }}>Section Name</th>
-                            <th style={{ padding: "8px 12px" }}>{inspectLevel === "shs" ? "Track / Cluster" : "Classification"}</th>
-                            <th style={{ padding: "8px 12px" }}>Class Adviser</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(inspectingYear[inspectLevel]?.sections || []).map((sec, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                              <td style={{ padding: "8px 12px", fontWeight: 700 }}>Grade {sec.grade}</td>
-                              <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1f2c6f" }}>{sec.name}</td>
-                              <td style={{ padding: "8px 12px" }}>
-                                <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#e0e7ff", color: "#3730a3" }}>
-                                  {sec.cluster || sec.classification || "Regular"}
-                                </span>
-                              </td>
-                              <td style={{ padding: "8px 12px", color: "#334155" }}>{sec.adviser || "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Faculty Roster & Ancillaries */}
-                  <div>
-                    <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
-                      {inspectLevel.toUpperCase()} Faculty & Ancillary Assignments ({inspectingYear[inspectLevel]?.faculty?.length || 0})
-                    </h4>
-                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                            <th style={{ padding: "8px 12px" }}>Teacher Name</th>
-                            <th style={{ padding: "8px 12px" }}>Designation</th>
-                            <th style={{ padding: "8px 12px" }}>Specialization (Major)</th>
-                            <th style={{ padding: "8px 12px" }}>Advisory Class</th>
-                            <th style={{ padding: "8px 12px" }}>Ancillary Duties</th>
-                            <th style={{ padding: "8px 12px", textAlign: "right" }}>Max Load</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(inspectingYear[inspectLevel]?.faculty || []).map((t, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                              <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1f2c6f" }}>{t.name}</td>
-                              <td style={{ padding: "8px 12px", color: "#475569" }}>{t.designation}</td>
-                              <td style={{ padding: "8px 12px" }}>
-                                <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#f1f5f9", color: "#334155" }}>
-                                  {t.major}
-                                </span>
-                              </td>
-                              <td style={{ padding: "8px 12px", color: "#166534", fontWeight: t.advisoryClass !== "None" ? 700 : 400 }}>
-                                {t.advisoryClass || "None"}
-                              </td>
-                              <td style={{ padding: "8px 12px" }}>
-                                {Array.isArray(t.ancillaries) && t.ancillaries.length > 0 ? (
-                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                                    {t.ancillaries.map((anc, aIdx) => (
-                                      <span key={aIdx} style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>
-                                        {anc}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <span style={{ color: "#94a3b8", fontSize: 11 }}>—</span>
-                                )}
-                              </td>
-                              <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>{t.maxWeeklyHours}h/wk</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Archived Published Schedule Timetable */}
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
-                        Archived Published Schedule Snippet ({inspectLevel.toUpperCase()} • S.Y. {inspectingYear.academicYear})
-                      </h4>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: "#166534", background: "#dcfce7", padding: "2px 8px", borderRadius: 6 }}>
-                        Master Schedule Saved
-                      </span>
-                    </div>
-
-                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                            <th style={{ padding: "8px 12px" }}>Day</th>
-                            <th style={{ padding: "8px 12px" }}>Period</th>
-                            <th style={{ padding: "8px 12px" }}>Time Span</th>
-                            <th style={{ padding: "8px 12px" }}>Subject</th>
-                            <th style={{ padding: "8px 12px" }}>Assigned Teacher</th>
-                            <th style={{ padding: "8px 12px" }}>Class Section</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(inspectingYear[inspectLevel]?.publishedSchedule?.timetableSnippet || []).map((item, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                              <td style={{ padding: "8px 12px", fontWeight: 700 }}>{item.day}</td>
-                              <td style={{ padding: "8px 12px" }}>Period {item.period}</td>
-                              <td style={{ padding: "8px 12px", color: "#64748b" }}>{item.time}</td>
-                              <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1e40af" }}>{item.subject}</td>
-                              <td style={{ padding: "8px 12px", color: "#166534" }}>{item.teacher}</td>
-                              <td style={{ padding: "8px 12px", fontWeight: 600 }}>{item.section}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Scheduling Configuration & Scheds */}
-                  <div>
-                    <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
-                      {inspectLevel.toUpperCase()} Scheduling Configuration & Scheds
-                    </h4>
-                    <div style={{ background: "#f8fafc", padding: 14, borderRadius: 8, border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
-                        <div>
-                          <span style={{ color: "#64748b", display: "block" }}>Operating Hours:</span>
-                          <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.schoolStartTime} – {inspectingYear[inspectLevel]?.config?.schoolEndTime}</strong>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b", display: "block" }}>Regular Period Duration:</span>
-                          <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.periodDuration} minutes (8 Periods/Day)</strong>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b", display: "block" }}>Shortened Session:</span>
-                          <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.shortenedDuration} minutes (Friday)</strong>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b", display: "block" }}>Scheduled Breaks:</span>
-                          <strong style={{ color: "#1e293b" }}>Recess 20m, Lunch 60m, Break 10m</strong>
-                        </div>
+                  {/* Section Naming Themes & Analytics Breakdown */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "sections") && (
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 800, color: "#1f2c6f" }}>
+                          {inspectLevel.toUpperCase()} Section Naming Themes & Track Analytics
+                        </h4>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#4338ca", background: "#eef2ff", padding: "2px 8px", borderRadius: 6 }}>
+                          Grade-Level Theme Registry
+                        </span>
                       </div>
 
-                      {Array.isArray(inspectingYear[inspectLevel]?.config?.scheds) && (
-                        <div style={{ borderTop: "1px dashed #cbd5e1", paddingTop: 10 }}>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>
-                            Daily Scheds Timeline Structure:
-                          </span>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                            {inspectingYear[inspectLevel].config.scheds.map((s, sIdx) => (
-                              <div
-                                key={sIdx}
-                                style={{
-                                  fontSize: 10.5,
-                                  padding: "4px 8px",
-                                  borderRadius: 6,
-                                  background: s.type === "break" ? "#fef3c7" : "#e0e7ff",
-                                  color: s.type === "break" ? "#92400e" : "#1e40af",
-                                  fontWeight: 700,
-                                  border: s.type === "break" ? "1px solid #fde68a" : "1px solid #c7d2fe",
-                                }}
-                              >
-                                {s.label}: {s.time}
-                              </div>
-                            ))}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}>
+                        {Object.entries(inspectingYear[inspectLevel]?.sectionThemesByGrade || {}).map(([grade, info]) => (
+                          <div key={grade} style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 12px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <span style={{ fontSize: 12, fontWeight: 800, color: "#1f2c6f" }}>Grade {grade}</span>
+                              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#475569", background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>
+                                {info.count} Sections
+                              </span>
+                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 4 }}>
+                              Theme: {info.theme}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>
+                              Sections: {(info.sampleNames || []).join(", ")}
+                            </div>
                           </div>
+                        ))}
+                      </div>
+
+                      {Object.keys(inspectingYear[inspectLevel]?.analytics?.programCounts || inspectingYear[inspectLevel]?.programCounts || {}).length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px dashed #cbd5e1" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginRight: 4 }}>Program / Track Breakdown:</span>
+                          {Object.entries(inspectingYear[inspectLevel]?.analytics?.programCounts || inspectingYear[inspectLevel]?.programCounts || {}).map(([prog, count]) => (
+                            <span key={prog} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: "#e0e7ff", color: "#3730a3" }}>
+                              {prog}: {count} {count === 1 ? "Section" : "Sections"}
+                            </span>
+                          ))}
                         </div>
                       )}
                     </div>
-                  </div>
+                  )}
+
+                  {/* Sections List */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "sections") && (
+                    <div>
+                      <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
+                        {inspectLevel.toUpperCase()} Sections Roster ({inspectingYear[inspectLevel]?.sections?.length || 0})
+                      </h4>
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
+                              <th style={{ padding: "8px 12px" }}>Grade</th>
+                              <th style={{ padding: "8px 12px" }}>Section Name</th>
+                              <th style={{ padding: "8px 12px" }}>Naming Theme</th>
+                              <th style={{ padding: "8px 12px" }}>{inspectLevel === "shs" ? "Track / Cluster" : "Classification"}</th>
+                              <th style={{ padding: "8px 12px" }}>Class Adviser</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(inspectingYear[inspectLevel]?.sections || []).map((sec, idx) => {
+                              const gradeTheme = sec.theme || inspectingYear[inspectLevel]?.sectionThemesByGrade?.[sec.grade]?.theme || "Custom Theme";
+                              return (
+                                <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                  <td style={{ padding: "8px 12px", fontWeight: 700 }}>Grade {sec.grade}</td>
+                                  <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1f2c6f" }}>{sec.name}</td>
+                                  <td style={{ padding: "8px 12px", color: "#4338ca", fontWeight: 600 }}>{gradeTheme}</td>
+                                  <td style={{ padding: "8px 12px" }}>
+                                    <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#e0e7ff", color: "#3730a3" }}>
+                                      {sec.cluster || sec.classification || "Regular"}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: "8px 12px", color: "#334155" }}>{sec.adviser || "—"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Subjects Catalog */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "subjects") && (
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
+                          {inspectLevel.toUpperCase()} Subjects & Curriculum Catalog ({(inspectingYear[inspectLevel]?.subjects || []).length})
+                        </h4>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {Object.entries(inspectingYear[inspectLevel]?.analytics?.subjectTypeCounts || inspectingYear[inspectLevel]?.subjectTypeCounts || {}).map(([type, count]) => (
+                            <span key={type} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#f1f5f9", color: "#334155" }}>
+                              {type}: {count}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
+                              <th style={{ padding: "8px 12px" }}>Code</th>
+                              <th style={{ padding: "8px 12px" }}>Subject Name</th>
+                              <th style={{ padding: "8px 12px" }}>Grade Level</th>
+                              <th style={{ padding: "8px 12px" }}>Type</th>
+                              <th style={{ padding: "8px 12px" }}>Program Scope / Semester</th>
+                              <th style={{ padding: "8px 12px", textAlign: "right" }}>Weekly Load</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(inspectingYear[inspectLevel]?.subjects || []).map((sub, idx) => (
+                              <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "8px 12px", fontWeight: 800, color: "#1f2c6f" }}>{sub.subjectCode}</td>
+                                <td style={{ padding: "8px 12px", fontWeight: 600, color: "#1e293b" }}>{sub.subjectName}</td>
+                                <td style={{ padding: "8px 12px", color: "#475569" }}>{sub.gradeLevel || "All"}</td>
+                                <td style={{ padding: "8px 12px" }}>
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: sub.subjectType === "Core" ? "#dbeafe" : "#fef3c7", color: sub.subjectType === "Core" ? "#1e40af" : "#92400e" }}>
+                                    {sub.subjectType || "Core"}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "8px 12px", color: "#475569" }}>{sub.programScope || sub.semester || "Universal"}</td>
+                                <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>
+                                  {sub.classesPerWeek || 4}p ({sub.hoursPerWeek || 4}h/wk)
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Faculty Roster, Department Breakdown & Ancillaries */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "faculty") && (
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                        <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
+                          {inspectLevel.toUpperCase()} Faculty & Ancillary Assignments ({inspectingYear[inspectLevel]?.faculty?.length || 0})
+                        </h4>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {Object.entries(inspectingYear[inspectLevel]?.analytics?.deptCounts || inspectingYear[inspectLevel]?.deptCounts || {}).map(([major, count]) => (
+                            <span key={major} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#eef2ff", color: "#3730a3" }}>
+                              {major}: {count}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
+                              <th style={{ padding: "8px 12px" }}>Teacher Name</th>
+                              <th style={{ padding: "8px 12px" }}>Designation</th>
+                              <th style={{ padding: "8px 12px" }}>Specialization (Major)</th>
+                              <th style={{ padding: "8px 12px" }}>Advisory Class</th>
+                              <th style={{ padding: "8px 12px" }}>Ancillary Duties</th>
+                              <th style={{ padding: "8px 12px", textAlign: "right" }}>Max Load</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(inspectingYear[inspectLevel]?.faculty || []).map((t, idx) => (
+                              <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1f2c6f" }}>{t.name}</td>
+                                <td style={{ padding: "8px 12px", color: "#475569" }}>{t.designation}</td>
+                                <td style={{ padding: "8px 12px" }}>
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#f1f5f9", color: "#334155" }}>
+                                    {t.major}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "8px 12px", color: "#166534", fontWeight: t.advisoryClass && t.advisoryClass !== "None" ? 700 : 400 }}>
+                                  {t.advisoryClass || "None"}
+                                </td>
+                                <td style={{ padding: "8px 12px" }}>
+                                  {Array.isArray(t.ancillaries) && t.ancillaries.length > 0 ? (
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                      {t.ancillaries.map((anc, aIdx) => (
+                                        <span key={aIdx} style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>
+                                          {anc}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: "#94a3b8", fontSize: 11 }}>—</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700 }}>{t.maxWeeklyHours}h/wk</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Archived Published Schedule Timetable */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "schedules") && (
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
+                          Archived Published Schedule Snippet ({inspectLevel.toUpperCase()} • S.Y. {inspectingYear.academicYear})
+                        </h4>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#166534", background: "#dcfce7", padding: "2px 8px", borderRadius: 6 }}>
+                          Master Schedule Saved
+                        </span>
+                      </div>
+
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: "#f1f5f9", textAlign: "left", color: "#475569" }}>
+                              <th style={{ padding: "8px 12px" }}>Day</th>
+                              <th style={{ padding: "8px 12px" }}>Period</th>
+                              <th style={{ padding: "8px 12px" }}>Time Span</th>
+                              <th style={{ padding: "8px 12px" }}>Subject</th>
+                              <th style={{ padding: "8px 12px" }}>Assigned Teacher</th>
+                              <th style={{ padding: "8px 12px" }}>Class Section</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(inspectingYear[inspectLevel]?.publishedSchedule?.timetableSnippet || []).map((item, idx) => (
+                              <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "8px 12px", fontWeight: 700 }}>{item.day}</td>
+                                <td style={{ padding: "8px 12px" }}>Period {item.period}</td>
+                                <td style={{ padding: "8px 12px", color: "#64748b" }}>{item.time}</td>
+                                <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1e40af" }}>{item.subject}</td>
+                                <td style={{ padding: "8px 12px", color: "#166534" }}>{item.teacher}</td>
+                                <td style={{ padding: "8px 12px", fontWeight: 600 }}>{item.section}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Scheduling Configuration & Scheds */}
+                  {(inspectSubTab === "overview" || inspectSubTab === "schedules") && (
+                    <div>
+                      <h4 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 800, color: "#1f2c6f" }}>
+                        {inspectLevel.toUpperCase()} Scheduling Configuration & Bell Timings
+                      </h4>
+                      <div style={{ background: "#f8fafc", padding: 14, borderRadius: 8, border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", gap: 12 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
+                          <div>
+                            <span style={{ color: "#64748b", display: "block" }}>Operating Hours:</span>
+                            <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.schoolStartTime} – {inspectingYear[inspectLevel]?.config?.schoolEndTime}</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "#64748b", display: "block" }}>Regular Period Duration:</span>
+                            <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.periodDuration} minutes (8 Periods/Day)</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "#64748b", display: "block" }}>Shortened Session:</span>
+                            <strong style={{ color: "#1e293b" }}>{inspectingYear[inspectLevel]?.config?.shortenedDuration} minutes (Friday)</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "#64748b", display: "block" }}>Scheduled Breaks:</span>
+                            <strong style={{ color: "#1e293b" }}>Recess 20m, Lunch 60m, Break 10m</strong>
+                          </div>
+                        </div>
+
+                        {Array.isArray(inspectingYear[inspectLevel]?.config?.scheds) && (
+                          <div style={{ borderTop: "1px dashed #cbd5e1", paddingTop: 10 }}>
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>
+                              Daily Scheds Timeline Structure:
+                            </span>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {inspectingYear[inspectLevel].config.scheds.map((s, sIdx) => (
+                                <div
+                                  key={sIdx}
+                                  style={{
+                                    fontSize: 10.5,
+                                    padding: "4px 8px",
+                                    borderRadius: 6,
+                                    background: s.type === "break" ? "#fef3c7" : "#e0e7ff",
+                                    color: s.type === "break" ? "#92400e" : "#1e40af",
+                                    fontWeight: 700,
+                                    border: s.type === "break" ? "1px solid #fde68a" : "1px solid #c7d2fe",
+                                  }}
+                                >
+                                  {s.label}: {s.time}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Modal Footer */}
@@ -4320,7 +4936,7 @@ export default function SchoolProfileSettings() {
                         setInspectingYear(null);
                         setReuseModalYear(targetYear);
                         setReuseTargetLevel(inspectLevel);
-                        setReuseOptions({ sections: true, faculty: true, ancillaries: true, configs: true, schedules: true });
+                        setReuseOptions({ sections: true, themes: true, subjects: true, faculty: true, ancillaries: true, configs: true, schedules: true });
                       }}
                       style={{
                         padding: "8px 16px",
@@ -4361,7 +4977,7 @@ export default function SchoolProfileSettings() {
                 style={{
                   background: "#ffffff",
                   borderRadius: 16,
-                  maxWidth: 560,
+                  maxWidth: 600,
                   width: "100%",
                   boxShadow: "0 20px 40px rgba(0,0,0,0.25)",
                   overflow: "hidden",
@@ -4371,10 +4987,10 @@ export default function SchoolProfileSettings() {
                 {/* Header */}
                 <div style={{ padding: "18px 22px", background: "#3B4197", color: "#ffffff" }}>
                   <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
-                    Reuse Data from {reuseModalYear.label}
+                    Selective Data Reuse from {reuseModalYear.label}
                   </h3>
                   <p style={{ margin: "4px 0 0", fontSize: 12, color: "#bfdbfe" }}>
-                    Select data categories to copy into active S.Y. {profile.academicYear || "2026-2027"}.
+                    Pick and choose which archived datasets to import into active S.Y. {profile.academicYear || "2026-2027"}.
                   </p>
                 </div>
 
@@ -4384,40 +5000,66 @@ export default function SchoolProfileSettings() {
                     <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>
                       Apply to Academic Level:
                     </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: (!profile.offeredLevels || profile.offeredLevels === "both") ? "repeat(3, 1fr)" : "1fr", gap: 8 }}>
                       {[
                         { id: "both", label: "Both JHS & SHS" },
                         { id: "jhs", label: "JHS Only" },
                         { id: "shs", label: "SHS Only" },
-                      ].map((lvl) => {
-                        const active = reuseTargetLevel === lvl.id;
-                        return (
-                          <button
-                            key={lvl.id}
-                            type="button"
-                            onClick={() => setReuseTargetLevel(lvl.id)}
-                            style={{
-                              padding: "8px 6px",
-                              borderRadius: 6,
-                              border: active ? "2px solid #3B4197" : "1px solid #cbd5e1",
-                              background: active ? "#eef2ff" : "#ffffff",
-                              color: active ? "#3B4197" : "#475569",
-                              fontSize: 11.5,
-                              fontWeight: active ? 800 : 600,
-                              cursor: "pointer",
-                            }}
-                          >
-                            {lvl.label}
-                          </button>
-                        );
-                      })}
+                      ]
+                        .filter((lvl) => {
+                          if (profile.offeredLevels === "jhs_only") return lvl.id === "jhs";
+                          if (profile.offeredLevels === "shs_only") return lvl.id === "shs";
+                          return true;
+                        })
+                        .map((lvl) => {
+                          const active = reuseTargetLevel === lvl.id;
+                          return (
+                            <button
+                              key={lvl.id}
+                              type="button"
+                              onClick={() => setReuseTargetLevel(lvl.id)}
+                              style={{
+                                padding: "8px 6px",
+                                borderRadius: 6,
+                                border: active ? "2px solid #3B4197" : "1px solid #cbd5e1",
+                                background: active ? "#eef2ff" : "#ffffff",
+                                color: active ? "#3B4197" : "#475569",
+                                fontSize: 11.5,
+                                fontWeight: active ? 800 : 600,
+                                cursor: "pointer",
+                              }}
+                            >
+                              {lvl.label}
+                            </button>
+                          );
+                        })}
                     </div>
                   </div>
 
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 8 }}>
-                      Select Data to Copy:
-                    </label>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>
+                        Select Archive Categories to Copy:
+                      </label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => setReuseOptions({ sections: true, themes: true, subjects: true, faculty: true, ancillaries: true, configs: true, schedules: false })}
+                          style={{ fontSize: 11, fontWeight: 700, color: "#3B4197", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                        >
+                          Setup Only (No Schedule)
+                        </button>
+                        <span style={{ color: "#cbd5e1" }}>|</span>
+                        <button
+                          type="button"
+                          onClick={() => setReuseOptions({ sections: true, themes: true, subjects: true, faculty: true, ancillaries: true, configs: true, schedules: true })}
+                          style={{ fontSize: 11, fontWeight: 700, color: "#166534", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                        >
+                          Select All
+                        </button>
+                      </div>
+                    </div>
+
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "#f8fafc", padding: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}>
                       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#1e293b", cursor: "pointer" }}>
                         <input
@@ -4427,6 +5069,28 @@ export default function SchoolProfileSettings() {
                         />
                         <span>
                           <strong>Grades & Section Structures</strong> (copies grade allocations, section names, and tracks)
+                        </span>
+                      </label>
+
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#1e293b", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={reuseOptions.themes}
+                          onChange={(e) => setReuseOptions((prev) => ({ ...prev, themes: e.target.checked }))}
+                        />
+                        <span>
+                          <strong>Section Naming Themes & Vocabulary</strong> (restores grade-level naming themes like Gems, Native Trees, Core Values)
+                        </span>
+                      </label>
+
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#1e293b", cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={reuseOptions.subjects}
+                          onChange={(e) => setReuseOptions((prev) => ({ ...prev, subjects: e.target.checked }))}
+                        />
+                        <span>
+                          <strong>Subjects & Curriculum Catalog</strong> (copies Core, Applied, and Specialized subjects and weekly hours)
                         </span>
                       </label>
 
@@ -4477,7 +5141,7 @@ export default function SchoolProfileSettings() {
                   </div>
 
                   <div style={{ padding: "10px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, fontSize: 11.5, color: "#92400e" }}>
-                    Notice: Carrying over data will import these records into your active system for S.Y. {profile.academicYear}. Existing records with identical names will be updated.
+                    Notice: Carrying over data will import these selected categories into your active system for S.Y. {profile.academicYear}.
                   </div>
                 </div>
 
@@ -4530,6 +5194,336 @@ export default function SchoolProfileSettings() {
                       Import Selected Data
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL 3: START NEXT SCHOOL YEAR / ROLLOVER WIZARD */}
+          {newYearModalOpen && (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15, 23, 42, 0.6)",
+                backdropFilter: "blur(4px)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 9999,
+                padding: 16,
+              }}
+              onClick={() => setNewYearModalOpen(false)}
+            >
+              <div
+                style={{
+                  background: "#ffffff",
+                  borderRadius: 16,
+                  maxWidth: 660,
+                  width: "100%",
+                  maxHeight: "92vh",
+                  overflow: "hidden",
+                  display: "flex",
+                  flexDirection: "column",
+                  boxShadow: "0 20px 40px rgba(0,0,0,0.25)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div style={{ padding: "18px 24px", background: "#3B4197", color: "#ffffff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800 }}>
+                      Start Next School Year & Archive S.Y. {profile.academicYear || "2026-2027"}
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "#bfdbfe" }}>
+                      Snapshots current active records into Historical Archives and initializes the upcoming school year.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNewYearModalOpen(false)}
+                    style={{ background: "transparent", border: "none", color: "#ffffff", fontSize: 22, cursor: "pointer", padding: 4 }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div style={{ padding: 22, overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+                  {/* Step 1: Snapshot Preview */}
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 800, color: "#1f2c6f", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>
+                      Step 1: Automatic Archive Snapshot of S.Y. {profile.academicYear || "2026-2027"}
+                    </div>
+                    <p style={{ margin: "0 0 10px", fontSize: 12, color: "#475569", lineHeight: 1.45 }}>
+                      Before transitioning, the system automatically saves a complete snapshot of your current school year into the Historical Archives Registry:
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 11.5 }}>
+                        <strong style={{ color: "#1f2c6f", display: "block" }}>Sections & Themes</strong>
+                        <span style={{ color: "#64748b" }}>{activeStats.jhsSections + activeStats.shsSections} Sections + Naming Themes</span>
+                      </div>
+                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 11.5 }}>
+                        <strong style={{ color: "#1f2c6f", display: "block" }}>Faculty & Ancillaries</strong>
+                        <span style={{ color: "#64748b" }}>{activeStats.jhsFaculty + activeStats.shsFaculty} Profiles + Advisers</span>
+                      </div>
+                      <div style={{ background: "#ffffff", padding: "8px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 11.5 }}>
+                        <strong style={{ color: "#1f2c6f", display: "block" }}>Subjects & Timetables</strong>
+                        <span style={{ color: "#64748b" }}>Full Catalog + Master Scheds</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 2: Target Academic Year Label */}
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 800, color: "#1f2c6f", display: "block", marginBottom: 6 }}>
+                      Step 2: Target Operational School Year (Format: YYYY-YYYY)
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={9}
+                      value={nextYearLabelInput}
+                      onChange={(e) => setNextYearLabelInput(e.target.value)}
+                      placeholder="e.g. 2027-2028"
+                      style={{
+                        width: "100%",
+                        padding: "9px 12px",
+                        borderRadius: 8,
+                        border: !nextYearValidation.valid ? "1.5px solid #dc2626" : "1px solid #cbd5e1",
+                        background: !nextYearValidation.valid ? "#fef2f2" : "#ffffff",
+                        fontSize: 13.5,
+                        fontWeight: 700,
+                        color: "#1e293b",
+                        boxSizing: "border-box",
+                      }}
+                    />
+
+                    {!nextYearValidation.valid && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          background: "#fef2f2",
+                          border: "1px solid #fecaca",
+                          color: "#991b1b",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 10,
+                        }}
+                      >
+                        <span>{nextYearValidation.error}</span>
+                        {nextYearValidation.expected && (
+                          <button
+                            type="button"
+                            onClick={() => setNextYearLabelInput(nextYearValidation.expected)}
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 6,
+                              border: "none",
+                              background: "#dc2626",
+                              color: "#ffffff",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Auto-Fix → {nextYearValidation.expected}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {nextYearValidation.valid && nextYearValidation.warning && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          background: "#fffbeb",
+                          border: "1px solid #fde68a",
+                          color: "#92400e",
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 10,
+                        }}
+                      >
+                        <span>{nextYearValidation.warning}</span>
+                        {nextYearValidation.expected && (
+                          <button
+                            type="button"
+                            onClick={() => setNextYearLabelInput(nextYearValidation.expected)}
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 6,
+                              border: "1px solid #d97706",
+                              background: "#ffffff",
+                              color: "#92400e",
+                              fontSize: 11,
+                              fontWeight: 800,
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Use {nextYearValidation.expected}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Step 3: Initialization Mode */}
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 800, color: "#1f2c6f", display: "block", marginBottom: 8 }}>
+                      Step 3: Choose How to Initialize S.Y. {nextYearValidation.valid ? nextYearValidation.normalized : "Next Year"}
+                    </label>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {/* Mode A: Recommended Default */}
+                      <div
+                        onClick={() => setNewYearMode("recommended")}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: 10,
+                          border: newYearMode === "recommended" ? "2px solid #3B4197" : "1px solid #cbd5e1",
+                          background: newYearMode === "recommended" ? "#eef2ff" : "#ffffff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <strong style={{ fontSize: 13, color: "#1f2c6f" }}>
+                            Carry Over Setup, Fresh Schedule (Recommended Default)
+                          </strong>
+                          <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: "#3B4197", color: "#ffffff" }}>
+                            DEFAULT
+                          </span>
+                        </div>
+                        <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#475569", lineHeight: 1.4 }}>
+                          Retains your Teachers, Subjects Catalog, Sections, Section Naming Themes, Ancillary Duties, and Bell Configurations, while clearing old timetables so you can generate a fresh conflict-free schedule for the new school year.
+                        </p>
+                      </div>
+
+                      {/* Mode B: Selective Carry-Over */}
+                      <div
+                        onClick={() => setNewYearMode("selective")}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: 10,
+                          border: newYearMode === "selective" ? "2px solid #3B4197" : "1px solid #cbd5e1",
+                          background: newYearMode === "selective" ? "#eef2ff" : "#ffffff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <strong style={{ fontSize: 13, color: "#1f2c6f" }}>
+                            Selective Carry-Over (Pick & Choose Specific Data)
+                          </strong>
+                          <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: "#e0e7ff", color: "#3730a3" }}>
+                            CUSTOM
+                          </span>
+                        </div>
+                        <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#475569", lineHeight: 1.4 }}>
+                          Choose exactly which records to keep (e.g., keep Teachers and Subjects only, or keep Section Naming Themes only) and reset unselected categories.
+                        </p>
+
+                        {newYearMode === "selective" && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ marginTop: 10, padding: 12, background: "#ffffff", borderRadius: 8, border: "1px solid #cbd5e1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}
+                          >
+                            {[
+                              { key: "sections", label: "Sections & Grade Counts" },
+                              { key: "themes", label: "Section Naming Themes" },
+                              { key: "subjects", label: "Subjects & Curriculum Catalog" },
+                              { key: "faculty", label: "Teachers & Faculty Roster" },
+                              { key: "ancillaries", label: "Ancillary Roles & Advisers" },
+                              { key: "configs", label: "Bell Timings & Period Configs" },
+                              { key: "schedules", label: "Active & Published Schedules" },
+                            ].map((item) => (
+                              <label key={item.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#1e293b", cursor: "pointer", fontWeight: 600 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(newYearKeepOptions[item.key])}
+                                  onChange={(e) => setNewYearKeepOptions((prev) => ({ ...prev, [item.key]: e.target.checked }))}
+                                />
+                                <span>{item.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Mode C: Start Completely From Scratch */}
+                      <div
+                        onClick={() => setNewYearMode("scratch")}
+                        style={{
+                          padding: "12px 14px",
+                          borderRadius: 10,
+                          border: newYearMode === "scratch" ? "2px solid #dc2626" : "1px solid #cbd5e1",
+                          background: newYearMode === "scratch" ? "#fef2f2" : "#ffffff",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <strong style={{ fontSize: 13, color: "#991b1b" }}>
+                            Start Completely From Scratch (Blank Slate)
+                          </strong>
+                          <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 999, background: "#fee2e2", color: "#991b1b" }}>
+                            CLEAN RESET
+                          </span>
+                        </div>
+                        <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#7f1d1d", lineHeight: 1.4 }}>
+                          Archives S.Y. {profile.academicYear} safely into Historical Archives, then clears active Sections, Teachers, Subjects, and Timetables so you can build the new school year from zero (or selectively import from any archive later).
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div style={{ padding: "14px 24px", background: "#f8fafc", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => setNewYearModalOpen(false)}
+                    style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#ffffff", color: "#475569", fontWeight: 600, fontSize: 12, cursor: "pointer" }}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!nextYearValidation.valid}
+                    onClick={handleConfirmStartNextSchoolYear}
+                    style={{
+                      padding: "9px 18px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: !nextYearValidation.valid
+                        ? "#94a3b8"
+                        : newYearMode === "scratch"
+                          ? "#dc2626"
+                          : "linear-gradient(135deg, #3B4197 0%, #2563eb 100%)",
+                      color: "#ffffff",
+                      fontWeight: 800,
+                      fontSize: 12.5,
+                      cursor: !nextYearValidation.valid ? "not-allowed" : "pointer",
+                      boxShadow: !nextYearValidation.valid ? "none" : "0 4px 12px rgba(59, 65, 151, 0.25)",
+                      whiteSpace: "nowrap",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <span>Archive S.Y. {profile.academicYear} & Start S.Y. {nextYearValidation.valid ? nextYearValidation.normalized : "Next Year"}</span>
+                    <span>→</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -6393,6 +7387,8 @@ function getInitialProfile() {
     const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
     if (!raw) return DEFAULT_PROFILE;
     const parsed = JSON.parse(raw);
+    const yearCheck = validateAcademicYearLabel(parsed.academicYear);
+    const safeAcademicYear = yearCheck.valid ? yearCheck.normalized : DEFAULT_PROFILE.academicYear;
     const initialSchoolLogo = (parsed.schoolLogoUrl && parsed.schoolLogoUrl.startsWith("data:"))
       ? parsed.schoolLogoUrl
       : "/diadi-nhs-logo.png?v=1980";
@@ -6402,9 +7398,10 @@ function getInitialProfile() {
     const shsLogo = (parsed.brandingByLevel?.shs?.schoolLogoUrl && parsed.brandingByLevel?.shs?.schoolLogoUrl.startsWith("data:"))
       ? parsed.brandingByLevel.shs.schoolLogoUrl
       : initialSchoolLogo;
-    return {
+    const repaired = {
       ...DEFAULT_PROFILE,
       ...parsed,
+      academicYear: safeAcademicYear,
       schoolLogoUrl: initialSchoolLogo,
       brandingByLevel: {
         jhs: {
@@ -6435,6 +7432,12 @@ function getInitialProfile() {
         ...(parsed.signatories || {}),
       },
     };
+    if (!yearCheck.valid) {
+      try {
+        window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(repaired));
+      } catch (e) {}
+    }
+    return repaired;
   } catch {
     return DEFAULT_PROFILE;
   }

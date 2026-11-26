@@ -169,15 +169,11 @@ function calculateTeacherLoads(facultyList) {
   const teacherDistinctPrepsMap = {};
   const adviserHGPCount = {};
   const teacherAbsorbedHGPMap = {};
+  const teacherAdvisorySectionMap = {};
 
   assignments.forEach((asgn) => {
     const processTeacherAssignment = (tid) => {
       if (!tid) return;
-      const faculty = facultyById.get(tid);
-      const isClassAdviser = Boolean(
-        faculty?.isClassAdviser ||
-        (Array.isArray(faculty?.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
-      );
 
       const sub = asgn.subjectId ? subjectsMap.get(asgn.subjectId) : null;
       const subCode = String(sub?.subjectCode || sub?.code || "").toUpperCase();
@@ -190,16 +186,24 @@ function calculateTeacherLoads(facultyList) {
         subName.includes("guidance program") ||
         subName.includes("advisory");
 
-      // DepEd DO 005, s. 2024: Class Adviser's advisory section HGP period (1 period/wk)
-      // is an integral duty covered under their 5.0h advising credit.
-      // It is absorbed so it does not count as classroom contact overload.
+      // DepEd DO 005, s. 2024: Any teacher assigned to a section's HGP (Homeroom Guidance Program) period
+      // is automatically that section's Class Adviser. Their 1 period/wk advisory HGP is covered under
+      // their 5.0h advising credit and absorbed so it does not count as classroom contact overload.
       let isAdvisoryHGPAbsorbed = false;
-      if (isClassAdviser && isHGP) {
+      if (isHGP) {
         const count = adviserHGPCount[tid] || 0;
         if (count === 0) {
           isAdvisoryHGPAbsorbed = true;
           adviserHGPCount[tid] = 1;
           teacherAbsorbedHGPMap[tid] = true;
+          if (asgn.sectionId) {
+            const advSec = sectionsMap.get(asgn.sectionId);
+            const advSecName = advSec?.name || asgn.sectionId;
+            const advGrade = advSec?.grade ? String(advSec.grade).replace(/^Grade\s*/i, "").replace(/^G/i, "").trim() : "";
+            teacherAdvisorySectionMap[tid] = advGrade && !advSecName.toLowerCase().includes(`grade ${advGrade}`)
+              ? `Grade ${advGrade} - ${advSecName}`
+              : advSecName;
+          }
         }
       }
 
@@ -234,16 +238,17 @@ function calculateTeacherLoads(facultyList) {
         });
       }
 
-      // Track distinct academic subject preparations (excluding advisory HGP)
+      // Track distinct grade-level preparations (excluding advisory HGP)
       if (!isHGP && asgn.subjectId) {
         const sec = asgn.sectionId ? sectionsMap.get(asgn.sectionId) : null;
-        let prepLabel = String(sub?.subjectName || sub?.name || sub?.subjectCode || asgn.subjectId).trim();
-        if (!/\b(?:7|8|9|10|11|12)\b/.test(prepLabel)) {
-          const grade = sec?.grade || sub?.gradeLevel;
-          if (grade && String(grade) !== "7-10") {
-            prepLabel = `${prepLabel} ${grade}`;
-          }
-        }
+        const rawGrade = sec?.grade || sub?.gradeLevel || "";
+        const gradeMatch = String(rawGrade).match(/\b(7|8|9|10|11|12)\b/);
+        const gradeNum = gradeMatch ? gradeMatch[1] : "";
+        const matchedFaculty = facultyById.get(tid);
+        const primarySubj = Array.isArray(matchedFaculty?.subjectExpertise) && matchedFaculty.subjectExpertise.length > 0
+          ? String(matchedFaculty.subjectExpertise[0]).split("—").pop().trim()
+          : String(sub?.subjectName || sub?.name || sub?.subjectCode || asgn.subjectId).trim();
+        const prepLabel = gradeNum ? `Grade ${gradeNum} (${primarySubj})` : primarySubj;
         if (!teacherDistinctPrepsMap[tid]) teacherDistinctPrepsMap[tid] = new Set();
         teacherDistinctPrepsMap[tid].add(prepLabel);
       }
@@ -255,16 +260,41 @@ function calculateTeacherLoads(facultyList) {
     }
   });
 
+  // Helper to check if a teacher is a Class Adviser (from HGP assignment or profile)
+  const checkIsClassAdviser = (f) =>
+    Boolean(
+      teacherAbsorbedHGPMap[f.id] ||
+      f.isClassAdviser ||
+      (Array.isArray(f.ancillaryAssignments) && f.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
+    );
+
+  // Find the highest assigned teaching load across the roster so the highest load always equals 100% of the progress bar regardless of status
+  let highestAssignedHours = 0;
+  facultyList.forEach((f) => {
+    const pCount = teacherPeriodCounts[f.id] || 0;
+    const classroomHrs = Math.round(((pCount * periodMinutes) / 60) * 10) / 10;
+    const isAdv = checkIsClassAdviser(f);
+    // DepEd DO 005, s. 2024: Class Adviser equivalence is 5.0 hrs/wk (1 hr/day, which includes the 1h HGP period)
+    const advCredit = isAdv && (pCount > 0 || teacherAbsorbedHGPMap[f.id]) ? 5 : 0;
+    const hrs = Math.round((classroomHrs + advCredit) * 10) / 10;
+    if (hrs > highestAssignedHours) {
+      highestAssignedHours = hrs;
+    }
+  });
+  const progressBarCeilingHours = highestAssignedHours > 0 ? highestAssignedHours : 30;
+
   return facultyList.map((faculty) => {
     const periodCount = teacherPeriodCounts[faculty.id] || 0;
     const totalMinutes = periodCount * periodMinutes;
-    const totalHours = Math.round((totalMinutes / 60) * 10) / 10;
-    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
+    const classroomContactHours = Math.round((totalMinutes / 60) * 10) / 10;
 
-    const isClassAdviser = Boolean(
-      faculty.isClassAdviser ||
-      (Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
-    );
+    const hasAdvisoryHGP = Boolean(teacherAbsorbedHGPMap[faculty.id]);
+    const isClassAdviser = checkIsClassAdviser(faculty);
+    // Include 5h Class Adviser credit (which already absorbs the 1h HGP period) into the total credited weekly load
+    const advisoryCreditAdded = isClassAdviser && (periodCount > 0 || hasAdvisoryHGP) ? 5 : 0;
+    const totalHours = Math.round((classroomContactHours + advisoryCreditAdded) * 10) / 10;
+    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
+    const autoAdvisorySection = teacherAdvisorySectionMap[faculty.id] || faculty.advisorySection || "";
 
     const rawAppt = faculty.appointmentStatus || faculty.employmentStatus || "Permanent";
     let appointmentStatus = "Permanent";
@@ -285,11 +315,11 @@ function calculateTeacherLoads(facultyList) {
 
     // Magna Carta & DepEd DO 005, s. 2024:
     // Statutory maximum classroom teaching is 30 contact hours/week (6 hrs/day).
-    // Class Advisers receive a 1-load credit (5 hours/week ancillary credit), capping contact teaching at 25 hrs/week.
-    // Operational Workload Categories:
+    // Operational Workload Categories (aligned 100% with the top KPI tiles):
     // - Unassigned: 0 contact hours assigned
-    // - Underload: < 16 periods (< 15h) for regular, < 14 periods for class adviser, < 10 periods for part-time
-    // - Balanced: 16 - 30 periods (15 - 30h) for regular, 14 - 25 periods for adviser, 10 - 20 periods for part-time (DepEd optimal target load)
+    // - Underload: < 15 contact hours/week (< 10h for part-time)
+    // - Balanced: 15 - 30 contact hours/week (10 - 20h for part-time)
+    // - Overload: > 30 contact hours/week (> 20h for part-time)
     const isMajorAncillary = Boolean(
       Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => {
         const l = String(a).toLowerCase();
@@ -298,36 +328,65 @@ function calculateTeacherLoads(facultyList) {
     );
     const hasActiveAdvisory = isClassAdviser || Boolean(teacherAbsorbedHGPMap[faculty.id]);
     const ancillaryCreditHours = hasActiveAdvisory ? 5 : (isMajorAncillary ? 4 : (Number(faculty.ancillaryCreditHours) || 0));
-    const maxTeachingContactHours = isPartTime ? 20 : (hasActiveAdvisory ? 25 : (isMajorAncillary ? 26 : 30));
-    const minBalancedHours = isPartTime ? 10 : (hasActiveAdvisory ? 14 : (isMajorAncillary ? 10 : 14));
+    const maxTeachingContactHours = isPartTime ? 20 : 30;
+    const minBalancedHours = isPartTime ? 10 : 15;
 
     const percent = Math.round((totalHours / maxTeachingContactHours) * 100);
+    const progressBarPercent =
+      totalHours > 0
+        ? Math.max(4, Math.min(100, Math.round((totalHours / progressBarCeilingHours) * 100)))
+        : 0;
 
     let status = "Unassigned";
-    if (periodCount === 0) {
+    if (totalHours === 0 && periodCount === 0) {
       status = "Unassigned";
-    } else if (totalHours < minBalancedHours && periodCount < minBalancedHours) {
+    } else if (totalHours < minBalancedHours) {
       status = "Underload";
-    } else if (totalHours <= maxTeachingContactHours || periodCount <= maxTeachingContactHours) {
+    } else if (totalHours <= maxTeachingContactHours) {
       status = "Balanced";
     } else {
       status = "Overload";
     }
 
-    const statutoryTier = totalHours === 0 ? "Unassigned" : (totalHours >= (isClassAdviser ? 25 : 30) ? "Full load" : "Part load");
+    const statutoryTier = totalHours === 0 ? "Unassigned" : (totalHours >= 30 ? "Full load" : "Part load");
 
-    const assignedSectionsList = teacherSectionsMap[faculty.id] ? Array.from(teacherSectionsMap[faculty.id].values()) : [];
+    const extractSectionGradeNum = (sec) => {
+      if (sec?.grade) {
+        const m = String(sec.grade).match(/\d+/);
+        if (m) return parseInt(m[0], 10);
+      }
+      const m2 = String(sec?.label || sec?.name || sec?.id || "").match(/\b(7|8|9|10|11|12)\b/);
+      return m2 ? parseInt(m2[1], 10) : 99;
+    };
+
+    const assignedSectionsList = (teacherSectionsMap[faculty.id] ? Array.from(teacherSectionsMap[faculty.id].values()) : [])
+      .slice()
+      .sort((a, b) => {
+        const gA = extractSectionGradeNum(a);
+        const gB = extractSectionGradeNum(b);
+        if (gA !== gB) return gA - gB;
+        return String(a.name || a.label || "").localeCompare(String(b.name || b.label || ""));
+      });
     const assignedSubjectsList = teacherSubjectsMap[faculty.id] ? Array.from(teacherSubjectsMap[faculty.id].values()) : [];
 
     const prepsSet = teacherDistinctPrepsMap[faculty.id] || new Set();
-    const distinctPrepsList = Array.from(prepsSet);
+    const extractPrepGradeNum = (p) => {
+      const m = String(p).match(/Grade\s*(\d+)/i);
+      return m ? parseInt(m[1], 10) : 99;
+    };
+    const distinctPrepsList = Array.from(prepsSet).sort((a, b) => {
+      const gA = extractPrepGradeNum(a);
+      const gB = extractPrepGradeNum(b);
+      if (gA !== gB) return gA - gB;
+      return String(a).localeCompare(String(b));
+    });
     const distinctPrepsCount = distinctPrepsList.length;
     const distinctPrepsSummary = distinctPrepsList.join(", ") || "None";
-    const hasAdvisoryHGP = Boolean(teacherAbsorbedHGPMap[faculty.id]);
 
     return {
       ...faculty,
       isClassAdviser,
+      autoAdvisorySection,
       appointmentStatus,
       workingArrangement,
       isPartTime,
@@ -336,6 +395,8 @@ function calculateTeacherLoads(facultyList) {
       distinctPrepsSummary,
       hasAdvisoryHGP,
       ancillaryCreditHours,
+      advisoryCreditAdded,
+      classroomContactHours,
       maxTeachingContactHours,
       minBalancedHours,
       assignedPeriods: periodCount,
@@ -343,6 +404,8 @@ function calculateTeacherLoads(facultyList) {
       assignedLoadHours: totalHours,
       dailyContactHours: dailyHours,
       assignedLoadPercent: percent,
+      progressBarPercent,
+      progressBarCeilingHours,
       assignedLoadStatus: status, // "Unassigned" | "Underload" | "Balanced" | "Overload"
       statutoryTier, // Informational DepEd statutory tier ("Full load" vs "Part load")
       assignedSections: assignedSectionsList,
@@ -712,8 +775,98 @@ export default function FacultyManagement() {
     setFacultyMembers(nextFaculty);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(FACULTY_STORAGE_KEY, JSON.stringify(nextFaculty));
+
+      // Dynamically sync updated teacher metadata into existing Schedule Drafts and Published Schedules
+      try {
+        const byId = new Map();
+        if (Array.isArray(nextFaculty)) {
+          nextFaculty.forEach((t) => {
+            if (!t) return;
+            if (t.id) byId.set(String(t.id), t);
+            if (t.employeeId) byId.set(String(t.employeeId), t);
+          });
+        }
+
+        const syncScheduleTeachers = (sched) => {
+          if (!sched || typeof sched !== "object") return false;
+          let changed = false;
+          if (Array.isArray(sched.teachers)) {
+            sched.teachers = sched.teachers.map((oldT) => {
+              if (!oldT) return oldT;
+              const match = byId.get(String(oldT.id)) || byId.get(String(oldT.employeeId));
+              if (!match) return oldT;
+              changed = true;
+              return {
+                ...oldT,
+                ...match,
+              };
+            });
+          }
+          if (sched.assignments && typeof sched.assignments === "object") {
+            Object.values(sched.assignments).forEach((asgn) => {
+              if (!asgn || typeof asgn !== "object") return;
+              if (asgn.teacherId && byId.has(String(asgn.teacherId))) {
+                const match = byId.get(String(asgn.teacherId));
+                if (asgn.teacherName && match.name && asgn.teacherName !== match.name) {
+                  asgn.teacherName = match.name;
+                  changed = true;
+                }
+              }
+              if (Array.isArray(asgn.breakoutAssignments)) {
+                asgn.breakoutAssignments.forEach((b) => {
+                  if (b && b.teacherId && byId.has(String(b.teacherId))) {
+                    const match = byId.get(String(b.teacherId));
+                    if (match.name && b.teacherName !== match.name) {
+                      b.teacherName = match.name;
+                      changed = true;
+                    }
+                  }
+                });
+              }
+            });
+          }
+          return changed;
+        };
+
+        const draftsRaw = window.localStorage.getItem("turotugma_schedule_drafts");
+        if (draftsRaw) {
+          const parsedDrafts = JSON.parse(draftsRaw);
+          if (Array.isArray(parsedDrafts)) {
+            let anyDraftChanged = false;
+            parsedDrafts.forEach((d) => {
+              const sched = d?.schedule || d;
+              if (syncScheduleTeachers(sched)) {
+                anyDraftChanged = true;
+              }
+            });
+            if (anyDraftChanged) {
+              window.localStorage.setItem("turotugma_schedule_drafts", JSON.stringify(parsedDrafts));
+            }
+          }
+        }
+
+        const pubRaw = window.localStorage.getItem("turotugma_published_schedules");
+        if (pubRaw) {
+          const parsedPub = JSON.parse(pubRaw);
+          if (parsedPub && typeof parsedPub === "object") {
+            let anyPubChanged = false;
+            Object.values(parsedPub).forEach((sched) => {
+              if (syncScheduleTeachers(sched)) {
+                anyPubChanged = true;
+              }
+            });
+            if (anyPubChanged) {
+              window.localStorage.setItem("turotugma_published_schedules", JSON.stringify(parsedPub));
+            }
+          }
+        }
+      } catch {
+        // Ignore schedule sync errors
+      }
+
       window.dispatchEvent(new Event("turotugma:faculty-updated"));
       window.dispatchEvent(new Event("turotugma_faculty_updated"));
+      window.dispatchEvent(new CustomEvent("turotugma:schedule-updated", { detail: { type: "faculty-sync" } }));
     }
   };
 
@@ -859,22 +1012,20 @@ export default function FacultyManagement() {
         }
 
         const basicValidationErrors = validateFacultyForm(mapped, [], null);
-        const firstValidationError = Object.values(basicValidationErrors)[0];
-        if (firstValidationError) {
-          nextErrors.push(`Row ${lineNumber}: ${firstValidationError}`);
-          return;
-        }
-
         const normalizedEmployeeId = sanitizeText(mapped.employeeId).toLowerCase();
         const normalizedEmail = sanitizeText(mapped.email).toLowerCase();
 
-        if (existingEmployeeIds.has(normalizedEmployeeId) || importEmployeeIds.has(normalizedEmployeeId)) {
-          nextErrors.push(`Row ${lineNumber}: Employee ID must be unique.`);
-          return;
+        if (normalizedEmployeeId && (existingEmployeeIds.has(normalizedEmployeeId) || importEmployeeIds.has(normalizedEmployeeId))) {
+          basicValidationErrors.employeeId = "Employee ID must be unique.";
         }
 
-        if (existingEmails.has(normalizedEmail) || importEmails.has(normalizedEmail)) {
-          nextErrors.push(`Row ${lineNumber}: Email must be unique.`);
+        if (normalizedEmail && (existingEmails.has(normalizedEmail) || importEmails.has(normalizedEmail))) {
+          basicValidationErrors.email = "Email must be unique.";
+        }
+
+        const allRowErrors = Object.values(basicValidationErrors);
+        if (allRowErrors.length > 0) {
+          nextErrors.push(`Row ${lineNumber}: ${allRowErrors.join(" • ")}`);
           return;
         }
 
@@ -936,19 +1087,97 @@ export default function FacultyManagement() {
     showNotice(`Imported ${newFaculty.length} teacher(s) successfully.`, "success");
   };
 
-  const handleLoad80Dataset = async () => {
+  const handleLoad64Dataset = async () => {
     try {
-      const res = await fetch("/faculty_100_profiles.csv");
-      if (!res.ok) throw new Error("Dataset file not found");
-      const text = await res.text();
+      const text = `Name,Sex,Employee ID,Position,Employment Status,Email,Contact,Degree,Major,Minor,Ancillary Assignments,Unavailable Periods,Subject Expertise,Grade Level Assignments
+Jose B. Reyes,Male,EMP-2026-001,Teacher II,Regular,jose.reyes1@deped.gov.ph,09171008765,Bachelor of Secondary Education,Mathematics,Education,Grade Level Chairman,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Cristina C. Cruz,Female,EMP-2026-002,Teacher III,Regular,cristina.cruz2@deped.gov.ph,09171017530,Bachelor of Secondary Education,Mathematics,Education,ICT Coordinator,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Gabriel D. Bautista,Male,EMP-2026-003,Master Teacher I,Regular,gabriel.bautista3@deped.gov.ph,09171026295,Bachelor of Secondary Education,Mathematics,Education,School Registrar Assistant,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Angelica E. Ocampo,Female,EMP-2026-004,Master Teacher II,Regular,angelica.ocampo4@deped.gov.ph,09171035060,Bachelor of Secondary Education,Mathematics,Education,Property Custodian Assistant,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Angelo F. Garcia,Male,EMP-2026-005,Teacher I,Regular,angelo.garcia5@deped.gov.ph,09171043825,Bachelor of Secondary Education,Mathematics,Education,DRRM Coordinator,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Jennifer G. Mendoza,Female,EMP-2026-006,Teacher II,Regular,jennifer.mendoza6@deped.gov.ph,09171052590,Bachelor of Secondary Education,Mathematics,Education,Canteen Coordinator,,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Rafael H. Torres,Male,EMP-2026-007,Teacher III,Regular,rafael.torres7@deped.gov.ph,09171061355,Bachelor of Secondary Education,Mathematics,Education,,P1,Mathematics,Grade 7; Grade 8; Grade 9; Grade 10
+Joshua L. Ramos,Male,EMP-2026-008,Teacher II,Regular,joshua.ramos8@deped.gov.ph,09171096415,Bachelor of Secondary Education,Mathematics,Education,Property Custodian Assistant,,Elementary Algebra,Grade 7; Grade 8; Grade 9; Grade 10
+Stephanie I. Tomas,Female,EMP-2026-009,Master Teacher I,Probationary,stephanie.tomas9@deped.gov.ph,09171070120,Bachelor of Secondary Education,TLE / ICT,Education,Grade Level Chairman,,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Francis J. Andrada,Male,EMP-2026-010,Master Teacher II,Regular,francis.andrada10@deped.gov.ph,09171078885,Bachelor of Secondary Education,TLE / ICT,Education,ICT Coordinator,P8,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Rosemary K. Gonzales,Female,EMP-2026-011,Teacher I,Regular,rosemary.gonzales11@deped.gov.ph,09171087650,Bachelor of Secondary Education,Values / Guidance,Education,School Registrar Assistant,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Teresa M. Aquino,Female,EMP-2026-012,Teacher III,Regular,teresa.aquino12@deped.gov.ph,09171105180,Bachelor of Secondary Education,Science,Education,DRRM Coordinator,,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Eduardo N. Villanueva,Male,EMP-2026-013,Master Teacher I,Regular,eduardo.villanueva13@deped.gov.ph,09171113945,Bachelor of Secondary Education,Science,Education,Canteen Coordinator,,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Veronica O. Castillo,Female,EMP-2026-014,Master Teacher II,Regular,veronica.castillo14@deped.gov.ph,09171122710,Bachelor of Secondary Education,Science,Education,,P1,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Ferdinand P. Flores,Male,EMP-2026-015,Teacher I,Regular,ferdinand.flores15@deped.gov.ph,09171131475,Bachelor of Secondary Education,Science,Education,Grade Level Chairman,,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Corazon Q. Navarro,Female,EMP-2026-016,Teacher II,Probationary,corazon.navarro16@deped.gov.ph,09171140240,Bachelor of Secondary Education,Science,Education,ICT Coordinator,,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Dominic R. Mercado,Male,EMP-2026-017,Teacher III,Regular,dominic.mercado17@deped.gov.ph,09171149005,Bachelor of Secondary Education,Science,Education,School Registrar Assistant,,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Rowena S. Aguilar,Female,EMP-2026-018,Master Teacher I,Regular,rowena.aguilar18@deped.gov.ph,09171157770,Bachelor of Secondary Education,Science,Education,Property Custodian Assistant,P8,Science,Grade 7; Grade 8; Grade 9; Grade 10
+Ricardo X. Santiago,Male,EMP-2026-019,Master Teacher I,Regular,ricardo.santiago19@deped.gov.ph,09171201595,Bachelor of Secondary Education,Science,Education,ICT Coordinator,,Environmental Science,Grade 7; Grade 8; Grade 9; Grade 10
+Victor T. Valenzuela,Male,EMP-2026-020,Master Teacher II,Regular,victor.valenzuela20@deped.gov.ph,09171166535,Bachelor of Secondary Education,TLE / ICT,Education,DRRM Coordinator,,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Jasmine U. Del Rosario,Female,EMP-2026-021,Teacher I,Regular,jasmine.delrosario21@deped.gov.ph,09171175300,Bachelor of Secondary Education,TLE / ICT,Education,Canteen Coordinator,,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Vicente V. De Leon,Male,EMP-2026-022,Teacher II,Regular,vicente.deleon22@deped.gov.ph,09171184065,Bachelor of Secondary Education,Values / Guidance,Education,,P1,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Gwendolyn W. Perez,Female,EMP-2026-023,Teacher III,Regular,gwendolyn.perez23@deped.gov.ph,09171192830,Bachelor of Secondary Education,Values / Guidance,Education,Grade Level Chairman,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Maricel Y. Soriano,Female,EMP-2026-024,Master Teacher II,Probationary,maricel.soriano24@deped.gov.ph,09171210360,Bachelor of Secondary Education,English,Education,School Registrar Assistant,,English,Grade 7; Grade 8; Grade 9; Grade 10
+Edgardo Z. Corpuz,Male,EMP-2026-025,Teacher I,Regular,edgardo.corpuz25@deped.gov.ph,09171219125,Bachelor of Secondary Education,English,Education,Property Custodian Assistant,,English,Grade 7; Grade 8; Grade 9; Grade 10
+Josefina A. Manalo,Female,EMP-2026-026,Teacher II,Regular,josefina.manalo26@deped.gov.ph,09171227890,Bachelor of Secondary Education,English,Education,DRRM Coordinator,,English,Grade 7; Grade 8; Grade 9; Grade 10
+Roderick B. Dela Rosa,Male,EMP-2026-027,Teacher III,Regular,roderick.delarosa27@deped.gov.ph,09171236655,Bachelor of Secondary Education,English,Education,Canteen Coordinator,P8,English,Grade 7; Grade 8; Grade 9; Grade 10
+Consuelo C. Pineda,Female,EMP-2026-028,Master Teacher I,Regular,consuelo.pineda28@deped.gov.ph,09171245420,Bachelor of Secondary Education,English,Education,,P1,English,Grade 7; Grade 8; Grade 9; Grade 10
+Stephen D. Valdez,Male,EMP-2026-029,Master Teacher II,Regular,stephen.valdez29@deped.gov.ph,09171254185,Bachelor of Secondary Education,English,Education,Grade Level Chairman,,English,Grade 7; Grade 8; Grade 9; Grade 10
+Maria E. Fernandez,Female,EMP-2026-030,Teacher I,Regular,maria.fernandez30@deped.gov.ph,09171262950,Bachelor of Secondary Education,MAPEH,Education,ICT Coordinator,,MAPEH,Grade 7; Grade 8; Grade 9; Grade 10
+Nathaniel F. Sison,Male,EMP-2026-031,Teacher II,Regular,nathaniel.sison31@deped.gov.ph,09171271715,Bachelor of Secondary Education,MAPEH,Education,School Registrar Assistant,,MAPEH,Grade 7; Grade 8; Grade 9; Grade 10
+Cristina G. Tiongson,Female,EMP-2026-032,Teacher III,Probationary,cristina.tiongson32@deped.gov.ph,09171280480,Bachelor of Secondary Education,Values / Guidance,Education,Property Custodian Assistant,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Christopher H. Dizon,Male,EMP-2026-033,Master Teacher I,Regular,christopher.dizon33@deped.gov.ph,09171289245,Bachelor of Secondary Education,English,Education,DRRM Coordinator,,Developmental Reading,Grade 7; Grade 8; Grade 9; Grade 10
+Angelica I. Guerrero,Female,EMP-2026-034,Master Teacher II,Regular,angelica.guerrero34@deped.gov.ph,09171298010,Bachelor of Secondary Education,English,Education,Canteen Coordinator,,Aral Program,Grade 7; Grade 8; Grade 9; Grade 10
+Matthew J. Marquez,Male,EMP-2026-035,Teacher I,Regular,matthew.marquez35@deped.gov.ph,09171306775,Bachelor of Secondary Education,Filipino,Education,,P1,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Jennifer K. Pascual,Female,EMP-2026-036,Teacher II,Regular,jennifer.pascual36@deped.gov.ph,09171315540,Bachelor of Secondary Education,Filipino,Education,Grade Level Chairman,P8,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Nicholas L. Salvador,Male,EMP-2026-037,Teacher III,Regular,nicholas.salvador37@deped.gov.ph,09171324305,Bachelor of Secondary Education,Filipino,Education,ICT Coordinator,,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Stephanie M. Ventura,Female,EMP-2026-038,Master Teacher I,Regular,stephanie.ventura38@deped.gov.ph,09171333070,Bachelor of Secondary Education,Filipino,Education,School Registrar Assistant,,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Patrick N. Cabrera,Male,EMP-2026-039,Master Teacher II,Regular,patrick.cabrera39@deped.gov.ph,09171341835,Bachelor of Secondary Education,Filipino,Education,Property Custodian Assistant,,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Rosemary O. Serrano,Female,EMP-2026-040,Teacher I,Probationary,rosemary.serrano40@deped.gov.ph,09171350600,Bachelor of Secondary Education,Filipino,Education,DRRM Coordinator,,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Jose P. Morales,Male,EMP-2026-041,Teacher II,Regular,jose.morales41@deped.gov.ph,09171359365,Bachelor of Secondary Education,Filipino,Education,Canteen Coordinator,,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Teresa Q. Cordero,Female,EMP-2026-042,Teacher III,Regular,teresa.cordero42@deped.gov.ph,09171368130,Bachelor of Secondary Education,Filipino,Education,,P1,Filipino,Grade 7; Grade 8; Grade 9; Grade 10
+Gabriel R. Miranda,Male,EMP-2026-043,Master Teacher I,Regular,gabriel.miranda43@deped.gov.ph,09171376895,Bachelor of Secondary Education,Araling Panlipunan,Education,Grade Level Chairman,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Veronica S. Padilla,Female,EMP-2026-044,Master Teacher II,Regular,veronica.padilla44@deped.gov.ph,09171385660,Bachelor of Secondary Education,Araling Panlipunan,Education,ICT Coordinator,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Angelo T. Rosales,Male,EMP-2026-045,Teacher I,Regular,angelo.rosales45@deped.gov.ph,09171394425,Bachelor of Secondary Education,Araling Panlipunan,Education,School Registrar Assistant,P8,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Corazon U. Velasco,Female,EMP-2026-046,Teacher II,Regular,corazon.velasco46@deped.gov.ph,09171403190,Bachelor of Secondary Education,Araling Panlipunan,Education,Property Custodian Assistant,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Rafael V. Zapata,Male,EMP-2026-047,Teacher III,Regular,rafael.zapata47@deped.gov.ph,09171411955,Bachelor of Secondary Education,Araling Panlipunan,Education,DRRM Coordinator,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Rowena W. Gutierrez,Female,EMP-2026-048,Master Teacher I,Probationary,rowena.gutierrez48@deped.gov.ph,09171420720,Bachelor of Secondary Education,Araling Panlipunan,Education,Canteen Coordinator,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Francis X. Alvarez,Male,EMP-2026-049,Master Teacher II,Regular,francis.alvarez49@deped.gov.ph,09171429485,Bachelor of Secondary Education,Araling Panlipunan,Education,,P1,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Jasmine Y. Santos,Female,EMP-2026-050,Teacher I,Regular,jasmine.santos50@deped.gov.ph,09171438250,Bachelor of Secondary Education,Araling Panlipunan,Education,Grade Level Chairman,,Araling Panlipunan,Grade 7; Grade 8; Grade 9; Grade 10
+Cherry Mae Garing,Female,EMP-2026-051,Teacher I,Regular,cherry.garing@deped.gov.ph,09171447015,Bachelor of Secondary Education,MAPEH (SPA Media Arts),Education,ICT Coordinator,,SPA Specialization (Media Arts),Grade 7; Grade 8; Grade 9; Grade 10
+Alpha Mae Ambatali,Female,EMP-2026-052,Teacher II,Regular,alpha.ambatali@deped.gov.ph,09171455780,Bachelor of Secondary Education,MAPEH (SPA Dance Arts),Education,School Registrar Assistant,,SPA Specialization (Dance Arts),Grade 7; Grade 8; Grade 9; Grade 10
+May Bitla,Female,EMP-2026-053,Teacher III,Regular,may.bitla@deped.gov.ph,09171464545,Bachelor of Secondary Education,MAPEH (SPA Instrumental Music),Education,Property Custodian Assistant,,SPA Specialization (Instrumental Music),Grade 7; Grade 8; Grade 9; Grade 10
+Joshua Z. Reyes,Male,EMP-2026-054,Master Teacher I,Regular,joshua.reyes@deped.gov.ph,09171473310,Bachelor of Secondary Education,MAPEH (SPA Visual Arts),Education,DRRM Coordinator,P8,SPA Specialization (Visual Arts),Grade 7; Grade 8; Grade 9; Grade 10
+Gwendolyn A. Cruz,Female,EMP-2026-055,Teacher II,Regular,gwendolyn.cruz@deped.gov.ph,09171482075,Bachelor of Secondary Education,MAPEH,Education,Canteen Coordinator,,MAPEH,Grade 7; Grade 8; Grade 9; Grade 10
+Eduardo B. Bautista,Male,EMP-2026-056,Master Teacher II,Probationary,eduardo.bautista@deped.gov.ph,09171490840,Bachelor of Secondary Education,MAPEH,Education,,P1,MAPEH,Grade 7; Grade 8; Grade 9; Grade 10
+Dominic F. Torres,Male,EMP-2026-057,Teacher III,Regular,dominic.torres57@deped.gov.ph,09171499605,Bachelor of Secondary Education,TLE / ICT,Education,Grade Level Chairman,,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Consuelo G. Tomas,Female,EMP-2026-058,Master Teacher I,Regular,consuelo.tomas58@deped.gov.ph,09171508370,Bachelor of Secondary Education,TLE / ICT,Education,ICT Coordinator,,Technology and Livelihood Education (TLE),Grade 7; Grade 8; Grade 9; Grade 10
+Victor H. Andrada,Male,EMP-2026-059,Master Teacher II,Regular,victor.andrada59@deped.gov.ph,09171517135,Bachelor of Secondary Education,TLE / ICT,Education,School Registrar Assistant,,ICT (SPJ),Grade 7; Grade 8; Grade 9; Grade 10
+Maria I. Gonzales,Female,EMP-2026-060,Teacher I,Regular,maria.gonzales60@deped.gov.ph,09171525900,Bachelor of Secondary Education,TLE / ICT,Education,Property Custodian Assistant,,ICT (SP-STEM),Grade 7; Grade 8; Grade 9; Grade 10
+Vicente J. Ramos,Male,EMP-2026-061,Teacher II,Regular,vicente.ramos61@deped.gov.ph,09171534665,Bachelor of Secondary Education,Values / Guidance,Education,DRRM Coordinator,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Cristina K. Aquino,Female,EMP-2026-062,Teacher III,Regular,cristina.aquino62@deped.gov.ph,09171543430,Bachelor of Secondary Education,Values / Guidance,Education,Canteen Coordinator,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Ricardo L. Villanueva,Male,EMP-2026-063,Master Teacher I,Regular,ricardo.villanueva63@deped.gov.ph,09171552195,Bachelor of Secondary Education,Values / Guidance,Education,,P1,Values Education,Grade 7; Grade 8; Grade 9; Grade 10
+Angelica M. Castillo,Female,EMP-2026-064,Master Teacher II,Probationary,angelica.castillo64@deped.gov.ph,09171560960,Bachelor of Secondary Education,Values / Guidance,Education,Grade Level Chairman,,Values Education,Grade 7; Grade 8; Grade 9; Grade 10`;
+
       const workbook = XLSX.read(text, { type: "string" });
       const sheetName = workbook.SheetNames[0];
-      const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
-      const mapped = rawRows.map((row) => mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions));
+      const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" }).slice(0, 64);
+      const mapped = rawRows
+        .map((row) => {
+          const item = mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions);
+          if (!item) return null;
+          // Enforce strictly 1 subject per teacher while keeping multiple grade levels
+          const singleSubject = Array.isArray(item.subjectExpertise) && item.subjectExpertise.length > 0
+            ? [item.subjectExpertise[0]]
+            : [];
+          return {
+            ...item,
+            subjectExpertise: singleSubject,
+            primaryExpertise: singleSubject,
+            secondaryExpertise: [],
+          };
+        })
+        .filter(Boolean);
       persistFaculty(mapped);
-      showNotice(`Successfully loaded 80 DepEd Faculty Profiles (64 JHS Only, 8 SHS Only, 8 Both JHS & SHS)!`, "success");
+      showNotice(`Successfully loaded ${mapped.length} DepEd Faculty Profiles (1 Subject per Teacher, Multi-Grade Levels & SPA Specializations)!`, "success");
     } catch {
-      showNotice("Failed to load 80 faculty dataset.", "error");
+      showNotice("Failed to load 64 faculty dataset.", "error");
     }
   };
 
@@ -996,8 +1225,9 @@ export default function FacultyManagement() {
         subjectExpertise: true,
         gradeLevelAssignments: true,
       });
-      const firstErrorMsg = Object.values(liveValidationErrors)[0] || "Please fix highlighted fields.";
-      showNotice(firstErrorMsg, "error");
+      const allErrorMsgs = Object.values(liveValidationErrors);
+      const summaryMsg = allErrorMsgs.length > 0 ? allErrorMsgs.join(" • ") : "Please fix highlighted fields.";
+      showNotice(summaryMsg, "error");
       return;
     }
 
@@ -1489,17 +1719,15 @@ export default function FacultyManagement() {
           </button>
           <button
             type="button"
-            onClick={handleLoad80Dataset}
+            onClick={handleLoad64Dataset}
             style={{
               ...secondaryActionStyle(),
-              color: "#3B4197",
-              borderColor: "#c7d2fe",
               background: "#eef2ff",
-              fontWeight: 700,
+              color: "#3B4197",
+              border: "1px solid #c7d2fe",
             }}
-            title="Load 80 DepEd Faculty Profiles dataset"
           >
-            Load 80 Teachers
+            Load 64 Teachers
           </button>
           <button type="button" onClick={handleClearAllFaculty} style={dangerActionStyle()}>
             Clear All Faculty
@@ -1552,9 +1780,11 @@ export default function FacultyManagement() {
       {showImportPanel ? (
         <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16, marginBottom: 16 }}>
           <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>Import Teachers (Excel/CSV)</h2>
-          <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13 }}>
-            Headers: Name, Sex, Employee ID, Position, Employment Status, Email, Contact, Degree, Major, Minor,
-            Ancillary Assignments, Unavailable Periods, Subject Expertise, Grade Level Assignments.
+          <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13, lineHeight: 1.5 }}>
+            <strong style={{ color: "#1f2c6f" }}>Required Columns:</strong> Name, Sex (Male/Female or M/F), Employee ID (unique), Position, Email (unique), Contact (09XXXXXXXXX or +639XXXXXXXXX), Subject Expertise, and Grade Level Assignments (e.g., Grade 7, Grade 8).
+          </p>
+          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12.5, lineHeight: 1.5 }}>
+            <strong style={{ color: "#475569" }}>Optional Columns:</strong> Employment Status (defaults to Permanent), Working Arrangement (defaults to Full-Time), Degree, Major, Minor, Ancillary Assignments, Unavailable Periods.
           </p>
 
           <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -1564,17 +1794,15 @@ export default function FacultyManagement() {
             </button>
             <button
               type="button"
-              onClick={handleLoad80Dataset}
+              onClick={handleLoad64Dataset}
               style={{
                 ...secondaryActionStyle(),
-                color: "#3B4197",
-                borderColor: "#c7d2fe",
                 background: "#eef2ff",
-                fontWeight: 700,
+                color: "#3B4197",
+                border: "1px solid #c7d2fe",
               }}
-              title="Load 80 DepEd Faculty Profiles dataset"
             >
-              Load 80 Teachers Dataset
+              Load 64 Teachers Dataset
             </button>
             {isParsingImport ? <span style={{ color: "#5a678d", fontSize: 12 }}>Parsing file...</span> : null}
           </div>
@@ -1689,7 +1917,7 @@ export default function FacultyManagement() {
             <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
           </div>
           <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>
-            20–30 contact hrs/wk
+            15–30 contact hrs/wk
           </div>
         </div>
 
@@ -1717,7 +1945,7 @@ export default function FacultyManagement() {
             <span style={{ fontSize: 12, color: "#64748b" }}>teachers</span>
           </div>
           <div style={{ fontSize: 11, color: "#475569", marginTop: 4 }}>
-            Needs assignment (&lt; 20h)
+            Needs assignment (&lt; 15h)
           </div>
         </div>
 
@@ -2391,116 +2619,8 @@ export default function FacultyManagement() {
               })}
             </div>
 
-            {/* DepEd Class Adviser 1-Load Credit Toggle */}
-            <div style={{ margin: "10px 0", padding: "10px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#1f2c6f" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser")))}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setFormState((prev) => {
-                      let nextAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
-                      if (checked) {
-                        if (!nextAssignments.some((a) => String(a).toLowerCase().includes("adviser"))) {
-                          nextAssignments.push("Class Adviser");
-                        }
-                      } else {
-                        nextAssignments = nextAssignments.filter((a) => !String(a).toLowerCase().includes("adviser"));
-                      }
-                      return {
-                        ...prev,
-                        isClassAdviser: checked,
-                        advisorySection: checked ? prev.advisorySection : "",
-                        ancillaryAssignments: nextAssignments,
-                      };
-                    });
-                    if (checked) {
-                      showNotice("Designated as Class Adviser (+5h teaching load credit applied under DepEd DO 005, s. 2024).", "success");
-                    }
-                  }}
-                />
-                <span>Class Adviser (DepEd 1-Load Credit / 5 hrs advisory time)</span>
-              </label>
-              <p style={{ margin: "4px 0 0 24px", fontSize: 11, color: "#64748b" }}>
-                Per DO 005, s. 2024, advisory duty is credited as 1 teaching load (caps actual classroom teaching to 25 hrs/week instead of 30 hrs).
-              </p>
-
-              {/* Advisory Section Selector */}
-              {Boolean(formState.isClassAdviser || formState.ancillaryAssignments?.some((a) => String(a).toLowerCase().includes("adviser"))) && (
-                <div style={{ marginTop: 10, paddingLeft: 24 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 4 }}>
-                    Advisory Section:
-                  </label>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <select
-                      value={formState.advisorySection || ""}
-                      onChange={(e) => handleFormField("advisorySection", e.target.value)}
-                      style={{ ...selectStyle(false), flex: 1 }}
-                    >
-                      <option value="">Select Advisory Section (or enter below)</option>
-                      {sectionOptions.map((sec) => (
-                        <option key={sec.id || sec.name} value={sec.name}>
-                          {sec.label || sec.name}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Or type section name..."
-                      value={formState.advisorySection || ""}
-                      onChange={(e) => handleFormField("advisorySection", e.target.value)}
-                      style={{ ...inputStyle(false), width: 170 }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <ChipList items={formState.ancillaryAssignments || []} onRemove={removeAncillaryAssignment} emptyText="No ancillary assignments added." />
-
-            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>DepEd Workload Presets:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setFormState((prev) => {
-                    const currentAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
-                    const hasMajor = currentAssignments.some((a) => a.toLowerCase().includes("coordinator") || a.toLowerCase().includes("custodian") || a.toLowerCase().includes("major"));
-                    const nextAssignments = hasMajor ? currentAssignments : [...currentAssignments, "Major Ancillary Coordinator"];
-                    return {
-                      ...prev,
-                      ancillaryCreditHours: 4,
-                      ancillaryAssignments: nextAssignments,
-                    };
-                  });
-                  showNotice("Applied Major Ancillary Credit (-4 teaching periods/week, 4h credit).", "success");
-                }}
-                style={{ fontSize: 11, background: "#eef2ff", color: "#3730a3", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
-                title="Credits 4 teaching periods for major roles like Registrar, Guidance Coordinator, Property Custodian."
-              >
-                Major Credit (-4 periods)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setFormState((prev) => {
-                    const currentAssignments = prev.ancillaryAssignments ? [...prev.ancillaryAssignments] : [];
-                    const hasMinor = currentAssignments.some((a) => a.toLowerCase().includes("coordinator") || a.toLowerCase().includes("chair") || a.toLowerCase().includes("minor"));
-                    const nextAssignments = hasMinor ? currentAssignments : [...currentAssignments, "Minor Ancillary Duty"];
-                    return {
-                      ...prev,
-                      ancillaryCreditHours: 2,
-                      ancillaryAssignments: nextAssignments,
-                    };
-                  });
-                  showNotice("Applied Minor Ancillary Credit (-2 teaching periods/week, 2h credit).", "success");
-                }}
-                style={{ fontSize: 11, background: "#eef2ff", color: "#3B4197", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontWeight: 600 }}
-                title="Credits 2 teaching periods for minor roles like Grade Level Chair, Canteen Manager."
-              >
-                Minor Credit (-2 periods)
-              </button>
+            <div style={{ marginTop: 8 }}>
+              <ChipList items={formState.ancillaryAssignments || []} onRemove={removeAncillaryAssignment} emptyText="No ancillary assignments added." />
             </div>
           </div>
 
@@ -2516,28 +2636,17 @@ export default function FacultyManagement() {
           </div>
 
           <div style={{ marginTop: 6 }}>
-            <Field label="Primary Subject Expertise (Preferred)" required error={touched.subjectExpertise ? validationErrors.subjectExpertise : ""}>
+            <Field label="Subject Expertise" required error={touched.subjectExpertise ? validationErrors.subjectExpertise : ""}>
               <SearchableMultiSelectChips
                 options={subjectOptions}
                 selected={formState.primaryExpertise && formState.primaryExpertise.length ? formState.primaryExpertise : formState.subjectExpertise}
                 onToggle={(option) => {
                   const currentPrimary = formState.primaryExpertise && formState.primaryExpertise.length ? formState.primaryExpertise : formState.subjectExpertise;
                   const nextPrimary = currentPrimary.includes(option) ? currentPrimary.filter((i) => i !== option) : [...currentPrimary, option];
-                  setFormState((prev) => ({ ...prev, primaryExpertise: nextPrimary, subjectExpertise: nextPrimary }));
+                  setFormState((prev) => ({ ...prev, primaryExpertise: nextPrimary, subjectExpertise: nextPrimary, secondaryExpertise: [] }));
                 }}
                 emptyLabel="No subjects available yet. Create subjects first."
-                placeholder="Search primary subjects..."
-              />
-            </Field>
-          </div>
-
-          <div style={{ marginTop: 6 }}>
-            <Field label="Secondary Subject Expertise (Fallback)">
-              <SearchableMultiSelectChips
-                options={subjectOptions}
-                selected={formState.secondaryExpertise || []}
-                onToggle={(option) => toggleMultiSelect("secondaryExpertise", option)}
-                placeholder="Search secondary subjects..."
+                placeholder="Search and select subject expertise..."
               />
             </Field>
           </div>
@@ -2699,8 +2808,47 @@ function formatSectionChip(sec) {
   return name;
 }
 
+function formatCompactGradeRange(rawGrades) {
+  if (!Array.isArray(rawGrades) || rawGrades.length === 0) return "";
+  const nums = Array.from(
+    new Set(
+      rawGrades
+        .map((g) => {
+          const m = String(g || "").match(/(\d{1,2})/);
+          return m ? parseInt(m[1], 10) : null;
+        })
+        .filter((n) => n !== null && !Number.isNaN(n))
+    )
+  ).sort((a, b) => a - b);
+
+  if (nums.length === 0) {
+    return rawGrades
+      .map((g) => String(g || "").replace(/^Grade\s*/i, "G").trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  const ranges = [];
+  let start = nums[0];
+  let end = nums[0];
+
+  for (let i = 1; i < nums.length; i += 1) {
+    if (nums[i] === end + 1) {
+      end = nums[i];
+    } else {
+      ranges.push(start === end ? `G${start}` : `G${start}–G${end}`);
+      start = nums[i];
+      end = nums[i];
+    }
+  }
+  ranges.push(start === end ? `G${start}` : `G${start}–G${end}`);
+  return ranges.join(", ");
+}
+
 function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showAllSections, setShowAllSections] = useState(false);
+  const [showAllPreps, setShowAllPreps] = useState(false);
   const menuRef = useRef(null);
 
   useEffect(() => {
@@ -2718,10 +2866,11 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
 
   const loadStatus = member.assignedLoadStatus || "Unassigned";
 
-  // Calibrate progress bar against teacher's max teaching limit (30h regular, 25h adviser)
+  // Calibrate progress bar against the highest load in the directory (so highest load is always 100% regardless of status)
   const memberHours = Number.isFinite(member.assignedLoadHours) ? member.assignedLoadHours : 0;
-  const maxHours = member.maxTeachingContactHours || 30;
-  const barPercent = Math.max(0, Math.min(100, (memberHours / maxHours) * 100));
+  const barPercent = Number.isFinite(member.progressBarPercent)
+    ? member.progressBarPercent
+    : Math.max(0, Math.min(100, (memberHours / (member.progressBarCeilingHours || 30)) * 100));
 
   const fillColor = {
     Unassigned: "#cbd5e1",
@@ -2742,23 +2891,37 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
   }[loadStatus] || "#64748b";
 
   const formattedHours = memberHours ? `${memberHours.toFixed(1).replace(/\.0$/, "")}` : "0";
+  const maxContactHours = Number.isFinite(member.maxTeachingContactHours) && member.maxTeachingContactHours > 0
+    ? member.maxTeachingContactHours
+    : 30;
+  const formattedMaxHours = `${maxContactHours.toFixed(1).replace(/\.0$/, "")}`;
+  const utilizationPct = Math.round((memberHours / maxContactHours) * 100);
+  const diffHours = Math.round((maxContactHours - memberHours) * 10) / 10;
+  const formattedDiffHours = `${Math.abs(diffHours).toFixed(1).replace(/\.0$/, "")}`;
+  const overLimitSubtext =
+    diffHours < 0
+      ? `+${formattedDiffHours} ${Math.abs(diffHours) === 1 ? "hr" : "hrs"} over limit`
+      : "";
 
   const appointmentStatus = member.appointmentStatus || member.employmentStatus || "Permanent";
   const workingArrangement = member.workingArrangement || (String(member.employmentStatus).toLowerCase().includes("part") ? "Part-Time" : "Full-Time");
+  const isPartTimeArrangement = String(workingArrangement).toLowerCase().includes("part");
   const position = member.position || "Teacher I";
   const employeeId = member.employeeId || "—";
   const isActive = member.active !== false;
   const prepsCount = member.distinctPrepsCount || 0;
   const prepsList = Array.isArray(member.distinctPrepsList) ? member.distinctPrepsList : [];
 
-  // Ancillaries list
+  // Ancillaries list (automatically includes Class Adviser & section when assigned HGP)
   const ancillaries = [];
   if (
     member.isClassAdviser ||
+    member.hasAdvisoryHGP ||
     (Array.isArray(member.ancillaryAssignments) &&
       member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
   ) {
-    ancillaries.push("Class Adviser");
+    const advSecChip = member.autoAdvisorySection ? formatSectionChip({ name: member.autoAdvisorySection }) : "";
+    ancillaries.push(advSecChip ? `Class Adviser (${advSecChip})` : "Class Adviser");
   }
   if (Array.isArray(member.ancillaryAssignments)) {
     member.ancillaryAssignments.forEach((anc) => {
@@ -2770,6 +2933,20 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
   }
 
   const sections = Array.isArray(member.assignedSections) ? member.assignedSections : [];
+  const rawSubjects = Array.isArray(member.subjectExpertise) && member.subjectExpertise.length > 0
+    ? member.subjectExpertise
+    : Array.isArray(member.primaryExpertise)
+    ? member.primaryExpertise
+    : [];
+  const formattedSubjects = rawSubjects
+    .map((s) => {
+      const str = String(s || "").trim();
+      const parts = str.split("—");
+      return parts.length > 1 ? parts.slice(1).join("—").trim() : str;
+    })
+    .filter(Boolean);
+  const rawGrades = Array.isArray(member.gradeLevelAssignments) ? member.gradeLevelAssignments : [];
+  const compactGradesLabel = formatCompactGradeRange(rawGrades);
 
   return (
     <div
@@ -2828,18 +3005,41 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
                 lineHeight: 1.25,
                 wordBreak: "break-word",
               }}
+              title={`${member.name} (${employeeId})`}
             >
               {member.name}
             </h3>
 
-            {/* Position: Directly below the name, smaller, medium-weight */}
-            <div style={{ marginTop: 2, fontSize: 12.5, fontWeight: 500, color: "#475569" }}>
-              {position}
+            {/* Position & Appointment: Clean single metadata line */}
+            <div
+              style={{
+                marginTop: 2,
+                fontSize: 12,
+                fontWeight: 500,
+                color: "#475569",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={`Employee ID: ${employeeId} · ${position} · ${appointmentStatus} · ${workingArrangement}`}
+            >
+              {position} · {appointmentStatus}
+              {isPartTimeArrangement ? " · Part-Time" : ""}
             </div>
 
-            {/* Employee ID and employment: One muted metadata line */}
-            <div style={{ marginTop: 2, fontSize: 11.5, color: "#64748b" }}>
-              {employeeId} · {appointmentStatus} · {workingArrangement}
+            {/* Italicized Ancillary directly under Position · Permanent (never truncated) */}
+            <div
+              style={{
+                marginTop: 2,
+                fontSize: 11.5,
+                fontStyle: "italic",
+                color: ancillaries.length > 0 ? "#64748b" : "#94a3b8",
+                lineHeight: 1.35,
+                wordBreak: "break-word",
+              }}
+              title={ancillaries.length > 0 ? `Ancillary: ${ancillaries.join(", ")}` : "No ancillary assignment"}
+            >
+              {ancillaries.length > 0 ? ancillaries.join(", ") : "No ancillary role"}
             </div>
           </div>
         </div>
@@ -2988,36 +3188,48 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
       </div>
 
       {/* Divider */}
-      <div style={{ height: 1, background: "#f1f5f9", margin: "12px 0 10px" }} />
+      <div style={{ height: 1, background: "#f1f5f9", margin: "10px 0" }} />
 
-      {/* 2. Workload Second: Weekly teaching load | [2 Preps] 25 hrs/wk [Balanced] */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span style={{ color: "#334155", fontSize: 12, fontWeight: 600 }}>Weekly teaching load</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {prepsCount > 0 && (
-            <span
-              style={{
-                fontSize: 10.5,
-                fontWeight: 600,
-                color: "#3B4197",
-                background: "#eef2ff",
-                border: "1px solid #c7d2fe",
-                borderRadius: 4,
-                padding: "1px 6px",
-              }}
-              title={prepsList.length ? `Preparations: ${prepsList.join(", ")}` : ""}
-            >
-              {prepsCount} {prepsCount === 1 ? "Prep" : "Preps"}
-            </span>
-          )}
-          <span style={{ fontSize: 12, color: "#1e293b", fontWeight: 600 }}>
-            {formattedHours} hrs/wk{" "}
-            <span style={{ color: statusColor, fontWeight: 700 }}>[{loadStatus}]</span>
+      {/* 2. Dominant Capacity & Status Row: 17 / 30 hrs (57%) | 13 hrs left · [Balanced] */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <div
+          style={{ display: "flex", alignItems: "baseline", gap: 5 }}
+          title={
+            member.advisoryCreditAdded > 0
+              ? `${member.classroomContactHours || 0}h academic contact + ${member.advisoryCreditAdded}h Class Adviser credit (includes 1h HGP) = ${formattedHours} / ${formattedMaxHours} hrs/wk`
+              : `${formattedHours} / ${formattedMaxHours} contact hrs/wk`
+          }
+        >
+          <span style={{ color: "#0f172a", fontSize: 13.5, fontWeight: 700 }}>
+            {formattedHours} / {formattedMaxHours} hrs
           </span>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: loadStatus === "Overload" ? "#dc2626" : "#3B4197",
+              background: loadStatus === "Overload" ? "#fef2f2" : "#eef2ff",
+              border: loadStatus === "Overload" ? "1px solid #fecaca" : "1px solid #c7d2fe",
+              borderRadius: 5,
+              padding: "0px 5px",
+            }}
+          >
+            {utilizationPct}%
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "baseline", gap: 5, fontSize: 11.5 }}>
+          {overLimitSubtext && (
+            <>
+              <span style={{ color: "#dc2626", fontWeight: 600 }}>{overLimitSubtext}</span>
+              <span style={{ color: "#cbd5e1" }}>·</span>
+            </>
+          )}
+          <span style={{ color: statusColor, fontWeight: 700 }}>[{loadStatus}]</span>
         </div>
       </div>
 
-      {/* Progress bar: Thin ~6px, quiet background track, no /30 or percentage */}
+      {/* Progress bar: Thin ~6px, calibrated to highest directory load */}
       <div
         style={{
           height: 6,
@@ -3025,7 +3237,7 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
           background: "#f1f5f9",
           overflow: "hidden",
           marginTop: 6,
-          marginBottom: 12,
+          marginBottom: 10,
         }}
       >
         <div
@@ -3039,46 +3251,199 @@ function FacultyListRow({ member, isEditing, onEdit, onDelete, onToggleActive })
         />
       </div>
 
-      {/* 3. Assignments Last: Sections & Ancillaries */}
-      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, alignItems: "start", marginBottom: 8 }}>
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: "#64748b", paddingTop: 2 }}>Sections</span>
+      {/* 3. Interactive Dropdown Strip: [ N Sections ▾ ]   [ N Preps ▾ ] */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexWrap: "wrap",
+          marginBottom: showAllSections || showAllPreps ? 6 : 0,
+        }}
+      >
         {sections.length > 0 ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            {sections.map((sec) => (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAllSections((prev) => !prev);
+            }}
+            title={sections.map((s) => formatSectionChip(s)).join(", ")}
+            style={{
+              fontSize: 11,
+              background: showAllSections ? "#eef2ff" : "#f8fafc",
+              color: showAllSections ? "#3B4197" : "#1e293b",
+              padding: "3px 10px",
+              borderRadius: 6,
+              border: showAllSections ? "1px solid #c7d2fe" : "1px solid #e2e8f0",
+              fontWeight: 600,
+              cursor: "pointer",
+              lineHeight: 1.4,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              transition: "all 0.15s ease",
+            }}
+          >
+            <span>
+              {sections.length} {sections.length === 1 ? "Section" : "Sections"}
+            </span>
+            <span style={{ fontSize: 10, color: showAllSections ? "#3B4197" : "#64748b" }}>
+              {showAllSections ? "▴" : "▾"}
+            </span>
+          </button>
+        ) : (
+          <span
+            style={{
+              fontSize: 11,
+              background: "#f8fafc",
+              color: "#94a3b8",
+              padding: "3px 10px",
+              borderRadius: 6,
+              border: "1px solid #e2e8f0",
+              fontWeight: 500,
+              lineHeight: 1.4,
+            }}
+          >
+            0 Sections
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowAllPreps((prev) => !prev);
+          }}
+          title={
+            prepsList.length > 0
+              ? `Preparations: ${prepsList.join(", ")}`
+              : formattedSubjects.length > 0
+              ? `Expertise: ${formattedSubjects.join(", ")}${compactGradesLabel ? ` (${compactGradesLabel})` : ""}`
+              : "No preparations assigned"
+          }
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: showAllPreps || prepsCount > 0 ? "#3B4197" : "#64748b",
+            background: showAllPreps || prepsCount > 0 ? "#eef2ff" : "#f8fafc",
+            border: showAllPreps || prepsCount > 0 ? "1px solid #c7d2fe" : "1px solid #e2e8f0",
+            borderRadius: 6,
+            padding: "3px 10px",
+            lineHeight: 1.4,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            transition: "all 0.15s ease",
+          }}
+        >
+          <span>
+            {prepsCount} {prepsCount === 1 ? "Prep" : "Preps"}
+          </span>
+          <span style={{ fontSize: 10, color: showAllPreps || prepsCount > 0 ? "#3B4197" : "#64748b" }}>
+            {showAllPreps ? "▴" : "▾"}
+          </span>
+        </button>
+      </div>
+
+      {/* Inline Dropdown 1: Assigned Sections */}
+      {showAllSections && sections.length > 0 && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            flexWrap: "wrap",
+            padding: "7px 8px",
+            marginTop: 6,
+            background: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+          }}
+        >
+          {sections.map((sec) => (
+            <span
+              key={sec.id}
+              style={{
+                fontSize: 10.5,
+                background: "#ffffff",
+                color: "#1e293b",
+                padding: "2px 7px",
+                borderRadius: 5,
+                border: "1px solid #e2e8f0",
+                fontWeight: 500,
+                lineHeight: 1.35,
+                display: "inline-flex",
+                alignItems: "center",
+              }}
+            >
+              {formatSectionChip(sec)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Inline Dropdown 2: Subject & Grade Preparations */}
+      {showAllPreps && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            flexWrap: "wrap",
+            padding: "7px 8px",
+            marginTop: 6,
+            background: "#f8faff",
+            border: "1px solid #c7d2fe",
+            borderRadius: 8,
+          }}
+        >
+          {prepsList.length > 0 ? (
+            prepsList.map((prep, idx) => (
               <span
-                key={sec.id}
+                key={`${prep}-${idx}`}
                 style={{
-                  fontSize: 11,
-                  background: "#f8fafc",
-                  color: "#1e293b",
+                  fontSize: 10.5,
+                  background: "#ffffff",
+                  color: "#3B4197",
                   padding: "2px 8px",
-                  borderRadius: 6,
-                  border: "1px solid #e2e8f0",
-                  fontWeight: 500,
-                  lineHeight: 1.4,
+                  borderRadius: 5,
+                  border: "1px solid #c7d2fe",
+                  fontWeight: 600,
+                  lineHeight: 1.35,
                   display: "inline-flex",
                   alignItems: "center",
                 }}
               >
-                {formatSectionChip(sec)}
+                {prep}
               </span>
-            ))}
-          </div>
-        ) : (
-          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic", paddingTop: 2 }}>None assigned</span>
-        )}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, alignItems: "baseline" }}>
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: "#64748b" }}>Ancillary</span>
-        {ancillaries.length > 0 ? (
-          <span style={{ fontSize: 12, color: "#334155", lineHeight: 1.4, fontWeight: 400 }}>
-            {ancillaries.join(", ")}
-          </span>
-        ) : (
-          <span style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>None</span>
-        )}
-      </div>
+            ))
+          ) : formattedSubjects.length > 0 ? (
+            <span
+              style={{
+                fontSize: 10.5,
+                background: "#ffffff",
+                color: "#475569",
+                padding: "2px 8px",
+                borderRadius: 5,
+                border: "1px solid #e2e8f0",
+                fontWeight: 600,
+                lineHeight: 1.35,
+              }}
+            >
+              Profiled Expertise: {formattedSubjects.join(", ")}
+              {compactGradesLabel ? ` · ${compactGradesLabel}` : ""}
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+              No subject preparations assigned
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3100,8 +3465,9 @@ function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }
 
   const loadStatus = member.assignedLoadStatus || "Unassigned";
   const memberHours = Number.isFinite(member.assignedLoadHours) ? member.assignedLoadHours : 0;
-  const maxHours = member.maxTeachingContactHours || 30;
-  const barPercent = Math.max(0, Math.min(100, (memberHours / maxHours) * 100));
+  const barPercent = Number.isFinite(member.progressBarPercent)
+    ? member.progressBarPercent
+    : Math.max(0, Math.min(100, (memberHours / (member.progressBarCeilingHours || 30)) * 100));
 
   const fillColor = {
     Unassigned: "#cbd5e1",
@@ -3133,10 +3499,12 @@ function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }
   const ancillaries = [];
   if (
     member.isClassAdviser ||
+    member.hasAdvisoryHGP ||
     (Array.isArray(member.ancillaryAssignments) &&
       member.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
   ) {
-    ancillaries.push("Class Adviser");
+    const advSecChip = member.autoAdvisorySection ? formatSectionChip({ name: member.autoAdvisorySection }) : "";
+    ancillaries.push(advSecChip ? `Class Adviser (${advSecChip})` : "Class Adviser");
   }
   if (Array.isArray(member.ancillaryAssignments)) {
     member.ancillaryAssignments.forEach((anc) => {
@@ -3148,6 +3516,20 @@ function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }
   }
 
   const sections = Array.isArray(member.assignedSections) ? member.assignedSections : [];
+  const rawSubjects = Array.isArray(member.subjectExpertise) && member.subjectExpertise.length > 0
+    ? member.subjectExpertise
+    : Array.isArray(member.primaryExpertise)
+    ? member.primaryExpertise
+    : [];
+  const formattedSubjects = rawSubjects
+    .map((s) => {
+      const str = String(s || "").trim();
+      const parts = str.split("—");
+      return parts.length > 1 ? parts.slice(1).join("—").trim() : str;
+    })
+    .filter(Boolean);
+  const rawGrades = Array.isArray(member.gradeLevelAssignments) ? member.gradeLevelAssignments : [];
+  const compactGradesLabel = formatCompactGradeRange(rawGrades);
 
   return (
     <tr
@@ -3196,7 +3578,7 @@ function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }
       {/* Position & Status */}
       <td style={{ padding: "12px 16px", verticalAlign: "middle" }}>
         <div style={{ fontWeight: 600, color: "#334155", fontSize: 12.5 }}>{position}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11.5, color: "#64748b" }}>{appointmentStatus} · {workingArrangement}</span>
           <span style={{ color: "#cbd5e1" }}>•</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: isActive ? "#047857" : "#64748b", fontWeight: 500 }}>
@@ -3204,6 +3586,23 @@ function FacultyTableRow({ member, isEditing, onEdit, onDelete, onToggleActive }
             {isActive ? "Active" : "Inactive"}
           </span>
         </div>
+        {Array.isArray(member.subjectExpertise) && member.subjectExpertise.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10.5, fontWeight: 600, color: "#3B4197", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 4, padding: "1px 6px" }}>
+              {member.subjectExpertise
+                .map((s) => {
+                  const parts = String(s || "").split("—");
+                  return parts.length > 1 ? parts.slice(1).join("—").trim() : String(s || "").trim();
+                })
+                .join(", ")}
+            </span>
+            {Array.isArray(member.gradeLevelAssignments) && member.gradeLevelAssignments.length > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 600, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 5px" }}>
+                {formatCompactGradeRange(member.gradeLevelAssignments)}
+              </span>
+            )}
+          </div>
+        )}
       </td>
 
       {/* Weekly Load */}
@@ -3839,8 +4238,8 @@ function validateFacultyForm(formState, facultyMembers, editingId) {
   const cleanedContact = rawContact.replace(/[\s\-()]/g, "");
   if (!rawContact) {
     errors.contact = "Contact is required.";
-  } else if (!/^(\+639\d{9}|09\d{9})$/u.test(cleanedContact)) {
-    errors.contact = "Use +639XXXXXXXXX or 09XXXXXXXXX format.";
+  } else if (!/^(\+639\d{9}|09\d{9}|9\d{9}|639\d{9})$/u.test(cleanedContact)) {
+    errors.contact = "Contact must use 09XXXXXXXXX or +639XXXXXXXXX format.";
   }
 
   const primaryOrExpertise = (Array.isArray(formState.primaryExpertise) && formState.primaryExpertise.length)
@@ -3947,6 +4346,16 @@ function stripAuditFields(member) {
   return rest;
 }
 
+const SPA_SPECIALIZATION_STREAMS = [
+  "SPA Specialization (Media Arts)",
+  "SPA Specialization (Dance Arts)",
+  "SPA Specialization (Instrumental Music)",
+  "SPA Specialization (Visual Arts)",
+  "SPA Specialization (Vocal Music)",
+  "SPA Specialization (Theater Arts)",
+  "SPA Specialization (Creative Writing)",
+];
+
 function getSubjectOptions() {
   if (typeof window === "undefined") {
     return [];
@@ -3964,6 +4373,8 @@ function getSubjectOptions() {
     }
 
     const optionMap = new Map();
+    let hasSpaSpec = false;
+
     parsed.forEach((subject) => {
       const code = sanitizeText(subject.subjectCode);
       const name = sanitizeText(subject.subjectName);
@@ -3973,7 +4384,29 @@ function getSubjectOptions() {
 
       const value = code ? `${code} — ${name}` : name;
       optionMap.set(value.toLowerCase(), value);
+
+      if (code.toUpperCase() === "SPASPEC" || name.toLowerCase().includes("spa specialization")) {
+        hasSpaSpec = true;
+      }
+
+      // Also include any configured breakout streams as selectable specializations
+      if (Array.isArray(subject.breakoutStreams)) {
+        subject.breakoutStreams.forEach((stream) => {
+          const streamName = sanitizeText(typeof stream === "string" ? stream : stream?.name);
+          if (streamName) {
+            const label = code ? `${code} — ${name} (${streamName})` : `${name} (${streamName})`;
+            optionMap.set(label.toLowerCase(), label);
+          }
+        });
+      }
     });
+
+    if (hasSpaSpec || parsed.some((s) => s && s.schoolLevel === "jhs")) {
+      SPA_SPECIALIZATION_STREAMS.forEach((spaTitle) => {
+        const label = `SPASPEC — ${spaTitle}`;
+        optionMap.set(label.toLowerCase(), label);
+      });
+    }
 
     return Array.from(optionMap.values()).sort((left, right) => left.localeCompare(right));
   } catch {
@@ -4084,31 +4517,39 @@ function mapImportedFacultyRow(row, subjectOptions, unavailablePeriodOptions) {
     return accumulator;
   }, {});
 
-  const name = pickRowValue(normalizedRow, ["name", "teachername"]);
+  const name = pickRowValue(normalizedRow, ["name", "teachername", "fullname", "facultyname"]);
   const sex = normalizeSexValue(pickRowValue(normalizedRow, ["sex", "gender"]));
-  const employeeId = pickRowValue(normalizedRow, ["employeeid", "id", "teacherid"]);
-  const position = normalizeDesignation(pickRowValue(normalizedRow, ["position", "designation"]));
+  const employeeId = pickRowValue(normalizedRow, ["employeeid", "id", "teacherid", "empid", "depedid"]);
+  const position = normalizeDesignation(pickRowValue(normalizedRow, ["position", "designation", "rank", "plantilla"]));
   const appointmentStatus = normalizeEmploymentStatus(pickRowValue(normalizedRow, ["appointmentcategory", "appointmentstatus", "employmentstatus", "status"]));
   const workingArrangement = normalizeWorkingArrangement(pickRowValue(normalizedRow, ["workingarrangement", "arrangement", "schedule"]));
   const employmentStatus = appointmentStatus;
-  const email = pickRowValue(normalizedRow, ["email", "emailaddress"]);
-  const contact = pickRowValue(normalizedRow, ["contact", "contactnumber", "phone"]);
-  const degree = pickRowValue(normalizedRow, ["degree"]);
-  const major = pickRowValue(normalizedRow, ["major"]);
+  const email = pickRowValue(normalizedRow, ["email", "emailaddress", "depedemail"]);
+  const rawContactVal = pickRowValue(normalizedRow, ["contact", "contactnumber", "phone", "mobile", "mobilenumber", "cellphone", "cpnumber", "contactno"]);
+  const cleanedPhone = rawContactVal.replace(/[\s\-()]/g, "");
+  const contact = /^9\d{9}$/.test(cleanedPhone)
+    ? `0${cleanedPhone}`
+    : /^639\d{9}$/.test(cleanedPhone)
+    ? `+${cleanedPhone}`
+    : rawContactVal;
+  const degree = pickRowValue(normalizedRow, ["degree", "highestdegree", "education"]);
+  const major = pickRowValue(normalizedRow, ["major", "specialization"]);
   const minor = pickRowValue(normalizedRow, ["minor"]);
 
-  const ancillaryAssignments = splitListInput(pickRowValue(normalizedRow, ["ancillaryassignments", "ancillary"]));
+  const ancillaryAssignments = splitListInput(pickRowValue(normalizedRow, ["ancillaryassignments", "ancillary", "ancillaryroles", "coordinatorships"]));
   const unavailablePeriods = resolveListToOptions(
     splitListInput(pickRowValue(normalizedRow, ["unavailableperiods", "unavailable"])),
     unavailablePeriodOptions,
     true
   );
-  const rawExpertise = splitListInput(pickRowValue(normalizedRow, ["subjectexpertise", "expertise"]));
+  const rawExpertise = splitListInput(
+    pickRowValue(normalizedRow, ["subjectexpertise", "expertise", "primaryexpertise", "subjects", "subject"]) || major
+  );
   const subjectExpertise = (subjectOptions && subjectOptions.length > 0)
     ? resolveListToOptions(rawExpertise, subjectOptions, true)
     : rawExpertise;
   const gradeLevelAssignments = resolveListToGradeLevels(
-    splitListInput(pickRowValue(normalizedRow, ["gradelevelassignments", "gradeassignments", "gradelevels"]))
+    splitListInput(pickRowValue(normalizedRow, ["gradelevelassignments", "gradeassignments", "gradelevels", "gradelevel", "grades", "grade"]))
   );
 
   const isEmptyRow = [name, sex, employeeId, position, email, contact, degree, major].every((value) => !value);
@@ -4211,12 +4652,22 @@ function resolveListToOptions(values, options, allowUnknown) {
   return normalizeArray(
     values
       .map((value) => {
-        const direct = optionMap.get(value.toLowerCase());
+        const cleanVal = value.toLowerCase().trim();
+        const direct = optionMap.get(cleanVal);
         if (direct) {
           return direct;
         }
 
-        const fuzzy = options.find((option) => option.toLowerCase().includes(value.toLowerCase()));
+        // Exact match against either the Subject Name (after "—") or Subject Code (before "—")
+        const exactNameOrCode = options.find((option) => {
+          const parts = option.split("—").map((p) => p.trim().toLowerCase());
+          return parts.some((p) => p === cleanVal);
+        });
+        if (exactNameOrCode) {
+          return exactNameOrCode;
+        }
+
+        const fuzzy = options.find((option) => option.toLowerCase().includes(cleanVal));
         if (fuzzy) {
           return fuzzy;
         }
@@ -4268,6 +4719,9 @@ function resolveListToGradeLevels(values) {
 
 function normalizeSexValue(value) {
   const normalized = sanitizeText(value).toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "m" || normalized === "male") return "Male";
+  if (normalized === "f" || normalized === "female") return "Female";
   const match = SEX_OPTIONS.find((option) => option.toLowerCase() === normalized);
   return match || "";
 }

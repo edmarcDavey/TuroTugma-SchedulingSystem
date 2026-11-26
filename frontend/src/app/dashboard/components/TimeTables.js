@@ -727,6 +727,7 @@ export default function TimeTables({
     };
     const handleProfileSync = () => {
       setSchoolProfile(getEffectiveSchoolProfile());
+      if (!initialData) loadAllSchedules(null, true);
     };
 
     window.addEventListener("storage", handleSync);
@@ -755,16 +756,27 @@ export default function TimeTables({
       sources.push(forcedActive);
     }
 
+    const currentProfile = getEffectiveSchoolProfile();
+    const offeredLevels = currentProfile?.offeredLevels || "both";
+    const isLevelAllowed = (sType) => {
+      const normalized = String(sType || "jhs").toLowerCase();
+      if (offeredLevels === "jhs_only") return normalized === "jhs";
+      if (offeredLevels === "shs_only") return normalized.startsWith("shs");
+      return true;
+    };
+
     if (publishedRaw && typeof publishedRaw === "object") {
       Object.keys(publishedRaw).forEach((type) => {
         const item = publishedRaw[type];
+        const sType = item?.scheduleType || type;
+        if (!isLevelAllowed(sType)) return;
         if (item && item.assignments && Object.keys(item.assignments).length > 0) {
           if (!forcedActive || `published-${type}` !== forcedActive.id) {
             sources.push({
               id: `published-${type}`,
               type: "published",
-              scheduleType: item.scheduleType || type,
-              name: `Published Schedule — ${(item.scheduleType || type).toUpperCase()}`,
+              scheduleType: sType,
+              name: `Published Schedule — ${String(sType).toUpperCase()}`,
               updatedAt: item.publishedAt || item.updatedAt || new Date(0).toISOString(),
               schedule: item,
               config: item.config || item.scheduleConfig,
@@ -776,12 +788,14 @@ export default function TimeTables({
 
     if (Array.isArray(draftsRaw)) {
       draftsRaw.forEach((draft) => {
+        const sType = draft?.scheduleType || draft?.schedule?.scheduleType || "jhs";
+        if (!isLevelAllowed(sType)) return;
         if (draft && draft.schedule && draft.schedule.assignments && Object.keys(draft.schedule.assignments).length > 0) {
           if (!forcedActive || draft.id !== forcedActive.id) {
             sources.push({
               id: draft.id || `draft-${Date.now()}`,
               type: "draft",
-              scheduleType: draft.scheduleType || draft.schedule?.scheduleType || "jhs",
+              scheduleType: sType,
               name: draft.name || "Saved Draft",
               updatedAt: draft.updatedAt || draft.schedule?.updatedAt || new Date(0).toISOString(),
               schedule: draft.schedule,
@@ -1253,6 +1267,41 @@ export default function TimeTables({
     if (secObj?.adviserName) return secObj.adviserName;
     if (secObj?.adviserId) return getTeacherName(secObj.adviserId);
 
+    // 1. Check if any teacher in the faculty roster is explicitly designated as Class Adviser for this section
+    const secNameClean = String(secObj?.name || getSectionName(sectionId) || "").toLowerCase();
+    const explicitAdviser = (Array.isArray(teachers) ? teachers : []).find((t) => {
+      if (!t?.advisorySection) return false;
+      const advSec = String(t.advisorySection).toLowerCase();
+      return advSec === String(sectionId).toLowerCase() || (secNameClean && (advSec.includes(secNameClean) || secNameClean.includes(advSec)));
+    });
+    if (explicitAdviser) {
+      return explicitAdviser.teacherName || explicitAdviser.name || explicitAdviser.id;
+    }
+
+    // 2. Look for the teacher assigned to HGP / Homeroom Guidance Program anywhere in the week (Monday-Friday, Periods 1-maxPeriods)
+    for (const day of days) {
+      for (const p of periods) {
+        const assign = getCellAssignment(sectionId, day, p);
+        if (assign?.teacherId && assign?.subjectId) {
+          const subj = subjectsById.get(assign.subjectId);
+          const sCode = String(subj?.subjectCode || assign.subjectId || "").toUpperCase();
+          const sName = String(subj?.subjectName || getSubjectName(assign.subjectId) || "").toLowerCase();
+          if (
+            sCode === "HGP" ||
+            sCode === "HRG" ||
+            sCode.includes("HGP") ||
+            sName === "hgp" ||
+            sName.includes("homeroom") ||
+            sName.includes("guidance program") ||
+            sName.includes("advisory")
+          ) {
+            return getTeacherName(assign.teacherId);
+          }
+        }
+      }
+    }
+
+    // 3. Fallback: Period 1 teacher if HGP is not present in the curriculum
     for (const day of days) {
       const assign = getCellAssignment(sectionId, day, 1);
       if (assign?.teacherId) {
@@ -1980,7 +2029,7 @@ export default function TimeTables({
       <div className="turotugma-no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
         <div>
           <h1 style={{ margin: 0, color: "#1f2c6f", fontSize: 30, fontWeight: 800 }}>
-            {viewMode === "substitute" ? "Pinch-Hit & Substitute Finder" : "Time Tables"}
+            {viewMode === "substitute" ? "Pinch-Hit Finder" : "Time Tables"}
           </h1>
           <div style={{ margin: "8px 0 0", color: "#5b6787", fontSize: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{ fontWeight: 700, color: "#1e293b" }}>Schedule Source:</span>
@@ -2632,7 +2681,7 @@ export default function TimeTables({
                       cursor: "pointer",
                     }}
                   >
-                    Find Pinch-Hit / Substitute for {teacherName} →
+                    Find Pinch-Hit for {teacherName} →
                   </button>
                 </div>
 
@@ -2716,47 +2765,187 @@ export default function TimeTables({
                       </tr>
                     </thead>
                     <tbody>
-                      {periods.map((periodNum, idx) => (
-                        <tr key={periodNum}>
-                          <td className="time-cell" style={{ border: "1px solid #000", padding: "10px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc", whiteSpace: "nowrap" }}>
-                            {regularTimes[idx]}
+                      {/* Flag Raising Row on Monday */}
+                      <tr style={{ background: "#fff" }}>
+                        <td className="time-cell" style={{ border: "1px solid #000", padding: "6px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                          7:00 – 7:30
+                        </td>
+                        {shortenedSessionDays.length > 0 && (
+                          <td className="time-cell" style={{ border: "1px solid #000", padding: "6px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                            7:00 – 7:30
                           </td>
-                          {shortenedSessionDays.length > 0 && (
-                            <td className="time-cell" style={{ border: "1px solid #000", padding: "10px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc", whiteSpace: "nowrap" }}>
-                              {shortenedTimes[idx]}
-                            </td>
-                          )}
-                          {days.map((day) => {
-                            const found = getTeacherCellAssignment(teacherId, day, periodNum);
-                            return (
-                              <td
-                                key={day}
-                                className="schedule-cell"
-                                style={{
-                                  border: "1px solid #000",
-                                  padding: "8px 6px",
-                                  background: "#fff",
-                                  textAlign: "center",
-                                  verticalAlign: "middle",
-                                  minHeight: 52,
-                                }}
-                              >
-                                {found ? (
-                                  <div className="schedule-cell-content" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
-                                    <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: "#000", textTransform: "uppercase", lineHeight: 1.2 }}>
-                                      {getSubjectName(found.assignment.subjectId)}
-                                      {found.streamName ? ` (${found.streamName})` : ""}
-                                    </div>
-                                    <div className="schedule-cell-subtext" style={{ color: "#222", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.2 }}>
-                                      {getSectionName(found.sectionId)}
-                                    </div>
-                                  </div>
-                                ) : null}
+                        )}
+                        <td
+                          colSpan={days.length}
+                          className="break-banner"
+                          style={{
+                            border: "1px solid #000",
+                            padding: "8px",
+                            background: "#f5b301",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            textAlign: "center",
+                            letterSpacing: 1,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          FLAG RAISING CEREMONY (MONDAY)
+                        </td>
+                      </tr>
+
+                      {periods.map((periodNum, idx) => {
+                        const morningAfter = levelConfig?.breaks?.morning?.enabled !== false ? (levelConfig?.breaks?.morning?.afterPeriod || 2) : -1;
+                        const lunchAfter = levelConfig?.breaks?.lunch?.enabled !== false ? (levelConfig?.breaks?.lunch?.afterPeriod || 4) : -1;
+                        const isMorningBreak = idx === morningAfter;
+                        const isLunchBreak = idx === lunchAfter;
+
+                        const getBreakRange = (timesArr, fallback) => {
+                          if (idx > 0 && timesArr[idx - 1] && timesArr[idx]) {
+                            const prevParts = String(timesArr[idx - 1]).split(/[–-]/);
+                            const currParts = String(timesArr[idx]).split(/[–-]/);
+                            const prevEnd = prevParts[1]?.trim();
+                            const currStart = currParts[0]?.trim();
+                            if (prevEnd && currStart && prevEnd !== currStart) {
+                              return `${prevEnd} – ${currStart}`;
+                            }
+                          }
+                          return fallback;
+                        };
+
+                        return (
+                          <React.Fragment key={periodNum}>
+                            {isMorningBreak && (
+                              <tr>
+                                <td className="time-cell" style={{ border: "1px solid #000", padding: "4px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                                  {getBreakRange(regularTimes, "9:30 – 9:50")}
+                                </td>
+                                {shortenedSessionDays.length > 0 && (
+                                  <td className="time-cell" style={{ border: "1px solid #000", padding: "4px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                                    {getBreakRange(shortenedTimes, "9:15 – 9:35")}
+                                  </td>
+                                )}
+                                <td
+                                  colSpan={days.length}
+                                  className="break-banner"
+                                  style={{
+                                    border: "1px solid #000",
+                                    padding: "6px",
+                                    background: "#f5b301",
+                                    color: "#000",
+                                    fontWeight: 800,
+                                    fontSize: 12,
+                                    textAlign: "center",
+                                    letterSpacing: 1.5,
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  RECESS / MORNING BREAK
+                                </td>
+                              </tr>
+                            )}
+
+                            {isLunchBreak && (
+                              <tr>
+                                <td className="time-cell" style={{ border: "1px solid #000", padding: "4px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                                  {getBreakRange(regularTimes, "11:50 – 1:00")}
+                                </td>
+                                {shortenedSessionDays.length > 0 && (
+                                  <td className="time-cell" style={{ border: "1px solid #000", padding: "4px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                                    {getBreakRange(shortenedTimes, "11:30 – 12:30")}
+                                  </td>
+                                )}
+                                <td
+                                  colSpan={days.length}
+                                  className="break-banner"
+                                  style={{
+                                    border: "1px solid #000",
+                                    padding: "6px",
+                                    background: "#f5b301",
+                                    color: "#000",
+                                    fontWeight: 800,
+                                    fontSize: 12,
+                                    textAlign: "center",
+                                    letterSpacing: 1.5,
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  LUNCH BREAK
+                                </td>
+                              </tr>
+                            )}
+
+                            <tr>
+                              <td className="time-cell" style={{ border: "1px solid #000", padding: "10px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc", whiteSpace: "nowrap" }}>
+                                {regularTimes[idx]}
                               </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
+                              {shortenedSessionDays.length > 0 && (
+                                <td className="time-cell" style={{ border: "1px solid #000", padding: "10px 8px", fontWeight: 700, fontSize: 12, color: "#000", textAlign: "center", background: "#f8fafc", whiteSpace: "nowrap" }}>
+                                  {shortenedTimes[idx]}
+                                </td>
+                              )}
+                              {days.map((day) => {
+                                const found = getTeacherCellAssignment(teacherId, day, periodNum);
+                                return (
+                                  <td
+                                    key={day}
+                                    className="schedule-cell"
+                                    style={{
+                                      border: "1px solid #000",
+                                      padding: "8px 6px",
+                                      background: "#fff",
+                                      textAlign: "center",
+                                      verticalAlign: "middle",
+                                      minHeight: 52,
+                                    }}
+                                  >
+                                    {found ? (
+                                      <div className="schedule-cell-content" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                                        <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: "#000", textTransform: "uppercase", lineHeight: 1.2 }}>
+                                          {getSubjectName(found.assignment.subjectId)}
+                                          {found.streamName ? ` (${found.streamName})` : ""}
+                                        </div>
+                                        <div className="schedule-cell-subtext" style={{ color: "#222", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.2 }}>
+                                          {getSectionName(found.sectionId)}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+
+                      {/* Footer Maintenance Banner */}
+                      <tr>
+                        <td className="time-cell" style={{ border: "1px solid #000", padding: "6px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                          END
+                        </td>
+                        {shortenedSessionDays.length > 0 && (
+                          <td className="time-cell" style={{ border: "1px solid #000", padding: "6px 8px", fontWeight: 700, fontSize: 11, color: "#000", textAlign: "center", background: "#f8fafc" }}>
+                            END
+                          </td>
+                        )}
+                        <td
+                          colSpan={days.length}
+                          className="break-banner"
+                          style={{
+                            border: "1px solid #000",
+                            padding: "8px",
+                            background: "#f5b301",
+                            color: "#000",
+                            fontWeight: 800,
+                            fontSize: 13,
+                            textAlign: "center",
+                            letterSpacing: 1.5,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          ROOM MAINTENANCE & ZONE IMPROVEMENT
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>

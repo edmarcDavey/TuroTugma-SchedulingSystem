@@ -7,6 +7,7 @@ import SubjectsManagement from "./components/SubjectsManagement";
 import FacultyManagement from "./components/FacultyManagement";
 import ScheduleGenerator from "./components/ScheduleGenerator";
 import TimeTables from "./components/TimeTables";
+import { isAdminAuthenticated } from "../../auth";
 
 const VALID_TABS = new Set([
   "dashboard",
@@ -29,14 +30,25 @@ function getTabFromUrl() {
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState(getTabFromUrl);
+  const [authorized, setAuthorized] = useState(() => isAdminAuthenticated());
 
   useEffect(() => {
+    if (!isAdminAuthenticated()) {
+      setAuthorized(false);
+      window.location.replace("/login");
+      return;
+    }
+    setAuthorized(true);
     const syncTabFromUrl = () => {
       setActiveTab(getTabFromUrl());
     };
     window.addEventListener("popstate", syncTabFromUrl);
     return () => window.removeEventListener("popstate", syncTabFromUrl);
   }, []);
+
+  if (!authorized) {
+    return null;
+  }
 
   const handleTabChange = useCallback((nextTab, href) => {
     const normalized = nextTab === "schedule-maker" ? "schedule-generator" : nextTab;

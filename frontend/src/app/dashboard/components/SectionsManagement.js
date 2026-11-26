@@ -61,10 +61,22 @@ function getStoredNamingSchemes() {
 }
 
 export default function SectionsManagement() {
-  const offeredLevels = getOfferedLevels();
+  const [offeredLevels, setOfferedLevels] = useState(() => getOfferedLevels());
   const initialCreatedSections = getInitialCreatedSections();
   const [namingSchemes, setNamingSchemes] = useState(() => getStoredNamingSchemes());
   const [schemeModalOpen, setSchemeModalOpen] = useState(false);
+
+  useEffect(() => {
+    const syncOfferedLevels = () => {
+      setOfferedLevels(getOfferedLevels());
+    };
+    window.addEventListener("storage", syncOfferedLevels);
+    window.addEventListener("turotugma:profile-updated", syncOfferedLevels);
+    return () => {
+      window.removeEventListener("storage", syncOfferedLevels);
+      window.removeEventListener("turotugma:profile-updated", syncOfferedLevels);
+    };
+  }, []);
 
   const [jhsConfig, setJhsConfig] = useState(() =>
     initialCreatedSections?.jhs || createInitialLevelConfig(JUNIOR_HIGH_GRADES, "jhs", namingSchemes)

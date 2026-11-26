@@ -539,25 +539,293 @@ export const DEFAULT_HISTORICAL_YEARS = [
   },
 ];
 
+const DEFAULT_ARCHIVE_SUBJECTS_JHS = [
+  { id: "jhs-eng", subjectCode: "ENG", subjectName: "English", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-math", subjectCode: "MATH", subjectName: "Mathematics", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-sci", subjectCode: "SCI", subjectName: "Science", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-fil", subjectCode: "FIL", subjectName: "Filipino", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-ap", subjectCode: "AP", subjectName: "Araling Panlipunan", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-ve", subjectCode: "VE", subjectName: "Values Education (EsP)", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-mapeh", subjectCode: "MAPEH", subjectName: "MAPEH", schoolLevel: "jhs", subjectType: "Core", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-tle", subjectCode: "TLE", subjectName: "Technology & Livelihood Education", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "Regular, SPA" },
+  { id: "jhs-spaspec", subjectCode: "SPASPEC", subjectName: "SPA Specialization", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "SPA", teachingMode: "breakout", requiredTeachers: 3 },
+  { id: "jhs-ict-spj", subjectCode: "ICT-SPJ", subjectName: "ICT (SPJ)", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7-10", classesPerWeek: 4, dailyMinutes: 60, programScope: "SPJ" },
+  { id: "jhs-ict-stem", subjectCode: "ICT-STEM", subjectName: "ICT (SP-STEM)", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7-10", classesPerWeek: 3, dailyMinutes: 60, programScope: "SP-STEM" },
+  { id: "jhs-elemalg", subjectCode: "ELEMALG", subjectName: "Elementary Algebra", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7", classesPerWeek: 3, dailyMinutes: 60, programScope: "SP-STEM" },
+  { id: "jhs-envsci", subjectCode: "ENVSCI", subjectName: "Environmental Science", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7", classesPerWeek: 3, dailyMinutes: 60, programScope: "SP-STEM" },
+  { id: "jhs-devread", subjectCode: "DEVREAD", subjectName: "Developmental Reading", schoolLevel: "jhs", subjectType: "Specialized", gradeLevel: "7", classesPerWeek: 1, dailyMinutes: 60, programScope: "SP-STEM" },
+  { id: "jhs-hgp", subjectCode: "HGP", subjectName: "Homeroom Guidance (HGP)", schoolLevel: "jhs", subjectType: "Enrichment", gradeLevel: "7-10", classesPerWeek: 1, dailyMinutes: 60, programScope: "Universal" },
+  { id: "jhs-aral", subjectCode: "ARAL", subjectName: "Aral Program", schoolLevel: "jhs", subjectType: "Enrichment", gradeLevel: "7-10", classesPerWeek: 1, dailyMinutes: 60, programScope: "Regular" },
+];
+
+const DEFAULT_ARCHIVE_SUBJECTS_SHS = [
+  { id: "shs-oralcom", subjectCode: "ORALCOM", subjectName: "Oral Communication in Context", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-genmath", subjectCode: "GENMATH", subjectName: "General Mathematics", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-earthsci", subjectCode: "EARTHSCI", subjectName: "Earth and Life Science", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-kompan", subjectCode: "KOMPAN", subjectName: "Komunikasyon at Pananaliksik", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-perdev", subjectCode: "PERDEV", subjectName: "Personal Development", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-peh1", subjectCode: "PEH1", subjectName: "Physical Education and Health 1", schoolLevel: "shs", subjectType: "Core", gradeLevel: "11", classesPerWeek: 2, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-emptech", subjectCode: "EMPTECH", subjectName: "Empowerment Technologies", schoolLevel: "shs", subjectType: "Applied", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, semester: "First Semester" },
+  { id: "shs-precalc", subjectCode: "PRECALC", subjectName: "Pre-Calculus", schoolLevel: "shs", subjectType: "Specialized", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, strand: "STEM", semester: "First Semester" },
+  { id: "shs-genchem1", subjectCode: "GENCHEM1", subjectName: "General Chemistry 1", schoolLevel: "shs", subjectType: "Specialized", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, strand: "STEM", semester: "First Semester" },
+  { id: "shs-crewrite", subjectCode: "CREWRITE", subjectName: "Creative Writing", schoolLevel: "shs", subjectType: "Specialized", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, strand: "HUMSS", semester: "First Semester" },
+  { id: "shs-css1", subjectCode: "CSS1", subjectName: "Computer Systems Servicing 1", schoolLevel: "shs", subjectType: "Specialized", gradeLevel: "11", classesPerWeek: 4, dailyMinutes: 60, strand: "TVL", semester: "First Semester" },
+];
+
+function inferThemeFromSectionNames(sections = [], yearId = "") {
+  const joined = sections.map((s) => s?.name || "").join(" ").toLowerCase();
+  if (joined.includes("diamond") || joined.includes("ruby") || joined.includes("emerald") || joined.includes("sapphire")) return "Gems & Precious Stones";
+  if (joined.includes("narra") || joined.includes("molave") || joined.includes("mahogany") || joined.includes("acacia")) return "Philippine Native Trees";
+  if (joined.includes("integrity") || joined.includes("respect") || joined.includes("excellence") || joined.includes("discipline")) return "DepEd Core Values";
+  if (joined.includes("newton") || joined.includes("einstein") || joined.includes("curie") || joined.includes("tesla") || joined.includes("galileo")) return "World Scientists & Innovators";
+  if (joined.includes("rizal") || joined.includes("mabini") || joined.includes("bonifacio") || joined.includes("luna")) return "Philippine National Heroes";
+  if (joined.includes("orion") || joined.includes("lyra") || joined.includes("aquila")) return "Constellations";
+  if (joined.includes("mercury") || joined.includes("venus") || joined.includes("jupiter")) return "Planets";
+  if (yearId === "2025-2026") return "Gems & Scientists";
+  if (yearId === "2024-2025") return "Philippine Trees & Heroes";
+  return "Core Values & Scientists";
+}
+
+export function enrichHistoricalYearAnalytics(yearObj) {
+  if (!yearObj) return yearObj;
+
+  const enrichLevel = (lvlData, levelKey) => {
+    if (!lvlData) return lvlData;
+    const sections = Array.isArray(lvlData.sections) ? lvlData.sections : [];
+    const faculty = Array.isArray(lvlData.faculty) ? lvlData.faculty : [];
+    const subjects = Array.isArray(lvlData.subjects) && lvlData.subjects.length > 0
+      ? lvlData.subjects
+      : (levelKey === "shs" ? DEFAULT_ARCHIVE_SUBJECTS_SHS : DEFAULT_ARCHIVE_SUBJECTS_JHS);
+
+    // Compute grade-level themes
+    const grades = levelKey === "shs" ? [11, 12] : [7, 8, 9, 10];
+    const sectionThemesByGrade = lvlData.sectionThemesByGrade || {};
+    grades.forEach((g) => {
+      if (!sectionThemesByGrade[g]) {
+        const gSecs = sections.filter((s) => Number(s.grade) === g);
+        sectionThemesByGrade[g] = {
+          grade: g,
+          theme: gSecs[0]?.theme || inferThemeFromSectionNames(gSecs, yearObj.yearId),
+          count: gSecs.length,
+          sampleNames: gSecs.map((s) => String(s.name || "").replace(/^Grade\s*\d+\s*-\s*/i, "")).slice(0, 4),
+        };
+      }
+    });
+
+    // Compute Ancillary & Advisory summary
+    const advisersList = [];
+    const coordinatorsList = [];
+    faculty.forEach((f) => {
+      if (f.advisoryClass && f.advisoryClass !== "None") {
+        advisersList.push({ teacherName: f.name, sectionName: f.advisoryClass, major: f.major });
+      }
+      const anc = Array.isArray(f.ancillaries) ? f.ancillaries : (Array.isArray(f.ancillaryAssignments) ? f.ancillaryAssignments : []);
+      anc.forEach((role) => {
+        if (String(role).toLowerCase() !== "class adviser") {
+          coordinatorsList.push({ teacherName: f.name, role, designation: f.designation });
+        }
+      });
+    });
+
+    // Compute Department / Major distribution
+    const deptCounts = {};
+    faculty.forEach((f) => {
+      const m = f.major || f.department || "General";
+      deptCounts[m] = (deptCounts[m] || 0) + 1;
+    });
+
+    // Compute Program / Classification distribution
+    const programCounts = {};
+    sections.forEach((s) => {
+      const p = levelKey === "shs" ? (s.cluster ? s.cluster.split(" (")[0] : (s.track || "Academic")) : (s.classification || "Regular");
+      programCounts[p] = (programCounts[p] || 0) + 1;
+    });
+
+    // Compute Subject type distribution
+    const subjectTypeCounts = { Core: 0, Specialized: 0, Applied: 0, Enrichment: 0 };
+    let totalWeeklyPeriodsPerSection = 0;
+    subjects.forEach((sub) => {
+      const t = sub.subjectType || "Core";
+      subjectTypeCounts[t] = (subjectTypeCounts[t] || 0) + 1;
+      if (t === "Core" || sub.programScope === "Universal") {
+        totalWeeklyPeriodsPerSection += Number(sub.classesPerWeek) || 4;
+      }
+    });
+
+    return {
+      ...lvlData,
+      sectionCount: sections.length,
+      facultyCount: faculty.length,
+      subjectCount: subjects.length,
+      subjects,
+      sectionThemesByGrade,
+      ancillarySummary: {
+        advisersCount: advisersList.length,
+        coordinatorsCount: coordinatorsList.length,
+        totalRolesCount: advisersList.length + coordinatorsList.length,
+        advisersList,
+        coordinatorsList,
+      },
+      analytics: {
+        deptCounts,
+        programCounts,
+        subjectTypeCounts,
+        totalWeeklyPeriodsAssigned: sections.length * Math.max(30, totalWeeklyPeriodsPerSection),
+        conflictsCount: 0,
+      },
+    };
+  };
+
+  const enrichedJhs = enrichLevel(yearObj.jhs, "jhs");
+  const enrichedShs = enrichLevel(yearObj.shs, "shs");
+
+  const totalSubjects = (enrichedJhs?.subjectCount || 0) + (enrichedShs?.subjectCount || 0);
+  const totalAncillaries =
+    (enrichedJhs?.ancillarySummary?.totalRolesCount || 0) +
+    (enrichedShs?.ancillarySummary?.totalRolesCount || 0);
+  const totalThemes =
+    Object.keys(enrichedJhs?.sectionThemesByGrade || {}).length +
+    Object.keys(enrichedShs?.sectionThemesByGrade || {}).length;
+
+  return {
+    ...yearObj,
+    totalSections: (enrichedJhs?.sectionCount || 0) + (enrichedShs?.sectionCount || 0),
+    totalFaculty: (enrichedJhs?.facultyCount || 0) + (enrichedShs?.facultyCount || 0),
+    totalSubjects,
+    totalAncillaries,
+    totalThemes,
+    jhs: enrichedJhs,
+    shs: enrichedShs,
+  };
+}
+
+/**
+ * Validates an academic year string (e.g. "2026-2027").
+ * Checks format (YYYY-YYYY), numeric range (2000-2099), and consecutive year span (endYear === startYear + 1).
+ * Optionally compares against currentYear to detect rollover mismatches.
+ */
+export function validateAcademicYearLabel(rawVal, options = {}) {
+  const { isRolloverTarget = false, currentYear = "" } = options;
+  const trimmed = String(rawVal || "").trim().replace(/–/g, "-");
+
+  if (!trimmed) {
+    return {
+      valid: false,
+      normalized: "",
+      error: "Academic Year label is required (format: YYYY-YYYY, e.g., 2026-2027).",
+    };
+  }
+
+  if (/[a-zA-Z]/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: trimmed,
+      error: "Invalid characters: Letters are not allowed. Enter two 4-digit years separated by a hyphen (e.g., 2026-2027).",
+    };
+  }
+
+  const match = trimmed.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (!match) {
+    return {
+      valid: false,
+      normalized: trimmed,
+      error: "Invalid format: Must follow YYYY-YYYY format (e.g., 2026-2027).",
+    };
+  }
+
+  const startYear = parseInt(match[1], 10);
+  const endYear = parseInt(match[2], 10);
+  const normalized = `${startYear}-${endYear}`;
+
+  if (startYear < 2000 || startYear > 2099 || endYear < 2001 || endYear > 2100) {
+    return {
+      valid: false,
+      normalized,
+      error: `Out of range (${normalized}): Academic year must be between 2000-2001 and 2099-2100.`,
+    };
+  }
+
+  if (endYear <= startYear) {
+    return {
+      valid: false,
+      normalized,
+      expected: `${startYear}-${startYear + 1}`,
+      error: `Year mismatch (${normalized}): End year (${endYear}) must be 1 year after start year (${startYear}). Expected ${startYear}-${startYear + 1}.`,
+    };
+  }
+
+  if (endYear !== startYear + 1) {
+    return {
+      valid: false,
+      normalized,
+      expected: `${startYear}-${startYear + 1}`,
+      error: `Year span mismatch (${normalized}): School year must span 1 consecutive academic year (${startYear}-${startYear + 1}), not ${endYear - startYear} years.`,
+    };
+  }
+
+  if (isRolloverTarget && currentYear) {
+    const cleanCur = String(currentYear).trim().replace(/–/g, "-");
+    const curMatch = cleanCur.match(/^(\d{4})-(\d{4})$/);
+    if (curMatch) {
+      const curStart = parseInt(curMatch[1], 10);
+      const expectedNext = `${curStart + 1}-${curStart + 2}`;
+      if (normalized === cleanCur) {
+        return {
+          valid: false,
+          normalized,
+          expected: expectedNext,
+          error: `Duplicate year mismatch: S.Y. ${normalized} is already the current active school year. Expected ${expectedNext}.`,
+        };
+      }
+      if (startYear < curStart) {
+        return {
+          valid: false,
+          normalized,
+          expected: expectedNext,
+          error: `Chronological mismatch: Target year (${normalized}) is earlier than current active year (${cleanCur}). Expected ${expectedNext}.`,
+        };
+      }
+      if (startYear > curStart + 1) {
+        return {
+          valid: true,
+          normalized,
+          expected: expectedNext,
+          warning: `Notice: Skipping ahead ${startYear - curStart} years from ${cleanCur} to ${normalized} (consecutive next year is ${expectedNext}).`,
+        };
+      }
+    }
+  }
+
+  return { valid: true, normalized, startYear, endYear, error: null, warning: null };
+}
+
 /**
  * Loads the historical school years from local storage, fallback to defaults
  */
 export function getHistoricalSchoolYears() {
-  if (typeof window === "undefined") return DEFAULT_HISTORICAL_YEARS;
+  if (typeof window === "undefined") return DEFAULT_HISTORICAL_YEARS.map(enrichHistoricalYearAnalytics);
   try {
     const raw = window.localStorage.getItem(HISTORICAL_STORAGE_KEY);
     if (!raw) {
-      window.localStorage.setItem(HISTORICAL_STORAGE_KEY, JSON.stringify(DEFAULT_HISTORICAL_YEARS));
-      return DEFAULT_HISTORICAL_YEARS;
+      const enrichedDefaults = DEFAULT_HISTORICAL_YEARS.map(enrichHistoricalYearAnalytics);
+      window.localStorage.setItem(HISTORICAL_STORAGE_KEY, JSON.stringify(enrichedDefaults));
+      return enrichedDefaults;
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      const validList = parsed.filter((y) => y && validateAcademicYearLabel(y.academicYear || y.yearId).valid);
+      if (validList.length > 0) {
+        if (validList.length !== parsed.length) {
+          window.localStorage.setItem(HISTORICAL_STORAGE_KEY, JSON.stringify(validList.map(enrichHistoricalYearAnalytics)));
+        }
+        return validList.map(enrichHistoricalYearAnalytics);
+      }
     }
-    window.localStorage.setItem(HISTORICAL_STORAGE_KEY, JSON.stringify(DEFAULT_HISTORICAL_YEARS));
-    return DEFAULT_HISTORICAL_YEARS;
+    const enrichedDefaults = DEFAULT_HISTORICAL_YEARS.map(enrichHistoricalYearAnalytics);
+    window.localStorage.setItem(HISTORICAL_STORAGE_KEY, JSON.stringify(enrichedDefaults));
+    return enrichedDefaults;
   } catch (e) {
-    return DEFAULT_HISTORICAL_YEARS;
+    return DEFAULT_HISTORICAL_YEARS.map(enrichHistoricalYearAnalytics);
   }
 }
 
@@ -593,12 +861,15 @@ export function reuseSectionsFromYear(historicalYearObj, targetLevel = "both") {
     // Convert JHS sections array into grade-grouped object format expected by SectionsManagement
     if (targetLevel === "both" || targetLevel === "jhs") {
       const jhsSections = historicalYearObj.jhs?.sections || [];
+      const jhsThemes = historicalYearObj.jhs?.sectionThemesByGrade || {};
       const jhsGrouped = {};
       [7, 8, 9, 10].forEach((g) => {
         const gradeSecs = jhsSections.filter((s) => Number(s.grade) === g);
+        const themeName = jhsThemes[g]?.theme || gradeSecs[0]?.theme || ("Historical S.Y. " + historicalYearObj.academicYear);
         jhsGrouped[g] = {
+          count: gradeSecs.length,
           totalSections: gradeSecs.length,
-          theme: "Historical S.Y. " + historicalYearObj.academicYear,
+          theme: themeName,
           sections: gradeSecs.map((s) => ({
             name: s.name,
             classification: s.classification || "Regular",
@@ -612,12 +883,15 @@ export function reuseSectionsFromYear(historicalYearObj, targetLevel = "both") {
     // Convert SHS sections array into grade-grouped object format
     if (targetLevel === "both" || targetLevel === "shs") {
       const shsSections = historicalYearObj.shs?.sections || [];
+      const shsThemes = historicalYearObj.shs?.sectionThemesByGrade || {};
       const shsGrouped = {};
       [11, 12].forEach((g) => {
         const gradeSecs = shsSections.filter((s) => Number(s.grade) === g);
+        const themeName = shsThemes[g]?.theme || gradeSecs[0]?.theme || ("Historical S.Y. " + historicalYearObj.academicYear);
         shsGrouped[g] = {
+          count: gradeSecs.length,
           totalSections: gradeSecs.length,
-          theme: "Historical S.Y. " + historicalYearObj.academicYear,
+          theme: themeName,
           sections: gradeSecs.map((s) => ({
             name: s.name,
             track: s.track || "Academic",
@@ -642,20 +916,67 @@ export function reuseSectionsFromYear(historicalYearObj, targetLevel = "both") {
 }
 
 /**
- * Reuses / Copies Faculty Roster & Ancillaries from a Historical Year into the active school year
+ * Reuses / Copies Subjects Catalog from a Historical Year into the active school year
  */
-export function reuseFacultyFromYear(historicalYearObj, targetLevel = "both") {
+export function reuseSubjectsFromYear(historicalYearObj, targetLevel = "both") {
   if (typeof window === "undefined" || !historicalYearObj) return { success: false, count: 0 };
   try {
-    const existingRaw = window.localStorage.getItem("turotugma_faculty");
-    let currentFaculty = [];
+    const enriched = enrichHistoricalYearAnalytics(historicalYearObj);
+    const existingRaw = window.localStorage.getItem("turotugma_subjects");
+    let currentSubjects = [];
     if (existingRaw) {
       try {
         const parsed = JSON.parse(existingRaw);
-        if (Array.isArray(parsed)) currentFaculty = parsed;
+        if (Array.isArray(parsed)) currentSubjects = parsed;
       } catch (e) {}
     }
 
+    const jhsSubjs = enriched.jhs?.subjects || DEFAULT_ARCHIVE_SUBJECTS_JHS;
+    const shsSubjs = enriched.shs?.subjects || DEFAULT_ARCHIVE_SUBJECTS_SHS;
+
+    let nextSubjects = [];
+    if (targetLevel === "both") {
+      nextSubjects = [...jhsSubjs, ...shsSubjs];
+    } else if (targetLevel === "jhs") {
+      const keptShs = currentSubjects.filter((s) => s?.schoolLevel === "shs");
+      nextSubjects = [...jhsSubjs, ...keptShs];
+    } else if (targetLevel === "shs") {
+      const keptJhs = currentSubjects.filter((s) => s?.schoolLevel !== "shs");
+      nextSubjects = [...keptJhs, ...shsSubjs];
+    }
+
+    window.localStorage.setItem("turotugma_subjects", JSON.stringify(nextSubjects));
+    window.dispatchEvent(new CustomEvent("turotugma_subjects_updated", { detail: nextSubjects }));
+    window.dispatchEvent(new Event("turotugma:subjects-updated"));
+    return { success: true, count: nextSubjects.length };
+  } catch (err) {
+    console.error("Error reusing subjects:", err);
+    return { success: false, count: 0, error: err.message };
+  }
+}
+
+/**
+ * Reuses / Copies Section Naming Themes & Vocabulary from a Historical Year
+ */
+export function reuseNamingThemesFromYear(historicalYearObj) {
+  if (typeof window === "undefined" || !historicalYearObj) return { success: false, count: 0 };
+  try {
+    if (historicalYearObj.namingSchemes && typeof historicalYearObj.namingSchemes === "object") {
+      window.localStorage.setItem("turotugma_naming_schemes", JSON.stringify(historicalYearObj.namingSchemes));
+      return { success: true, count: Object.keys(historicalYearObj.namingSchemes).length };
+    }
+    return { success: true, count: 6 };
+  } catch (err) {
+    return { success: false, count: 0, error: err.message };
+  }
+}
+
+/**
+ * Reuses / Copies Faculty Roster & Ancillaries from a Historical Year into the active school year
+ */
+export function reuseFacultyFromYear(historicalYearObj, targetLevel = "both", includeAncillaries = true) {
+  if (typeof window === "undefined" || !historicalYearObj) return { success: false, count: 0 };
+  try {
     let importedFaculty = [];
     if (targetLevel === "both") {
       importedFaculty = [
@@ -668,17 +989,25 @@ export function reuseFacultyFromYear(historicalYearObj, targetLevel = "both") {
       importedFaculty = historicalYearObj.shs?.faculty || [];
     }
 
-    // Format into standard faculty structure including ancillaries and advisoryClass
-    const nextFaculty = importedFaculty.map((f, idx) => ({
-      ...f,
-      id: f.id || `teacher-import-${idx + 1}`,
-      ancillaries: Array.isArray(f.ancillaries) ? f.ancillaries : (f.advisoryClass && f.advisoryClass !== "None" ? ["Class Adviser"] : []),
-      updatedAt: new Date().toISOString(),
-      importedFromYear: historicalYearObj.academicYear,
-    }));
+    const nextFaculty = importedFaculty.map((f, idx) => {
+      const ancList = includeAncillaries
+        ? (Array.isArray(f.ancillaries) ? f.ancillaries : (f.advisoryClass && f.advisoryClass !== "None" ? ["Class Adviser"] : []))
+        : [];
+      return {
+        ...f,
+        id: f.id || `teacher-import-${idx + 1}`,
+        advisoryClass: includeAncillaries ? (f.advisoryClass || "None") : "None",
+        isClassAdviser: includeAncillaries ? Boolean(f.advisoryClass && f.advisoryClass !== "None") : false,
+        ancillaries: ancList,
+        ancillaryAssignments: ancList,
+        updatedAt: new Date().toISOString(),
+        importedFromYear: historicalYearObj.academicYear,
+      };
+    });
 
     window.localStorage.setItem("turotugma_faculty", JSON.stringify(nextFaculty));
     window.dispatchEvent(new Event("turotugma_faculty_updated"));
+    window.dispatchEvent(new Event("turotugma:faculty-updated"));
     return { success: true, count: nextFaculty.length };
   } catch (err) {
     console.error("Error reusing faculty:", err);
@@ -822,7 +1151,9 @@ export function reusePublishedSchedulesFromYear(historicalYearObj, targetLevel =
 export function executeFullRolloverFromYear(historicalYearObj, currentAcademicYear = "2026-2027") {
   if (!historicalYearObj) return { success: false, count: 0 };
   const secRes = reuseSectionsFromYear(historicalYearObj, "both");
-  const facRes = reuseFacultyFromYear(historicalYearObj, "both");
+  const subRes = reuseSubjectsFromYear(historicalYearObj, "both");
+  const thmRes = reuseNamingThemesFromYear(historicalYearObj);
+  const facRes = reuseFacultyFromYear(historicalYearObj, "both", true);
   const cfgRes = reuseConfigurationsFromYear(historicalYearObj, "both");
   const schedRes = reusePublishedSchedulesFromYear(historicalYearObj, "both");
 
@@ -835,10 +1166,13 @@ export function executeFullRolloverFromYear(historicalYearObj, currentAcademicYe
       sourceYear: historicalYearObj.academicYear,
       targetYear: currentAcademicYear,
       importedSections: secRes.count || 0,
+      importedSubjects: subRes.count || 0,
+      importedThemes: thmRes.count || 0,
       importedFaculty: facRes.count || 0,
       configurationsUpdated: cfgRes.success,
+      importedSchedules: schedRes.count || 0,
       publishedSchedulesUpdated: schedRes.count || 0,
-      action: `Full data reuse from S.Y. ${historicalYearObj.academicYear} (Sections, Faculty, Scheds)`,
+      action: `Full data rollover from S.Y. ${historicalYearObj.academicYear}`,
     });
     window.localStorage.setItem(ROLLOVER_AUDIT_KEY, JSON.stringify(auditList.slice(0, 30)));
   } catch (e) {}
@@ -846,7 +1180,260 @@ export function executeFullRolloverFromYear(historicalYearObj, currentAcademicYe
   return {
     success: secRes.success && facRes.success && cfgRes.success,
     importedSections: secRes.count,
+    importedSubjects: subRes.count,
+    importedThemes: thmRes.count,
     importedFaculty: facRes.count,
     importedSchedules: schedRes.count,
   };
+}
+
+/**
+ * Snapshots the current active school year into Historical Archives and initializes the next school year
+ * according to the selected mode ("recommended" | "selective" | "scratch").
+ */
+export function archiveCurrentSchoolYearAndStartNew({
+  currentYearLabel = "2026-2027",
+  nextYearLabel = "2027-2028",
+  mode = "recommended",
+  keepOptions = {
+    sections: true,
+    themes: true,
+    subjects: true,
+    faculty: true,
+    ancillaries: true,
+    configs: true,
+    schedules: false,
+  },
+}) {
+  if (typeof window === "undefined") return { success: false };
+
+  const curCheck = validateAcademicYearLabel(currentYearLabel);
+  const safeCurrentYear = curCheck.valid ? curCheck.normalized : "2026-2027";
+  const nextCheck = validateAcademicYearLabel(nextYearLabel, {
+    isRolloverTarget: true,
+    currentYear: safeCurrentYear,
+  });
+  if (!nextCheck.valid) {
+    return { success: false, error: nextCheck.error };
+  }
+  currentYearLabel = safeCurrentYear;
+  nextYearLabel = nextCheck.normalized;
+
+  try {
+    const rawSections = JSON.parse(window.localStorage.getItem("turotugma_sections_created") || "null") || {};
+    const rawThemes = JSON.parse(window.localStorage.getItem("turotugma_naming_schemes") || "null") || null;
+    const rawSubjects = JSON.parse(window.localStorage.getItem("turotugma_subjects") || "[]") || [];
+    const rawFaculty = JSON.parse(window.localStorage.getItem("turotugma_faculty") || "[]") || [];
+    const rawConfigs = JSON.parse(window.localStorage.getItem("turotugma_schedule_configurations") || "{}") || {};
+    const rawPublished = JSON.parse(window.localStorage.getItem(PUBLISHED_STORAGE_KEY) || "{}") || {};
+    const rawDrafts = JSON.parse(window.localStorage.getItem("turotugma_schedule_drafts") || "[]") || [];
+
+    // 1. Build live archive entry for currentYearLabel
+    const buildLevelSections = (lvlKey, grades) => {
+      const list = [];
+      const themesByGrade = {};
+      grades.forEach((g) => {
+        const gObj = rawSections?.[lvlKey]?.[g];
+        const secs = Array.isArray(gObj?.sections) ? gObj.sections : [];
+        const themeName = gObj?.theme || inferThemeFromSectionNames(secs, currentYearLabel);
+        themesByGrade[g] = {
+          grade: g,
+          theme: themeName,
+          count: secs.length,
+          sampleNames: secs.map((s) => String(s?.name || "").replace(/^Grade\s*\d+\s*-\s*/i, "")).slice(0, 4),
+        };
+        secs.forEach((s, idx) => {
+          const adviserObj = rawFaculty.find(
+            (f) => f?.advisoryClass && String(f.advisoryClass).toLowerCase().includes(String(s?.name || "").toLowerCase())
+          );
+          list.push({
+            id: `${lvlKey}-${g}-${idx}-${currentYearLabel}`,
+            grade: g,
+            name: s?.name || `Grade ${g} - Section ${idx + 1}`,
+            classification: s?.classification || "Regular",
+            track: s?.track || "Academic",
+            cluster: s?.cluster || "",
+            theme: themeName,
+            adviser: adviserObj?.name || s?.adviser || "—",
+          });
+        });
+      });
+      return { list, themesByGrade };
+    };
+
+    const jhsSecData = buildLevelSections("jhs", [7, 8, 9, 10]);
+    const shsSecData = buildLevelSections("shs", [11, 12]);
+
+    const jhsFaculty = rawFaculty
+      .filter((f) => {
+        const grades = Array.isArray(f?.gradeLevelAssignments) ? f.gradeLevelAssignments.join(" ") : "";
+        return f?.schoolLevel === "jhs" || /[789]|10/.test(grades) || !f?.schoolLevel;
+      })
+      .map((f) => ({
+        ...f,
+        major: f.major || f.specialization || f.department || "General",
+        ancillaries: Array.isArray(f.ancillaryAssignments)
+          ? f.ancillaryAssignments
+          : Array.isArray(f.ancillaries)
+            ? f.ancillaries
+            : [],
+        maxWeeklyHours: f.maxWeeklyHours || 24,
+      }));
+
+    const shsFaculty = rawFaculty
+      .filter((f) => {
+        const grades = Array.isArray(f?.gradeLevelAssignments) ? f.gradeLevelAssignments.join(" ") : "";
+        return f?.schoolLevel === "shs" || /11|12/.test(grades);
+      })
+      .map((f) => ({
+        ...f,
+        major: f.major || f.specialization || f.department || "General",
+        ancillaries: Array.isArray(f.ancillaryAssignments)
+          ? f.ancillaryAssignments
+          : Array.isArray(f.ancillaries)
+            ? f.ancillaries
+            : [],
+        maxWeeklyHours: f.maxWeeklyHours || 24,
+      }));
+
+    const jhsSubjects = rawSubjects.filter((s) => s?.schoolLevel !== "shs");
+    const shsSubjects = rawSubjects.filter((s) => s?.schoolLevel === "shs");
+
+    const jhsSched =
+      rawPublished.jhs ||
+      (rawDrafts.find((d) => (d?.scheduleType || d?.schedule?.scheduleType) === "jhs")?.schedule) ||
+      DEFAULT_HISTORICAL_YEARS[0].jhs.publishedSchedule;
+
+    const shsSched =
+      rawPublished["shs-first"] ||
+      rawPublished.shs ||
+      (rawDrafts.find((d) => String(d?.scheduleType || d?.schedule?.scheduleType || "").startsWith("shs"))?.schedule) ||
+      DEFAULT_HISTORICAL_YEARS[0].shs.publishedSchedule;
+
+    const archivedEntry = enrichHistoricalYearAnalytics({
+      yearId: currentYearLabel,
+      academicYear: currentYearLabel,
+      label: `S.Y. ${currentYearLabel.replace("-", "–")}`,
+      status: "Archived",
+      description: `Archived operational snapshot for S.Y. ${currentYearLabel} at Diadi National High School, including sections, naming themes, subjects, faculty workloads, ancillary roles, and timetables.`,
+      dateRange: `S.Y. ${currentYearLabel}`,
+      publishedSchedulesCount: (rawPublished.jhs ? 1 : 0) + (rawPublished["shs-first"] || rawPublished.shs ? 1 : 0) || 1,
+      namingSchemes: rawThemes,
+      jhs: {
+        sectionCount: jhsSecData.list.length || DEFAULT_HISTORICAL_YEARS[0].jhs.sectionCount,
+        facultyCount: jhsFaculty.length || DEFAULT_HISTORICAL_YEARS[0].jhs.facultyCount,
+        sections: jhsSecData.list.length > 0 ? jhsSecData.list : DEFAULT_HISTORICAL_YEARS[0].jhs.sections,
+        sectionThemesByGrade: jhsSecData.themesByGrade,
+        faculty: jhsFaculty.length > 0 ? jhsFaculty : DEFAULT_HISTORICAL_YEARS[0].jhs.faculty,
+        subjects: jhsSubjects.length > 0 ? jhsSubjects : DEFAULT_ARCHIVE_SUBJECTS_JHS,
+        config: {
+          ...DEFAULT_HISTORICAL_YEARS[0].jhs.config,
+          schoolStartTime: rawConfigs?.jhs?.schoolStartTime || "07:30",
+          schoolEndTime: rawConfigs?.jhs?.schoolEndTime || "17:00",
+          periodDuration: rawConfigs?.jhs?.sessions?.regular?.duration || 60,
+          periodsPerDay: rawConfigs?.jhs?.sessions?.regular?.manualPeriodCount || 8,
+          shortenedDuration: rawConfigs?.jhs?.sessions?.shortened?.duration || 45,
+        },
+        publishedSchedule: jhsSched,
+      },
+      shs: {
+        sectionCount: shsSecData.list.length || DEFAULT_HISTORICAL_YEARS[0].shs.sectionCount,
+        facultyCount: shsFaculty.length || DEFAULT_HISTORICAL_YEARS[0].shs.facultyCount,
+        sections: shsSecData.list.length > 0 ? shsSecData.list : DEFAULT_HISTORICAL_YEARS[0].shs.sections,
+        sectionThemesByGrade: shsSecData.themesByGrade,
+        faculty: shsFaculty.length > 0 ? shsFaculty : DEFAULT_HISTORICAL_YEARS[0].shs.faculty,
+        subjects: shsSubjects.length > 0 ? shsSubjects : DEFAULT_ARCHIVE_SUBJECTS_SHS,
+        config: {
+          ...DEFAULT_HISTORICAL_YEARS[0].shs.config,
+          schoolStartTime: rawConfigs?.shs?.schoolStartTime || "07:30",
+          schoolEndTime: rawConfigs?.shs?.schoolEndTime || "17:00",
+          periodDuration: rawConfigs?.shs?.sessions?.regular?.duration || 60,
+          periodsPerDay: rawConfigs?.shs?.sessions?.regular?.manualPeriodCount || 8,
+          shortenedDuration: rawConfigs?.shs?.sessions?.shortened?.duration || 45,
+        },
+        publishedSchedule: shsSched,
+      },
+    });
+
+    const existingArchives = getHistoricalSchoolYears().filter(
+      (y) => y.yearId !== currentYearLabel && y.academicYear !== currentYearLabel
+    );
+    const updatedArchives = [archivedEntry, ...existingArchives];
+    saveHistoricalSchoolYears(updatedArchives);
+
+    // 2. Apply Rollover Mode for nextYearLabel
+    const effectiveKeep =
+      mode === "scratch"
+        ? { sections: false, themes: false, subjects: false, faculty: false, ancillaries: false, configs: true, schedules: false }
+        : mode === "recommended"
+          ? { sections: true, themes: true, subjects: true, faculty: true, ancillaries: true, configs: true, schedules: false }
+          : keepOptions;
+
+    if (!effectiveKeep.sections) {
+      window.localStorage.removeItem("turotugma_sections_created");
+      window.dispatchEvent(new Event("turotugma:sections-updated"));
+    }
+    if (!effectiveKeep.themes) {
+      window.localStorage.removeItem("turotugma_naming_schemes");
+    }
+    if (!effectiveKeep.subjects) {
+      window.localStorage.setItem("turotugma_subjects", JSON.stringify([]));
+      window.dispatchEvent(new Event("turotugma:subjects-updated"));
+    }
+    if (!effectiveKeep.faculty) {
+      window.localStorage.setItem("turotugma_faculty", JSON.stringify([]));
+      window.dispatchEvent(new Event("turotugma:faculty-updated"));
+    } else if (!effectiveKeep.ancillaries) {
+      const strippedFaculty = rawFaculty.map((f) => ({
+        ...f,
+        isClassAdviser: false,
+        advisoryClass: "None",
+        ancillaries: [],
+        ancillaryAssignments: [],
+      }));
+      window.localStorage.setItem("turotugma_faculty", JSON.stringify(strippedFaculty));
+      window.dispatchEvent(new Event("turotugma:faculty-updated"));
+    }
+    if (!effectiveKeep.schedules) {
+      window.localStorage.removeItem(PUBLISHED_STORAGE_KEY);
+      window.localStorage.removeItem("turotugma_schedule_drafts");
+      window.dispatchEvent(new Event("turotugma:schedule-updated"));
+    }
+
+    // 3. Log Rollover Audit Entry
+    const rawAudit = window.localStorage.getItem(ROLLOVER_AUDIT_KEY);
+    const auditList = rawAudit ? JSON.parse(rawAudit) : [];
+    const modeLabel =
+      mode === "scratch"
+        ? "Started from Scratch (Blank Slate)"
+        : mode === "recommended"
+          ? "Recommended Rollover (Kept Setup, Cleared Schedules)"
+          : "Selective Custom Rollover";
+
+    auditList.unshift({
+      timestamp: new Date().toISOString(),
+      sourceYear: currentYearLabel,
+      targetYear: nextYearLabel,
+      level: "Both",
+      importedSections: effectiveKeep.sections ? archivedEntry.totalSections : 0,
+      importedSubjects: effectiveKeep.subjects ? archivedEntry.totalSubjects : 0,
+      importedThemes: effectiveKeep.themes ? archivedEntry.totalThemes : 0,
+      importedFaculty: effectiveKeep.faculty ? archivedEntry.totalFaculty : 0,
+      importedAncillaries: effectiveKeep.ancillaries ? archivedEntry.totalAncillaries : 0,
+      configurationsUpdated: Boolean(effectiveKeep.configs),
+      importedSchedules: effectiveKeep.schedules ? archivedEntry.publishedSchedulesCount : 0,
+      action: `Archived S.Y. ${currentYearLabel} & Initialized S.Y. ${nextYearLabel} — ${modeLabel}`,
+    });
+    window.localStorage.setItem(ROLLOVER_AUDIT_KEY, JSON.stringify(auditList.slice(0, 30)));
+
+    return {
+      success: true,
+      archivedEntry,
+      updatedArchives,
+      modeLabel,
+    };
+  } catch (err) {
+    console.error("Failed to archive and start new school year:", err);
+    return { success: false, error: err.message };
+  }
 }

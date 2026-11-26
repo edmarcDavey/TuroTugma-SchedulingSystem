@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { FaChalkboardTeacher, FaTable } from "react-icons/fa";
+import { FaChalkboardTeacher, FaTable, FaBars, FaTimes } from "react-icons/fa";
 import FinalTimeTables from './FinalTimeTables';
 import CurrentAssignmentView from './CurrentAssignmentView';
+import { isAdminAuthenticated } from '../../../auth';
 
 function getFromStorage(key, fallback) {
   try {
@@ -58,6 +59,24 @@ function navLinkItemStyle(active) {
 }
 
 export default function PublicDashboard() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth <= 860 || (window.innerHeight <= 500 && window.innerWidth <= 1024);
+  });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 860 || (window.innerHeight <= 500 && window.innerWidth <= 1024);
+      setIsMobile(mobile);
+      if (!mobile) {
+        setMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
@@ -71,6 +90,7 @@ export default function PublicDashboard() {
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
+    setMobileMenuOpen(false);
     if (typeof window !== "undefined") {
       const url = new URL(window.location);
       url.searchParams.set("tab", tab);
@@ -94,17 +114,137 @@ export default function PublicDashboard() {
   }
 
   return (
-    <main style={{ minHeight: "100vh", display: "flex", background: "#f5f7ff" }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
+        background: "#f5f7ff",
+        width: "100%",
+        maxWidth: "100vw",
+        overflowX: "hidden",
+      }}
+    >
+      {isMobile && (
+        <header
+          className="turotugma-no-print"
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 80,
+            background: "linear-gradient(90deg, #3B4197 0%, #2c327e 100%)",
+            color: "#ffffff",
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            boxShadow: "0 2px 8px rgba(15, 23, 42, 0.16)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label="Toggle Navigation Menu"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.28)",
+                background: "rgba(255,255,255,0.14)",
+                color: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              {mobileMenuOpen ? <FaTimes size={16} /> : <FaBars size={16} />}
+            </button>
+            <img src="/turotugma-logo.png" alt="TuroTugma" style={{ width: 28, height: 28, borderRadius: 6, background: "#fff", padding: 2 }} />
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1.1 }}>TuroTugma</div>
+              <div style={{ fontSize: 10.5, opacity: 0.85 }}>
+                {activeTab === "final-timetables" ? "Final Time Tables" : "Current Assignment View"}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => handleTabChange("current-assignment")}
+              style={{
+                border: "1px solid rgba(255,255,255,0.3)",
+                background: activeTab === "current-assignment" ? "#ffffff" : "rgba(255,255,255,0.14)",
+                color: activeTab === "current-assignment" ? "#3B4197" : "#ffffff",
+                borderRadius: 7,
+                padding: "5px 9px",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange("final-timetables")}
+              style={{
+                border: "1px solid rgba(255,255,255,0.3)",
+                background: activeTab === "final-timetables" ? "#ffffff" : "rgba(255,255,255,0.14)",
+                color: activeTab === "final-timetables" ? "#3B4197" : "#ffffff",
+                borderRadius: 7,
+                padding: "5px 9px",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Timetables
+            </button>
+          </div>
+        </header>
+      )}
+
+      {isMobile && mobileMenuOpen && (
+        <div
+          className="turotugma-no-print"
+          onClick={() => setMobileMenuOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.5)",
+            backdropFilter: "blur(2px)",
+            zIndex: 90,
+          }}
+        />
+      )}
+
       <aside
+        className="turotugma-no-print"
         style={{
           width: 260,
+          minWidth: 260,
+          height: "100dvh",
+          maxHeight: "100vh",
+          position: "fixed",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          transform: isMobile ? (mobileMenuOpen ? "translateX(0)" : "translateX(-105%)") : "none",
+          transition: "transform 0.24s cubic-bezier(0.4, 0, 0.2, 1)",
           background: "linear-gradient(180deg, #3B4197 0%, #2c327e 100%)",
           color: "#ffffff",
-          padding: "28px 20px",
+          padding: "24px 20px",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
           borderRight: "1px solid rgba(255,255,255,0.14)",
+          zIndex: isMobile ? 100 : 50,
+          flexShrink: 0,
+          overflowY: "auto",
+          boxShadow: isMobile && mobileMenuOpen ? "10px 0 30px rgba(0,0,0,0.35)" : "none",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
@@ -145,7 +285,27 @@ export default function PublicDashboard() {
             <FaTable style={{ marginRight: 8 }} /> Final Time Tables
           </button>
         </nav>
-        <div style={{ marginTop: "auto" }}>
+        <div style={{ marginTop: "auto", paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.16)", display: "grid", gap: 8 }}>
+          {isAdminAuthenticated() ? (
+            <a
+              href="/dashboard"
+              style={{
+                display: "block",
+                textDecoration: "none",
+                color: "#3B4197",
+                background: "#ffffff",
+                border: "none",
+                borderRadius: 10,
+                padding: "10px 12px",
+                fontSize: 13,
+                fontWeight: 700,
+                textAlign: "center",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+              }}
+            >
+              ← Return to Admin Panel
+            </a>
+          ) : null}
           <a
             href="/"
             style={{
@@ -159,14 +319,24 @@ export default function PublicDashboard() {
               fontSize: 13,
               fontWeight: 600,
               textAlign: "center",
-              marginTop: 24,
             }}
           >
             ← Back to Homepage
           </a>
         </div>
       </aside>
-      <section style={{ flex: 1, padding: 36, boxSizing: "border-box" }}>{content}</section>
+      <section
+        style={{
+          flex: 1,
+          minWidth: 0,
+          width: "100%",
+          marginLeft: isMobile ? 0 : 260,
+          padding: isMobile ? "16px 12px 72px" : 36,
+          boxSizing: "border-box",
+        }}
+      >
+        {content}
+      </section>
     </main>
   );
 }

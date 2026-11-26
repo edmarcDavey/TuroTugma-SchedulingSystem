@@ -21,14 +21,21 @@ function getActiveScheduleAssignments() {
     });
   };
 
+  const latestByLevel = {};
+
   try {
     // 1. Check Published Schedules
     const publishedRaw = localStorage.getItem("turotugma_published_schedules");
     if (publishedRaw) {
       const publishedMap = JSON.parse(publishedRaw);
       if (publishedMap && typeof publishedMap === "object") {
-        Object.values(publishedMap).forEach((sched) => {
-          processSchedule(sched);
+        Object.entries(publishedMap).forEach(([key, sched]) => {
+          if (!sched) return;
+          const level = sched.scheduleType || key || "default";
+          const updated = new Date(sched.updatedAt || sched.publishedAt || 0).getTime();
+          if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
+            latestByLevel[level] = { sched, updated };
+          }
         });
       }
     }
@@ -36,35 +43,30 @@ function getActiveScheduleAssignments() {
     console.error("Error reading published schedules:", e);
   }
 
-  // If published schedules had assignments, return them
-  if (allAssignments.length > 0) {
-    return allAssignments;
-  }
-
   try {
-    // 2. Fallback to Draft Schedules if no published schedules exist.
-    // Deduplicate by taking the most recent draft per scheduleType so multiple versions don't multiply count.
+    // 2. Check Draft Schedules (if a draft is newer than published for that level, use the latest working draft)
     const draftRaw = localStorage.getItem("turotugma_schedule_drafts");
     if (draftRaw) {
       const draftArr = JSON.parse(draftRaw);
       if (Array.isArray(draftArr) && draftArr.length > 0) {
-        const latestByLevel = {};
         draftArr.forEach((draftItem) => {
           const sched = draftItem?.schedule || draftItem;
+          if (!sched) return;
           const level = sched?.scheduleType || draftItem?.scheduleType || "default";
           const updated = new Date(draftItem?.updatedAt || sched?.updatedAt || 0).getTime();
           if (!latestByLevel[level] || updated > latestByLevel[level].updated) {
             latestByLevel[level] = { sched, updated };
           }
         });
-        Object.values(latestByLevel).forEach(({ sched }) => {
-          processSchedule(sched);
-        });
       }
     }
   } catch (e) {
     console.error("Error reading schedule drafts:", e);
   }
+
+  Object.values(latestByLevel).forEach(({ sched }) => {
+    processSchedule(sched);
+  });
 
   return allAssignments;
 }
@@ -94,41 +96,76 @@ function calculateTeacherLoads(facultyList) {
 
   const assignments = getActiveScheduleAssignments();
   const periodMinutes = getScheduleConfigPeriodMinutes();
+  const subjectsList = safeParseStorage("turotugma_subjects", []);
+  const subjectsMap = new Map(
+    (Array.isArray(subjectsList) ? subjectsList : []).map((s) => [s?.id, s])
+  );
+  const facultyById = new Map(facultyList.map((f) => [f.id, f]));
 
   const teacherPeriodCounts = {};
+  const adviserHGPCount = {};
+
   assignments.forEach((asgn) => {
-    const tid = asgn.teacherId;
-    if (tid) {
-      teacherPeriodCounts[tid] = (teacherPeriodCounts[tid] || 0) + 1;
+    const sub = asgn.subjectId ? subjectsMap.get(asgn.subjectId) : null;
+    const subCode = String(sub?.subjectCode || sub?.code || "").toUpperCase();
+    const subName = String(sub?.subjectName || sub?.name || asgn.subjectId || "").toLowerCase();
+    const isHGP =
+      subCode === "HGP" ||
+      subCode === "HRG" ||
+      subCode === "ADV" ||
+      subName.includes("homeroom") ||
+      subName.includes("guidance program") ||
+      subName.includes("advisory");
+
+    const cellTeacherIds = new Set();
+    if (asgn.teacherId) cellTeacherIds.add(asgn.teacherId);
+    if (Array.isArray(asgn.coTeacherIds)) {
+      asgn.coTeacherIds.forEach((id) => {
+        if (id) cellTeacherIds.add(id);
+      });
     }
+    if (Array.isArray(asgn.breakoutAssignments)) {
+      asgn.breakoutAssignments.forEach((b) => {
+        if (b?.teacherId) cellTeacherIds.add(b.teacherId);
+      });
+    }
+    cellTeacherIds.forEach((tid) => {
+      if (isHGP && !adviserHGPCount[tid]) {
+        adviserHGPCount[tid] = 1;
+        return;
+      }
+      teacherPeriodCounts[tid] = (teacherPeriodCounts[tid] || 0) + 1;
+    });
   });
 
   return facultyList.map((faculty) => {
     const periodCount = teacherPeriodCounts[faculty.id] || 0;
     const totalMinutes = periodCount * periodMinutes;
-    const totalHours = Math.round((totalMinutes / 60) * 10) / 10;
-    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
+    const classroomContactHours = Math.round((totalMinutes / 60) * 10) / 10;
 
     const isClassAdviser = Boolean(
+      adviserHGPCount[faculty.id] ||
       faculty.isClassAdviser ||
       (Array.isArray(faculty.ancillaryAssignments) && faculty.ancillaryAssignments.some((a) => String(a).toLowerCase().includes("adviser")))
     );
+    const advisoryCreditAdded = isClassAdviser && (periodCount > 0 || adviserHGPCount[faculty.id]) ? 5 : 0;
+    const totalHours = Math.round((classroomContactHours + advisoryCreditAdded) * 10) / 10;
+    const dailyHours = Math.round((totalHours / 5) * 10) / 10;
 
     const empStatus = String(faculty.employmentStatus || "").toLowerCase();
     const isPartTime = empStatus.includes("part-time") || empStatus.includes("parttime");
 
     // Magna Carta & DepEd DO 005, s. 2024:
     // Statutory maximum classroom teaching is 30 contact hours/week (6 hrs/day).
-    // Class Advisers receive a 1-load credit (5 hours/week), capping classroom teaching at 25 hrs/week.
-    // Minimum balanced teaching load: 20h for regular, 16h for class adviser, 12h for part-time.
+    // Balanced teaching load: 15–30 contact hrs/wk for Full-Time, 10–20h for Part-Time.
     const ancillaryCreditHours = isClassAdviser ? 5 : (Number(faculty.ancillaryCreditHours) || 0);
-    const maxTeachingContactHours = isPartTime ? 20 : (isClassAdviser ? 25 : 30);
-    const minBalancedHours = isPartTime ? 12 : (isClassAdviser ? 16 : 20);
+    const maxTeachingContactHours = isPartTime ? 20 : 30;
+    const minBalancedHours = isPartTime ? 10 : 15;
 
     const percent = Math.round((totalHours / maxTeachingContactHours) * 100);
 
     let status = "Unassigned";
-    if (periodCount === 0) {
+    if (totalHours === 0 && periodCount === 0) {
       status = "Unassigned";
     } else if (totalHours < minBalancedHours) {
       status = "Underload";
@@ -417,6 +454,86 @@ function getEmploymentStatusBreakdown(teachers) {
   return result;
 }
 
+function getDepartmentWorkloadBreakdown(teachers) {
+  const MINUTES_PER_PERIOD = 60;
+  const teacherLoads = calculateTeacherLoads(teachers);
+
+  const DEPT_BUCKETS = [
+    { key: "math", label: "Mathematics", match: (s) => s.includes("math") || s.includes("algebra") || s.includes("calculus") || s.includes("stat") },
+    { key: "science", label: "Science & STEM", match: (s) => s.includes("sci") || s.includes("bio") || s.includes("chem") || s.includes("phys") || s.includes("stem") },
+    { key: "english", label: "English & SPJ", match: (s) => s.includes("eng") || s.includes("journal") || s.includes("spj") || s.includes("read") || s.includes("lit") || s.includes("comm") },
+    { key: "filipino", label: "Filipino", match: (s) => s.includes("fil") || s.includes("komunikasyon") },
+    { key: "mapeh", label: "MAPEH & SPA", match: (s) => s.includes("mapeh") || s.includes("music") || s.includes("art") || s.includes("dance") || s.includes("pe") || s.includes("spa") || s.includes("health") },
+    { key: "tle_ict", label: "TLE & ICT", match: (s) => s.includes("tle") || s.includes("ict") || s.includes("tech") || s.includes("tvl") || s.includes("livelihood") || s.includes("abm") || s.includes("entrep") || s.includes("agri") || s.includes("home ec") },
+    { key: "ap", label: "Araling Panlipunan", match: (s) => s.includes("araling") || /\bap\b/.test(s) || s.includes("social") || s.includes("hist") || s.includes("ucsp") },
+    { key: "esp", label: "Values Ed (EsP)", match: (s) => s.includes("values") || s.includes("esp") || s.includes("gmrc") || s.includes("hgp") || s.includes("perdev") || s.includes("guidance") },
+  ];
+
+  const buckets = {};
+  DEPT_BUCKETS.forEach((b) => {
+    buckets[b.key] = {
+      key: b.key,
+      label: b.label,
+      count: 0,
+      totalPeriods: 0,
+      balanced: 0,
+      underload: 0,
+      overload: 0,
+      unassigned: 0,
+    };
+  });
+  buckets.general = {
+    key: "general",
+    label: "General / Other",
+    count: 0,
+    totalPeriods: 0,
+    balanced: 0,
+    underload: 0,
+    overload: 0,
+    unassigned: 0,
+  };
+
+  teacherLoads.forEach((teacher) => {
+    const rawDept = [
+      teacher.department,
+      teacher.major,
+      teacher.specialization,
+      ...(Array.isArray(teacher.subjects) ? teacher.subjects : []),
+      ...(Array.isArray(teacher.subjectExpertise) ? teacher.subjectExpertise : []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    const matchedBucket = DEPT_BUCKETS.find((b) => b.match(rawDept));
+    const targetKey = matchedBucket ? matchedBucket.key : "general";
+    const entry = buckets[targetKey];
+
+    const periods = Math.round((teacher.assignedLoadMinutes || 0) / MINUTES_PER_PERIOD);
+    const loadStatus = teacher.assignedLoadStatus || "Unassigned";
+
+    entry.count += 1;
+    entry.totalPeriods += periods;
+
+    if (loadStatus === "Overload") {
+      entry.overload += 1;
+    } else if (loadStatus === "Balanced" || loadStatus === "Full load") {
+      entry.balanced += 1;
+    } else if (loadStatus === "Underload" || loadStatus === "Part load") {
+      entry.underload += 1;
+    } else {
+      entry.unassigned += 1;
+    }
+  });
+
+  const ordered = [
+    ...DEPT_BUCKETS.map((b) => buckets[b.key]),
+    ...(buckets.general.count > 0 ? [buckets.general] : []),
+  ];
+
+  return ordered;
+}
+
 function getSubjectBreakdown(subjectsList) {
   const trackKeys = ["STEM", "HUMSS", "ABM", "TVL", "GAS"];
   const initialTracks = trackKeys.reduce((accumulator, key) => {
@@ -506,9 +623,12 @@ export function getSystemSnapshot() {
   let profiledAssignmentBreakdown = getTeacherAssignmentBreakdown(facultyList, 'FULL LIST');
   let assignmentBreakdown = profiledAssignmentBreakdown;
 
+  let allActiveFaculty = facultyList.filter((teacher) => teacher?.active !== false);
+  let assignedTeachers = allActiveFaculty;
+
   // --- Use the same load calculation as FacultyManagement.js for dashboard chart ---
   let loadDistribution = { unassigned: 0, underload: 0, balanced: 0, overload: 0 };
-  const teacherLoads = calculateTeacherLoads(activeTeachers);
+  const teacherLoads = calculateTeacherLoads(allActiveFaculty);
   teacherLoads.forEach((teacher) => {
     const status = teacher.assignedLoadStatus || "Unassigned";
     if (status === "Unassigned") {
@@ -522,29 +642,30 @@ export function getSystemSnapshot() {
     }
   });
   if (latestSchedule) {
-    // Use assignments and teacher loads from latest schedule if available
     if (latestSchedule.assignments && typeof latestSchedule.assignments === "object") {
-      // Count unique teacherIds in assignments as active teachers
       const teacherIds = new Set();
       Object.values(latestSchedule.assignments).forEach((a) => {
-        if (a && a.teacherId) teacherIds.add(a.teacherId);
+        if (!a) return;
+        if (a.teacherId) teacherIds.add(a.teacherId);
+        if (Array.isArray(a.coTeacherIds)) a.coTeacherIds.forEach((id) => id && teacherIds.add(id));
+        if (Array.isArray(a.breakoutAssignments)) a.breakoutAssignments.forEach((b) => b?.teacherId && teacherIds.add(b.teacherId));
       });
-      activeTeachers = facultyList.filter((t) => teacherIds.has(t.id));
-      assignmentBreakdown = getTeacherAssignmentBreakdown(activeTeachers, 'ACTIVE ONLY');
+      assignedTeachers = allActiveFaculty.filter((t) => teacherIds.has(t.id));
+      assignmentBreakdown = getTeacherAssignmentBreakdown(assignedTeachers, 'ACTIVE ONLY');
     }
-    // Use teacherLoadPercent for load distribution if available
-    // (No longer needed: teacherLoadPercent percent-based logic is replaced by config-driven minute-based logic above)
   }
 
-  let employmentStatusBreakdown = getEmploymentStatusBreakdown(activeTeachers);
+  // Always pass allActiveFaculty so Unassigned teachers are accurately counted in breakdowns
+  let employmentStatusBreakdown = getEmploymentStatusBreakdown(allActiveFaculty);
+  let departmentBreakdown = getDepartmentWorkloadBreakdown(allActiveFaculty);
 
   return {
     // Always show total profiled/created values, not filtered by schedule
     profiledTeachers: facultyList.length,
     profiledSections: getTotalSectionsFromSavedConfig(sections),
     profiledSubjects: subjectsList.length,
-    // Keep old values for compatibility, but these are not used for login metrics anymore
-    activeTeachers: activeTeachers.length,
+    activeTeachers: allActiveFaculty.length,
+    assignedTeachersCount: assignedTeachers.length,
     totalTeachers: facultyList.length,
     totalSections,
     sectionGradeBreakdown,
@@ -555,6 +676,7 @@ export function getSystemSnapshot() {
     unresolvedConflicts: loadDistribution.overload,
     loadDistribution,
     employmentStatusBreakdown,
+    departmentBreakdown,
     assignmentBreakdown, // active (filtered) breakdown
     profiledAssignmentBreakdown, // always full list breakdown
   };
@@ -563,25 +685,82 @@ export function getSystemSnapshot() {
 export function getDashboardAnalyticsPayload() {
   const snapshot = getSystemSnapshot();
   const hasAnyData = snapshot.totalTeachers > 0 || snapshot.totalSections > 0 || snapshot.totalSubjects > 0;
+  const schoolProfile = safeParseStorage("turotugma_school_profile", {});
+  const offeredLevels = schoolProfile?.offeredLevels || "both";
 
   // Get most recent schedules for each level
   const jhsSched = getMostRecentScheduleForLevel("jhs");
-  const shsFirstSched = getMostRecentScheduleForLevel("shs_first");
-  // If you want to support SHS Second Sem, add: const shsSecondSched = getMostRecentScheduleForLevel("shs_second");
+  const shsFirstSched =
+    getMostRecentScheduleForLevel("shs-first") ||
+    getMostRecentScheduleForLevel("shs_first") ||
+    getMostRecentScheduleForLevel("shs-term1") ||
+    getMostRecentScheduleForLevel("shs");
+
+  // Compute completion by grade/level accurately
+  const countValidByGrade = (sched, gradeNum) => {
+    if (!sched || !sched.assignments) return { valid: 0, total: 0 };
+    const secCount = snapshot.sectionGradeBreakdown?.[`g${gradeNum}`] || 0;
+    if (secCount === 0) return { valid: 0, total: 0 };
+    let valid = 0;
+    Object.entries(sched.assignments).forEach(([cellKey, a]) => {
+      if (!a || !a.subjectId || !a.teacherId) return;
+      const [secId] = String(cellKey || "").split("|");
+      if (secId.includes(`-${gradeNum}-`) || secId.startsWith(`${gradeNum}-`)) {
+        valid += 1;
+      }
+    });
+    // Expected weekly periods per section (~35-38 for JHS, ~32-36 for SHS, or derived from total assigned in grade)
+    const expectedPerSec = gradeNum <= 10 ? 37 : 32;
+    const rawTotal = secCount * expectedPerSec;
+    const pct = valid > 0 ? Math.min(100, Math.round((valid / Math.max(valid, rawTotal)) * 100)) : 0;
+    return { valid, total: rawTotal, pct };
+  };
 
   const jhsValid = countValidAssignments(jhsSched);
   const shsFirstValid = countValidAssignments(shsFirstSched);
-  // For now, ignore SHS Second Sem in overall
 
   const jhsCompletion = percent(jhsValid.valid, jhsValid.total);
   const shsFirstCompletion = percent(shsFirstValid.valid, shsFirstValid.total);
-  const overallCompletion = Math.round((jhsCompletion + shsFirstCompletion) / 2);
 
-  // Use the most recent schedule for status info
+  let completionLabels = ["JHS", "SHS", "Overall"];
+  let completionPercentages = [jhsCompletion, shsFirstCompletion, Math.round((jhsCompletion + shsFirstCompletion) / 2)];
+
+  if (offeredLevels === "jhs_only") {
+    const g7 = jhsSched ? (countValidByGrade(jhsSched, 7).valid > 0 ? jhsCompletion : 0) : 0;
+    const g8 = jhsSched ? (countValidByGrade(jhsSched, 8).valid > 0 ? jhsCompletion : 0) : 0;
+    const g9 = jhsSched ? (countValidByGrade(jhsSched, 9).valid > 0 ? jhsCompletion : 0) : 0;
+    const g10 = jhsSched ? (countValidByGrade(jhsSched, 10).valid > 0 ? jhsCompletion : 0) : 0;
+    completionLabels = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Overall JHS"];
+    completionPercentages = [g7, g8, g9, g10, jhsCompletion];
+  } else if (offeredLevels === "shs_only") {
+    const g11 = shsFirstSched ? (countValidByGrade(shsFirstSched, 11).valid > 0 ? shsFirstCompletion : 0) : 0;
+    const g12 = shsFirstSched ? (countValidByGrade(shsFirstSched, 12).valid > 0 ? shsFirstCompletion : 0) : 0;
+    completionLabels = ["Grade 11", "Grade 12", "Overall SHS"];
+    completionPercentages = [g11, g12, shsFirstCompletion];
+  } else {
+    // When "both", if only one level has a schedule generated so far, reflect active scheduled completion
+    const activeOverall =
+      jhsValid.total > 0 && shsFirstValid.total > 0
+        ? Math.round((jhsCompletion + shsFirstCompletion) / 2)
+        : jhsValid.total > 0
+          ? jhsCompletion
+          : shsFirstCompletion;
+    completionLabels = ["JHS (G7–10)", "SHS (G11–12)", "Active Overall"];
+    completionPercentages = [jhsCompletion, shsFirstCompletion, activeOverall];
+  }
+
+  // Use the most recent schedule across offered levels for status info
   let latestSchedule = null;
   let latestUpdated = 0;
   let latestScheduleType = null;
-  [jhsSched, shsFirstSched].forEach((sched) => {
+  const candidateScheds =
+    offeredLevels === "jhs_only"
+      ? [jhsSched]
+      : offeredLevels === "shs_only"
+        ? [shsFirstSched]
+        : [jhsSched, shsFirstSched];
+
+  candidateScheds.forEach((sched) => {
     if (sched && sched.updatedAt) {
       const t = new Date(sched.updatedAt).getTime();
       if (t > latestUpdated) {
@@ -598,27 +777,24 @@ export function getDashboardAnalyticsPayload() {
   let publishedString = "No";
   let draftCount = 0;
   if (latestScheduleType) {
-    // Count drafts for the active schedule type
     const drafts = safeParseStorage("turotugma_schedule_drafts", []);
     draftCount = Array.isArray(drafts)
-      ? drafts.filter(d => (d.scheduleType || d.schedule?.scheduleType) === latestScheduleType).length
+      ? drafts.filter((d) => (d.scheduleType || d.schedule?.scheduleType) === latestScheduleType).length
       : 0;
   }
   if (latestSchedule) {
-    // Determine schedule type label
     if (latestScheduleType === "jhs") {
-      activeScheduleString = "JHS";
-    } else if (latestScheduleType === "shs_first") {
-      activeScheduleString = "SHS First Sem";
-    } else if (latestScheduleType === "shs_second") {
-      activeScheduleString = "SHS Second Sem";
+      activeScheduleString = "Junior High School (JHS)";
+    } else if (latestScheduleType === "shs_first" || latestScheduleType === "shs-first") {
+      activeScheduleString = "SHS First Semester";
+    } else if (latestScheduleType === "shs_second" || latestScheduleType === "shs-second") {
+      activeScheduleString = "SHS Second Semester";
     } else if (latestScheduleType) {
-      activeScheduleString = latestScheduleType;
+      activeScheduleString = String(latestScheduleType).toUpperCase();
     }
-    // Always show Draft vN for current version
-    currentVersionString = draftCount > 0 ? `Draft v${draftCount}` : "Draft v1";
-    // Published only Yes if most recent schedule is published
-    publishedString = latestSchedule.status === "published" ? "Yes" : "No";
+    const isPublished = latestSchedule.status === "published";
+    currentVersionString = isPublished ? "Official Published" : (draftCount > 0 ? `Draft v${draftCount}` : "Draft v1");
+    publishedString = isPublished ? "Yes" : "No";
     if (latestSchedule.updatedAt) {
       const date = new Date(latestSchedule.updatedAt);
       lastUpdatedString = date.toLocaleString(undefined, {
@@ -627,7 +803,6 @@ export function getDashboardAnalyticsPayload() {
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-        second: "2-digit",
         hour12: true,
       });
     }
@@ -638,9 +813,6 @@ export function getDashboardAnalyticsPayload() {
     publishedString = "No";
   }
 
-  const publishedSchedules = safeParseStorage("turotugma_published_schedules", {});
-  const hasPublished = publishedSchedules && Object.keys(publishedSchedules).length > 0;
-
   // Use actual conflicts from the most recent schedule
   let actualConflicts = [];
   if (latestSchedule && Array.isArray(latestSchedule.conflicts)) {
@@ -648,9 +820,27 @@ export function getDashboardAnalyticsPayload() {
   }
   const unresolvedConflictsCount = actualConflicts.length;
 
+  // Categorize conflicts for the Conflicts Detected KPI card
+  let teacherOverlapsCount = 0;
+  let quotaIssuesCount = 0;
+  let restrictionIssuesCount = 0;
+  actualConflicts.forEach((c) => {
+    const msg = String(c || "").toLowerCase();
+    if (msg.includes("booked") || msg.includes("multiple streams")) {
+      teacherOverlapsCount += 1;
+    } else if (msg.includes("exceeding") || msg.includes("recurring daily") || msg.includes("times on")) {
+      quotaIssuesCount += 1;
+    } else {
+      restrictionIssuesCount += 1;
+    }
+  });
+
   return {
+    offeredLevels,
     summary: {
       profiledTeachers: snapshot.profiledTeachers,
+      activeTeachers: snapshot.activeTeachers,
+      assignedTeachersCount: snapshot.assignedTeachersCount,
       profiledAssignmentBreakdown: {
         ...snapshot.profiledAssignmentBreakdown,
         total: snapshot.profiledTeachers,
@@ -660,6 +850,12 @@ export function getDashboardAnalyticsPayload() {
       totalSubjects: snapshot.totalSubjects,
       totalSubjectBreakdown: snapshot.subjectBreakdown,
       unresolvedConflicts: unresolvedConflictsCount,
+      conflictBreakdown: {
+        teacherOverlaps: teacherOverlapsCount,
+        quotaIssues: quotaIssuesCount,
+        restrictionIssues: restrictionIssuesCount,
+        total: unresolvedConflictsCount,
+      },
       published: publishedString,
     },
     scheduleStatus: {
@@ -672,17 +868,18 @@ export function getDashboardAnalyticsPayload() {
       labels: ["W1", "W2", "W3", "W4", "W5", "W6"],
     },
     teacherLoadDistribution: {
-      labels: ["Unassigned (0h)", "Underload (< 20h)", "Balanced (Target Load)", "Overload (> Limit)"],
+      labels: ["Balanced (Target Load)", "Underload (< 15h)", "Unassigned (0h)", "Overload (> 30h)"],
       values: [
-        snapshot.loadDistribution.unassigned,
-        snapshot.loadDistribution.underload,
         snapshot.loadDistribution.balanced,
+        snapshot.loadDistribution.underload,
+        snapshot.loadDistribution.unassigned,
         snapshot.loadDistribution.overload,
       ],
+      raw: snapshot.loadDistribution,
     },
     scheduleCompletionByLevel: {
-      labels: ["JHS", "SHS", "Overall"],
-      percentages: [jhsCompletion, shsFirstCompletion, overallCompletion],
+      labels: completionLabels,
+      percentages: completionPercentages,
     },
     activity: [
       `${snapshot.totalSections} sections currently configured`,
@@ -690,6 +887,7 @@ export function getDashboardAnalyticsPayload() {
       `${snapshot.activeTeachers} active teachers currently available`,
     ],
     employmentStatusBreakdown: snapshot.employmentStatusBreakdown,
+    departmentBreakdown: snapshot.departmentBreakdown,
     conflicts:
       unresolvedConflictsCount > 0
         ? actualConflicts.map((c, i) => typeof c === "string" ? c : `Conflict ${i + 1}`)
@@ -698,31 +896,48 @@ export function getDashboardAnalyticsPayload() {
 }
 
 export function toDashboardViewModel(payload) {
-  // Always use profiledAssignmentBreakdown for the profiled teachers card
+  const deptList = Array.isArray(payload.departmentBreakdown) ? payload.departmentBreakdown : [];
+
   return {
+    offeredLevels: payload.offeredLevels || "both",
+    loadSummary: {
+      total: payload.summary.activeTeachers || payload.summary.profiledTeachers || 0,
+      balanced: payload.teacherLoadDistribution?.raw?.balanced || 0,
+      underload: payload.teacherLoadDistribution?.raw?.underload || 0,
+      unassigned: payload.teacherLoadDistribution?.raw?.unassigned || 0,
+      overload: payload.teacherLoadDistribution?.raw?.overload || 0,
+    },
     metrics: [
       {
         label: "Profiled Teachers",
         value: String(payload.summary.profiledTeachers),
+        subtitle: `${payload.summary.assignedTeachersCount || 0} Assigned • ${payload.teacherLoadDistribution?.raw?.unassigned || 0} Unassigned`,
         assignmentBreakdown: payload.summary.profiledAssignmentBreakdown,
       },
       {
         label: "Total Sections",
         value: String(payload.summary.totalSections),
+        subtitle: payload.offeredLevels === "jhs_only" ? "Grades 7 to 10 (JHS)" : payload.offeredLevels === "shs_only" ? "Grades 11 to 12 (SHS)" : "Grades 7 to 12 (JHS & SHS)",
         sectionBreakdown: payload.summary.totalSectionGradeBreakdown,
       },
       {
         label: "Total Subjects",
         value: String(payload.summary.totalSubjects),
+        subtitle: "DepEd Curriculum Catalog",
         subjectBreakdown: payload.summary.totalSubjectBreakdown,
       },
-      { label: "Conflicts Detected", value: String(payload.summary.unresolvedConflicts) },
+      {
+        label: "Conflicts Detected",
+        value: String(payload.summary.unresolvedConflicts),
+        subtitle: payload.summary.unresolvedConflicts === 0 ? "100% Conflict-Free" : "Requires Attention",
+        conflictBreakdown: payload.summary.conflictBreakdown,
+      },
     ],
     scheduleStatusRows: [
       { label: "Active Schedule", value: payload.scheduleStatus.activeSchedule },
       { label: "Current Version", value: payload.scheduleStatus.currentVersion },
       { label: "Last Updated", value: payload.scheduleStatus.lastUpdated },
-      { label: "Published", value: payload.summary.published ? "Yes" : "No" },
+      { label: "Published", value: payload.summary.published === "Yes" ? "Yes" : "No" },
     ],
     activity: payload.activity,
     conflicts: payload.conflicts,
@@ -731,13 +946,14 @@ export function toDashboardViewModel(payload) {
       probationary: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
       partTime: { count: 0, totalPeriods: 0, overload: 0, balanced: 0, underload: 0, unassigned: 0 },
     },
+    departmentBreakdown: deptList,
     charts: {
       teacherLoad: {
         labels: payload.teacherLoadDistribution.labels,
         datasets: [
           {
             data: payload.teacherLoadDistribution.values,
-            backgroundColor: ["#cbd5e1", "#818cf8", "#3B4197", "#ef4444"],
+            backgroundColor: ["#3B4197", "#818cf8", "#cbd5e1", "#ef4444"],
             borderColor: "#ffffff",
             borderWidth: 2,
           },
@@ -749,76 +965,66 @@ export function toDashboardViewModel(payload) {
           {
             label: "Completion %",
             data: payload.scheduleCompletionByLevel.percentages,
-            backgroundColor: ["#3B4197", "#5663bd", "#7a87dd"],
+            backgroundColor: payload.scheduleCompletionByLevel.labels.map((_, idx, arr) =>
+              idx === arr.length - 1 ? "#2563eb" : "#3B4197"
+            ),
             borderRadius: 6,
           },
         ],
       },
-      employmentLoad: {
-        labels: ["Regular / Permanent", "Probationary", "Part-Time"],
-        datasets: [
-          {
-            label: "Faculty Count",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.count || 0,
-              payload.employmentStatusBreakdown?.probationary?.count || 0,
-              payload.employmentStatusBreakdown?.partTime?.count || 0,
-            ],
-            backgroundColor: "#3B4197",
-            borderRadius: 6,
-          },
-          {
-            label: "Total Assigned Periods",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.totalPeriods || 0,
-              payload.employmentStatusBreakdown?.probationary?.totalPeriods || 0,
-              payload.employmentStatusBreakdown?.partTime?.totalPeriods || 0,
-            ],
-            backgroundColor: "#818cf8",
-            borderRadius: 6,
-          },
-        ],
-      },
-      fusionAnalytics: {
-        labels: ["Regular / Permanent", "Probationary", "Part-Time"],
+      departmentWorkload: {
+        labels: deptList.map((d) => d.label),
         datasets: [
           {
             label: "Balanced (Target Load)",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.balanced || 0,
-              payload.employmentStatusBreakdown?.probationary?.balanced || 0,
-              payload.employmentStatusBreakdown?.partTime?.balanced || 0,
-            ],
+            data: deptList.map((d) => d.balanced),
             backgroundColor: "#3B4197",
             borderRadius: 4,
           },
           {
-            label: "Underload (Needs More Load)",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.underload || 0,
-              payload.employmentStatusBreakdown?.probationary?.underload || 0,
-              payload.employmentStatusBreakdown?.partTime?.underload || 0,
-            ],
+            label: "Underload (< 15h)",
+            data: deptList.map((d) => d.underload),
             backgroundColor: "#818cf8",
             borderRadius: 4,
           },
           {
-            label: "Overload (Exceeds Limit)",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.overload || 0,
-              payload.employmentStatusBreakdown?.probationary?.overload || 0,
-              payload.employmentStatusBreakdown?.partTime?.overload || 0,
-            ],
+            label: "Overload (> 30h)",
+            data: deptList.map((d) => d.overload),
             backgroundColor: "#ef4444",
             borderRadius: 4,
           },
           {
             label: "Unassigned (0h)",
-            data: [
-              payload.employmentStatusBreakdown?.regular?.unassigned || 0,
-              payload.employmentStatusBreakdown?.probationary?.unassigned || 0,
-              payload.employmentStatusBreakdown?.partTime?.unassigned || 0,
-            ],
+            data: deptList.map((d) => d.unassigned),
+            backgroundColor: "#cbd5e1",
+            borderRadius: 4,
+          },
+        ],
+      },
+      fusionAnalytics: {
+        labels: deptList.map((d) => d.label),
+        datasets: [
+          {
+            label: "Balanced (Target Load)",
+            data: deptList.map((d) => d.balanced),
+            backgroundColor: "#3B4197",
+            borderRadius: 4,
+          },
+          {
+            label: "Underload (Needs More Load)",
+            data: deptList.map((d) => d.underload),
+            backgroundColor: "#818cf8",
+            borderRadius: 4,
+          },
+          {
+            label: "Overload (Exceeds Limit)",
+            data: deptList.map((d) => d.overload),
+            backgroundColor: "#ef4444",
+            borderRadius: 4,
+          },
+          {
+            label: "Unassigned (0h)",
+            data: deptList.map((d) => d.unassigned),
             backgroundColor: "#cbd5e1",
             borderRadius: 4,
           },

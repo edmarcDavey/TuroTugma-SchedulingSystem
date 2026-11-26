@@ -558,7 +558,37 @@ export default function FinalTimeTables() {
   function getSubjectName(subjectId) {
     if (!subjectId) return "";
     const sub = subjectsById?.get(subjectId) || subjectsById?.get(String(subjectId));
-    const found = sub || (Array.isArray(subjects) ? subjects.find((s) => s.id === subjectId) : null);
+    let found = sub || (Array.isArray(subjects) ? subjects.find((s) => s.id === subjectId || s.subjectCode === subjectId) : null);
+
+    if (!found && typeof subjectId === "string") {
+      const codeMatch = subjectId.match(/^(?:SUBJ|jhs|shs)-([A-Z0-9-]+?)(?:-\d+)?$/i);
+      if (codeMatch) {
+        const extractedCode = codeMatch[1].toUpperCase();
+        if (Array.isArray(subjects)) {
+          found = subjects.find(
+            (s) =>
+              (s.subjectCode && String(s.subjectCode).toUpperCase() === extractedCode) ||
+              (s.id && String(s.id).toUpperCase() === `JHS-${extractedCode}`) ||
+              (s.id && String(s.id).toUpperCase().includes(`-${extractedCode}`))
+          );
+        }
+        if (!found) {
+          const codeFallbackMap = {
+            VE: "Values Education",
+            ESP: "Values Education",
+            MATH: "Mathematics",
+            SCI: "Science",
+            ENG: "English",
+            FIL: "Filipino",
+            AP: "Araling Panlipunan",
+            MAPEH: "MAPEH",
+            TLE: "Technology and Livelihood Education",
+          };
+          if (codeFallbackMap[extractedCode]) return codeFallbackMap[extractedCode];
+        }
+      }
+    }
+
     const raw = found ? found.subjectName || found.subjectCode || found.name : subjectId;
     return formatCleanSubjectName(raw);
   }
@@ -867,8 +897,45 @@ export default function FinalTimeTables() {
     if (secObj?.adviserId) return getTeacherName(secObj.adviserId);
 
     const checkDays = days?.length > 0 ? days : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const maxP = maxPeriods || 8;
+
+    // 1. Check if any teacher in the faculty roster is explicitly designated as Class Adviser for this section
+    const secNameClean = String(secObj?.name || getSectionName(sectionId) || "").toLowerCase();
+    const explicitAdviser = (Array.isArray(teachers) ? teachers : []).find((t) => {
+      if (!t?.advisorySection) return false;
+      const advSec = String(t.advisorySection).toLowerCase();
+      return advSec === String(sectionId).toLowerCase() || (secNameClean && (advSec.includes(secNameClean) || secNameClean.includes(advSec)));
+    });
+    if (explicitAdviser) {
+      return explicitAdviser.teacherName || explicitAdviser.name || explicitAdviser.id;
+    }
+
+    // 2. Look for the teacher assigned to HGP / Homeroom Guidance Program anywhere in the week (even if plotted on Friday Last Period or random slot)
     for (const day of checkDays) {
-      for (let p = 1; p <= (maxPeriods || 8); p++) {
+      for (let p = 1; p <= maxP; p++) {
+        const assign = getCellAssignment(sectionId, day, p);
+        if (assign?.teacherId && assign?.subjectId) {
+          const subj = subjectsById?.get(assign.subjectId);
+          const sCode = String(subj?.subjectCode || assign.subjectId || "").toUpperCase();
+          const sName = String(subj?.subjectName || getSubjectName(assign.subjectId) || "").toLowerCase();
+          if (
+            sCode === "HGP" ||
+            sCode === "HRG" ||
+            sCode.includes("HGP") ||
+            sName === "hgp" ||
+            sName.includes("homeroom") ||
+            sName.includes("guidance program") ||
+            sName.includes("advisory")
+          ) {
+            return getTeacherName(assign.teacherId);
+          }
+        }
+      }
+    }
+
+    // 3. Fallback: First assigned period of the week if HGP is not in the curriculum
+    for (const day of checkDays) {
+      for (let p = 1; p <= maxP; p++) {
         const assign = getCellAssignment(sectionId, day, p);
         if (assign?.teacherId) {
           return getTeacherName(assign.teacherId);
@@ -2145,56 +2212,196 @@ export default function FinalTimeTables() {
                   </tr>
                 </thead>
                 <tbody>
-                  {periods.map((periodNum, idx) => (
-                    <tr key={periodNum}>
-                      <td className="time-cell" style={{
+                  {/* Flag Raising Row on Monday */}
+                  <tr style={{ background: '#fff' }}>
+                    <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 12, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                      7:00 – 7:30
+                    </td>
+                    {shortenedDays.length > 0 && (
+                      <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 12, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                        7:00 – 7:30
+                      </td>
+                    )}
+                    <td
+                      colSpan={days.length}
+                      className="break-banner"
+                      style={{
                         border: '1px solid #000',
-                        padding: '10px 8px',
-                        fontWeight: 700,
-                        fontSize: 12,
+                        padding: '8px',
+                        background: '#f5b301',
                         color: '#000',
+                        fontWeight: 800,
+                        fontSize: 13,
                         textAlign: 'center',
-                        background: '#f8fafc',
-                        whiteSpace: 'nowrap',
-                      }}>{regularTimes[idx]}</td>
-                      {shortenedDays.length > 0 && (
-                        <td className="time-cell" style={{
-                          border: '1px solid #000',
-                          padding: '10px 8px',
-                          fontWeight: 700,
-                          fontSize: 12,
-                          color: '#000',
-                          textAlign: 'center',
-                          background: '#f8fafc',
-                          whiteSpace: 'nowrap',
-                        }}>{shortenedTimes[idx]}</td>
-                      )}
-                      {days.map((day) => {
-                        const teacherAssign = getTeacherCellAssignment(teacherId, day, periodNum);
-                        const found = teacherAssign ? { assignment: teacherAssign.assignment, sectionId: teacherAssign.sectionId } : null;
-                        return (
-                          <td key={day} className="schedule-cell" style={{
+                        letterSpacing: 1,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      FLAG RAISING CEREMONY (MONDAY)
+                    </td>
+                  </tr>
+
+                  {periods.map((periodNum, idx) => {
+                    const morningAfter = levelConfig?.breaks?.morning?.enabled !== false ? (levelConfig?.breaks?.morning?.afterPeriod || 2) : -1;
+                    const lunchAfter = levelConfig?.breaks?.lunch?.enabled !== false ? (levelConfig?.breaks?.lunch?.afterPeriod || 4) : -1;
+                    const isMorningBreak = idx === morningAfter;
+                    const isLunchBreak = idx === lunchAfter;
+
+                    const getBreakRange = (timesArr, fallback) => {
+                      if (idx > 0 && timesArr[idx - 1] && timesArr[idx]) {
+                        const prevParts = String(timesArr[idx - 1]).split(/[–-]/);
+                        const currParts = String(timesArr[idx]).split(/[–-]/);
+                        const prevEnd = prevParts[1]?.trim();
+                        const currStart = currParts[0]?.trim();
+                        if (prevEnd && currStart && prevEnd !== currStart) {
+                          return `${prevEnd} – ${currStart}`;
+                        }
+                      }
+                      return fallback;
+                    };
+
+                    return (
+                      <React.Fragment key={periodNum}>
+                        {isMorningBreak && (
+                          <tr>
+                            <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                              {getBreakRange(regularTimes, "9:30 – 9:50")}
+                            </td>
+                            {shortenedDays.length > 0 && (
+                              <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                                {getBreakRange(shortenedTimes, "9:15 – 9:35")}
+                              </td>
+                            )}
+                            <td
+                              colSpan={days.length}
+                              className="break-banner"
+                              style={{
+                                border: '1px solid #000',
+                                padding: '6px',
+                                background: '#f5b301',
+                                color: '#000',
+                                fontWeight: 800,
+                                fontSize: 12,
+                                textAlign: 'center',
+                                letterSpacing: 1.5,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              RECESS / MORNING BREAK
+                            </td>
+                          </tr>
+                        )}
+
+                        {isLunchBreak && (
+                          <tr>
+                            <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                              {getBreakRange(regularTimes, "11:50 – 1:00")}
+                            </td>
+                            {shortenedDays.length > 0 && (
+                              <td className="time-cell" style={{ border: '1px solid #000', padding: '4px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                                {getBreakRange(shortenedTimes, "11:30 – 12:30")}
+                              </td>
+                            )}
+                            <td
+                              colSpan={days.length}
+                              className="break-banner"
+                              style={{
+                                border: '1px solid #000',
+                                padding: '6px',
+                                background: '#f5b301',
+                                color: '#000',
+                                fontWeight: 800,
+                                fontSize: 12,
+                                textAlign: 'center',
+                                letterSpacing: 1.5,
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              LUNCH BREAK
+                            </td>
+                          </tr>
+                        )}
+
+                        <tr>
+                          <td className="time-cell" style={{
                             border: '1px solid #000',
-                            padding: '8px 6px',
-                            background: '#fff',
+                            padding: '10px 8px',
+                            fontWeight: 700,
+                            fontSize: 12,
+                            color: '#000',
                             textAlign: 'center',
-                            verticalAlign: 'middle',
-                            minHeight: 52,
-                          }}>
-                            {found ? (
-                              <div className="schedule-cell-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
-                                <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: '#000', textTransform: 'uppercase', lineHeight: 1.2 }}>
-                                  {getSubjectName(found.assignment.subjectId)}
-                                  {teacherAssign?.streamName ? ` (${teacherAssign.streamName})` : ''}
-                                </div>
-                                <div className="schedule-cell-subtext" style={{ color: '#222', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.2 }}>{getSectionName(found.sectionId)}</div>
-                              </div>
-                            ) : null}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                            background: '#f8fafc',
+                            whiteSpace: 'nowrap',
+                          }}>{regularTimes[idx]}</td>
+                          {shortenedDays.length > 0 && (
+                            <td className="time-cell" style={{
+                              border: '1px solid #000',
+                              padding: '10px 8px',
+                              fontWeight: 700,
+                              fontSize: 12,
+                              color: '#000',
+                              textAlign: 'center',
+                              background: '#f8fafc',
+                              whiteSpace: 'nowrap',
+                            }}>{shortenedTimes[idx]}</td>
+                          )}
+                          {days.map((day) => {
+                            const teacherAssign = getTeacherCellAssignment(teacherId, day, periodNum);
+                            const found = teacherAssign ? { assignment: teacherAssign.assignment, sectionId: teacherAssign.sectionId } : null;
+                            return (
+                              <td key={day} className="schedule-cell" style={{
+                                border: '1px solid #000',
+                                padding: '8px 6px',
+                                background: '#fff',
+                                textAlign: 'center',
+                                verticalAlign: 'middle',
+                                minHeight: 52,
+                              }}>
+                                {found ? (
+                                  <div className="schedule-cell-content" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
+                                    <div className="schedule-cell-subject" style={{ fontWeight: 800, fontSize: 13, color: '#000', textTransform: 'uppercase', lineHeight: 1.2 }}>
+                                      {getSubjectName(found.assignment.subjectId)}
+                                      {teacherAssign?.streamName ? ` (${teacherAssign.streamName})` : ''}
+                                    </div>
+                                    <div className="schedule-cell-subtext" style={{ color: '#222', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.2 }}>{getSectionName(found.sectionId)}</div>
+                                  </div>
+                                ) : null}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {/* Footer Maintenance Banner */}
+                  <tr>
+                    <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                      END
+                    </td>
+                    {shortenedDays.length > 0 && (
+                      <td className="time-cell" style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: 700, fontSize: 11, color: '#000', textAlign: 'center', background: '#f8fafc' }}>
+                        END
+                      </td>
+                    )}
+                    <td
+                      colSpan={days.length}
+                      className="break-banner"
+                      style={{
+                        border: '1px solid #000',
+                        padding: '8px',
+                        background: '#f5b301',
+                        color: '#000',
+                        fontWeight: 800,
+                        fontSize: 13,
+                        textAlign: 'center',
+                        letterSpacing: 1.5,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      ROOM MAINTENANCE & ZONE IMPROVEMENT
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>

@@ -103,8 +103,8 @@ const EMPTY_FORM = {
   schoolLevel: "jhs",
   gradeLevel: JHS_GRADE_BAND,
   subjectType: "Core",
-  dailyMinutes: "",
-  classesPerWeek: "",
+  dailyMinutes: "60",
+  classesPerWeek: "4",
   programScope: "Universal",
   strand: "",
   semester: "",
@@ -113,14 +113,43 @@ const EMPTY_FORM = {
   teachingMode: "single",
   requiredTeachers: "1",
   breakoutStreams: [],
+  preferredDay: "any",
+  preferredPeriodSlot: "any",
+  isDoublePeriod: false,
 };
 
 export default function SubjectsManagement() {
-  const offeredLevels = getOfferedLevels();
+  const [offeredLevels, setOfferedLevels] = useState(() => getOfferedLevels());
   const [subjects, setSubjects] = useState(() => getInitialSubjects());
   const [facultyMembers, setFacultyMembers] = useState(() => getInitialFaculty());
-  const [formState, setFormState] = useState(EMPTY_FORM);
+  const [formState, setFormState] = useState(() => ({
+    ...EMPTY_FORM,
+    schoolLevel: getOfferedLevels() === "shs_only" ? "shs" : "jhs",
+    gradeLevel: getOfferedLevels() === "shs_only" ? "11" : JHS_GRADE_BAND,
+  }));
   const [editingId, setEditingId] = useState(null);
+
+  useEffect(() => {
+    const syncOfferedLevels = () => {
+      const next = getOfferedLevels();
+      setOfferedLevels(next);
+      setFormState((prev) => {
+        if (next === "jhs_only" && prev.schoolLevel !== "jhs") {
+          return { ...prev, schoolLevel: "jhs", gradeLevel: JHS_GRADE_BAND, subjectType: "Core", programScope: "Universal", strand: "", semester: "" };
+        }
+        if (next === "shs_only" && prev.schoolLevel !== "shs") {
+          return { ...prev, schoolLevel: "shs", gradeLevel: "11", subjectType: "Core", programScope: "Universal" };
+        }
+        return prev;
+      });
+    };
+    window.addEventListener("storage", syncOfferedLevels);
+    window.addEventListener("turotugma:profile-updated", syncOfferedLevels);
+    return () => {
+      window.removeEventListener("storage", syncOfferedLevels);
+      window.removeEventListener("turotugma:profile-updated", syncOfferedLevels);
+    };
+  }, []);
 
   const availableMajors = useMemo(() => {
     const standardMajors = [
@@ -329,6 +358,9 @@ export default function SubjectsManagement() {
       teachingMode: subject.teachingMode || (subject.subjectCode === "SPASPEC" ? "breakout" : "single"),
       requiredTeachers: String(reqTeachers),
       breakoutStreams: streams,
+      preferredDay: subject.preferredDay || "any",
+      preferredPeriodSlot: subject.preferredPeriodSlot || "any",
+      isDoublePeriod: Boolean(subject.isDoublePeriod),
     });
 
     window.requestAnimationFrame(() => {
@@ -446,6 +478,7 @@ export default function SubjectsManagement() {
       showNotice("Could not parse file. Ensure it is a valid Excel or CSV spreadsheet.", "error");
     } finally {
       setIsParsingImport(false);
+      event.target.value = "";
     }
   };
 
@@ -586,6 +619,18 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleLoadDepEdSubjects}
+            style={{
+              ...secondaryActionStyle(),
+              background: "#eef2ff",
+              color: "#3B4197",
+              border: "1px solid #c7d2fe",
+            }}
+          >
+            Load DepEd Subjects Catalog
+          </button>
           <button type="button" onClick={handleClearAllSubjects} style={dangerActionStyle()}>
             Clear All Subjects
           </button>
@@ -679,9 +724,14 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
           </Field>
 
           <Field label="School Level">
-            <select value={formState.schoolLevel} onChange={(event) => handleFormField("schoolLevel", event.target.value)} style={selectStyle()}>
-              <option value="jhs">Junior High School</option>
-              <option value="shs">Senior High School</option>
+            <select
+              value={formState.schoolLevel}
+              onChange={(event) => handleFormField("schoolLevel", event.target.value)}
+              style={selectStyle()}
+              disabled={offeredLevels === "jhs_only" || offeredLevels === "shs_only"}
+            >
+              {offeredLevels !== "shs_only" && <option value="jhs">Junior High School</option>}
+              {offeredLevels !== "jhs_only" && <option value="shs">Senior High School</option>}
             </select>
           </Field>
 
@@ -1121,23 +1171,85 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
           </div>
         ) : null}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          {editingId ? (
-            <button type="button" onClick={handleCancelEdit} style={secondaryActionStyle()}>
-              Cancel
-            </button>
-          ) : null}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(160px, 1.3fr) minmax(190px, 1.5fr) minmax(190px, 1.5fr) auto",
+            gap: 10,
+            alignItems: "end",
+            marginBottom: 14,
+            paddingTop: 10,
+            borderTop: "1px dashed #e3e7ef",
+          }}
+        >
+          <Field label="Preferred Day Placement">
+            <select
+              value={formState.preferredDay || "any"}
+              onChange={(event) => handleFormField("preferredDay", event.target.value)}
+              style={selectStyle()}
+            >
+              <option value="any">Any Day (Flexible)</option>
+              <option value="Monday">Every Monday Only</option>
+              <option value="Tuesday">Every Tuesday Only</option>
+              <option value="Wednesday">Every Wednesday Only</option>
+              <option value="Thursday">Every Thursday Only</option>
+              <option value="Friday">Every Friday Only</option>
+            </select>
+          </Field>
 
-          <button type="button" onClick={handleSaveSubject} style={primaryActionStyle()}>
-            {editingId ? "Save Changes" : "Add Subject"}
-          </button>
+          <Field label="Preferred Period / Time Slot">
+            <select
+              value={formState.preferredPeriodSlot || "any"}
+              onChange={(event) => handleFormField("preferredPeriodSlot", event.target.value)}
+              style={selectStyle()}
+            >
+              <option value="any">Any Period (Flexible)</option>
+              <option value="1">1st Period Only (e.g., Flag / HGP)</option>
+              <option value="2">2nd Period Only</option>
+              <option value="3">3rd Period Only</option>
+              <option value="4">4th Period Only</option>
+              <option value="5">5th Period Only</option>
+              <option value="6">6th Period Only</option>
+              <option value="7">7th Period Only</option>
+              <option value="8">8th Period Only</option>
+              <option value="morning">Morning Periods Only (Before Lunch)</option>
+              <option value="afternoon">Afternoon Periods Only (After Lunch)</option>
+              <option value="last">Last Available Period (End of Day)</option>
+            </select>
+          </Field>
+
+          <Field label="Period Block Mode">
+            <select
+              value={formState.isDoublePeriod ? "double" : "single"}
+              onChange={(event) => handleFormField("isDoublePeriod", event.target.value === "double")}
+              style={selectStyle()}
+            >
+              <option value="single">Standard Single Period (1 Slot/Day)</option>
+              <option value="double">Double Period Block (2 Consecutive Slots)</option>
+            </select>
+          </Field>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            {editingId ? (
+              <button type="button" onClick={handleCancelEdit} style={secondaryActionStyle()}>
+                Cancel
+              </button>
+            ) : null}
+
+            <button type="button" onClick={handleSaveSubject} style={primaryActionStyle()}>
+              {editingId ? "Save Changes" : "Add Subject"}
+            </button>
+          </div>
         </div>
       </div>
 
       <div style={{ background: "#ffffff", border: "1px solid #e3e7ef", borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <h2 style={{ margin: 0, color: "#1f2c6f", fontSize: 18 }}>Import Subjects (Excel/CSV)</h2>
-        <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13 }}>
-          Accepted headers: Subject Name, Subject Code, School Level, Subject Type, Daily Minutes, Classes per Week, Program Scope / Strand.
+        <p style={{ margin: "6px 0 0", color: "#5d698d", fontSize: 13, lineHeight: 1.5 }}>
+          <strong style={{ color: "#1f2c6f" }}>Required Columns:</strong> Subject Name, Subject Code.
+        </p>
+        <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 12.5, lineHeight: 1.5 }}>
+          <strong style={{ color: "#475569" }}>Optional Columns:</strong> School Level (defaults to JHS), Subject Type (defaults to Core), Daily Minutes (defaults to 60), Classes per Week (defaults to 4), Grade Level (defaults to 7-10 for JHS), Program Scope (defaults to Universal), Term / Semester, Strand / Cluster.
         </p>
 
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -1145,7 +1257,16 @@ Computer Systems Servicing 2,CSS2,SHS,Specialized,50,4,12,Last Semester,,TVL,160
           <button type="button" onClick={handleImportValidRows} style={primaryActionStyle()} disabled={!importPreviewRows.length || isParsingImport}>
             Import Valid Rows
           </button>
-          <button type="button" onClick={handleLoadDepEdSubjects} style={{ ...primaryActionStyle(), background: "#1e40af" }}>
+          <button
+            type="button"
+            onClick={handleLoadDepEdSubjects}
+            style={{
+              ...secondaryActionStyle(),
+              background: "#eef2ff",
+              color: "#3B4197",
+              border: "1px solid #c7d2fe",
+            }}
+          >
             Load DepEd Subjects Catalog
           </button>
           {isParsingImport ? <span style={{ color: "#5a678d", fontSize: 12 }}>Parsing file...</span> : null}
@@ -1518,45 +1639,53 @@ function smallDangerStyle() {
 }
 
 function validateSubjectForm(formState) {
+  const errors = validateSubjectFormAll(formState);
+  return errors.length > 0 ? errors.join(" • ") : null;
+}
+
+function validateSubjectFormAll(formState) {
+  const errors = [];
   if (formState.schoolLevel !== "jhs" && formState.schoolLevel !== "shs") {
-    return "School Level must be JHS or SHS.";
+    errors.push("School Level must be JHS or SHS.");
   }
 
-  if (!formState.subjectName.trim()) {
-    return "Subject Name is required.";
+  if (!String(formState.subjectName || "").trim()) {
+    errors.push("Subject Name is required.");
   }
 
-  if (!formState.subjectCode.trim()) {
-    return "Subject Code is required.";
+  if (!String(formState.subjectCode || "").trim()) {
+    errors.push("Subject Code is required.");
   }
 
   if (!formState.subjectType) {
-    return "Subject Type is required.";
-  }
-
-  const allowedTypes = getSubjectTypesForLevel(formState.schoolLevel);
-  if (!allowedTypes.includes(formState.subjectType)) {
-    return formState.schoolLevel === "jhs"
-      ? "Junior High Subject Type must be Core, Specialized, or Enrichment."
-      : "Senior High Subject Type must be Core, Applied, Specialized, or Enrichment.";
+    errors.push("Subject Type is required.");
+  } else if (formState.schoolLevel === "jhs" || formState.schoolLevel === "shs") {
+    const allowedTypes = getSubjectTypesForLevel(formState.schoolLevel);
+    if (!allowedTypes.includes(formState.subjectType)) {
+      errors.push(
+        formState.schoolLevel === "jhs"
+          ? "Junior High Subject Type must be Core, Specialized, or Enrichment."
+          : "Senior High Subject Type must be Core, Applied, Specialized, or Enrichment."
+      );
+    }
   }
 
   const daily = Number.parseFloat(formState.dailyMinutes);
   const classes = Number.parseInt(String(formState.classesPerWeek), 10);
 
   if (Number.isNaN(daily) || daily < 15 || daily > 120) {
-    return "Daily Duration must be between 15 and 120 minutes.";
+    errors.push("Daily Duration must be between 15 and 120 minutes.");
   }
 
   if (Number.isNaN(classes) || classes < 1 || classes > 8) {
-    return "Classes per Week must be between 1 and 8.";
+    errors.push("Classes per Week must be between 1 and 8.");
   }
 
   if (formState.schoolLevel === "shs" && !formState.semester) {
-    return "Term / Delivery period is required for Senior High School subjects.";
+    errors.push("Term / Delivery period is required for Senior High School subjects.");
   }
 
-  return null;
+  return errors;
 }
 
 function normalizeSubject(formState, existingId = null) {
@@ -1605,6 +1734,9 @@ function normalizeSubject(formState, existingId = null) {
             })).filter((s) => s.name)
           : [])
       : [],
+    preferredDay: formState.preferredDay || "any",
+    preferredPeriodSlot: formState.preferredPeriodSlot || "any",
+    isDoublePeriod: Boolean(formState.isDoublePeriod),
     createdAt: now,
     updatedAt: now,
   };
@@ -1709,19 +1841,19 @@ function mapImportedRowToForm(row) {
 
   const subjectName = pickValue(normalizedRow, ["subjectname", "subject", "name"]);
   const subjectCode = pickValue(normalizedRow, ["subjectcode", "code"]);
-  const schoolLevel = normalizeSchoolLevel(pickValue(normalizedRow, ["schoollevel", "level"]));
-  const subjectType = normalizeSubjectType(pickValue(normalizedRow, ["subjecttype", "type"]), schoolLevel);
-  const dailyMinutes = pickValue(normalizedRow, ["dailymintutes", "dailyminutes", "dailyduration", "dailymins"]);
-  const classesPerWeek = pickValue(normalizedRow, ["classesperweek", "classesweekly", "sessionsperweek", "classes"]);
+  const schoolLevel = normalizeSchoolLevel(pickValue(normalizedRow, ["schoollevel", "level"])) || "jhs";
+  const subjectType = normalizeSubjectType(pickValue(normalizedRow, ["subjecttype", "type"]), schoolLevel) || "Core";
+  const dailyMinutes = pickValue(normalizedRow, ["dailymintutes", "dailyminutes", "dailyduration", "dailymins"]) || "60";
+  const classesPerWeek = pickValue(normalizedRow, ["classesperweek", "classesweekly", "sessionsperweek", "classes"]) || "4";
   const gradeLevelRaw = pickValue(normalizedRow, ["gradelevel", "grade"]);
-  const semester = normalizeSemester(pickValue(normalizedRow, ["semester", "term"]));
+  const semester = normalizeSemester(pickValue(normalizedRow, ["semester", "term"])) || (schoolLevel === "shs" ? "All 3 Terms" : "");
   const programScope = pickValue(normalizedRow, ["programscope", "scope", "program"]);
   const strand = pickValue(normalizedRow, ["strand", "cluster"]);
   const isDoublePeriod = pickValue(normalizedRow, ["isdoubleperiod", "doubleperiod"]);
   const preferredDay = pickValue(normalizedRow, ["preferredday", "day"]);
   const preferredPeriodSlot = pickValue(normalizedRow, ["preferredperiodslot", "preferredslot", "slot"]);
 
-  if (!subjectName && !subjectCode && !schoolLevel && !subjectType && !dailyMinutes && !classesPerWeek) {
+  if (!subjectName && !subjectCode) {
     return null;
   }
 
